@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>(function(){try{var t=localStorage.getItem('pm.theme')||'dark';var d=document.documentElement;if(t==='light')d.classList.add('pm-theme-light');d.style.colorScheme=t==='light'?'light':'dark';}catch(e){}})();</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><%= title %></title>
@@ -225,6 +226,7 @@
             .template-specs { grid-template-columns: 1fr; }
         }
     </style>
+  <link rel="stylesheet" href="/css/premium.css">
 </head>
 <body>
     <%- include('../partials/admin/sidebar') %>
@@ -420,26 +422,26 @@
         }
 
         async function downloadTemplate(key) {
-            if (!confirm('Download this template to cache locally?')) return;
+            if (!(await PM.confirm('Download this template to cache locally?', { title: 'Download template', confirmText: 'Download', danger: false }))) return;
             try {
                 const res = await fetch(`/api/admin/templates/${key}/download`, { method: 'POST' });
                 if (!res.ok) throw new Error('Download failed');
-                alert('Template downloaded successfully!');
+                PM.success('Template downloaded successfully');
                 loadTemplates();
             } catch (e) {
-                alert('Error: ' + e.message);
+                PM.error(e.message);
             }
         }
 
         async function deleteTemplate(id) {
-            if (!confirm('Delete this template? This cannot be undone.')) return;
+            if (!(await PM.confirm('Delete this template? This cannot be undone.', { title: 'Delete template', confirmText: 'Delete', danger: true }))) return;
             try {
                 const res = await fetch(`/api/admin/templates/${id}`, { method: 'DELETE' });
                 if (!res.ok) throw new Error('Delete failed');
-                alert('Template deleted successfully!');
+                PM.success('Template deleted successfully');
                 loadTemplates();
             } catch (e) {
-                alert('Error: ' + e.message);
+                PM.error(e.message);
             }
         }
 
@@ -466,15 +468,15 @@
         }
 
         async function confirmClearCache() {
-            if (!confirm('Clear all cached templates? This cannot be undone and may take time.')) return;
+            if (!(await PM.confirm('Clear all cached templates? This cannot be undone and may take time.', { title: 'Clear template cache', confirmText: 'Clear cache', danger: true }))) return;
             try {
                 const res = await fetch('/api/admin/templates/cache/clear', { method: 'POST' });
                 if (!res.ok) throw new Error('Clear failed');
                 const data = await res.json();
-                alert(data.message || 'Cache cleared successfully!');
+                PM.success(data.message || 'Cache cleared successfully');
                 loadTemplates();
             } catch (e) {
-                alert('Error: ' + e.message);
+                PM.error(e.message);
             }
         }
 
@@ -485,5 +487,6 @@
         // Initialize
         document.addEventListener('DOMContentLoaded', loadTemplates);
     </script>
+  <script src="/js/premium.js"></script>
 </body>
 </html>

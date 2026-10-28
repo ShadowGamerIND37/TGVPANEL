@@ -578,7 +578,10 @@ function initializeDatabase() {
 function checkAuth(req, res, next) {
   if (!req.session.userId) {
     console.warn(`[Auth Error] Unauthenticated access attempt to ${req.method} ${req.path}`);
-    // Always redirect to login, never return JSON error
+    // API clients expect JSON, page requests get the login screen
+    if (req.path.startsWith('/api/') || req.xhr || (req.get('accept') || '').includes('application/json')) {
+      return res.status(401).json({ error: 'Authentication required', authenticated: false });
+    }
     return res.redirect('/login');
   }
   console.log(`[Auth Success] User ${req.session.userId} (${req.session.username}) accessing ${req.method} ${req.path}`);
@@ -594,8 +597,11 @@ function checkAdmin(req, res, next) {
   
   if (req.session.role !== 'admin') {
     console.warn(`[Auth Error] Non-admin user ${req.session.userId} (${req.session.username}) attempted admin access to ${req.method} ${req.path}`);
-    // Redirect to dashboard for non-admin
-    return res.redirect('/admin/dashboard');
+    // Never bounce a non-admin back to an admin URL (that used to create a redirect loop)
+    if (req.path.startsWith('/api/') || req.xhr || (req.get('accept') || '').includes('application/json')) {
+      return res.status(403).json({ error: 'Administrator access required' });
+    }
+    return res.redirect('/dashboard');
   }
   console.log(`[Auth Success] Admin ${req.session.userId} (${req.session.username}) accessing ${req.method} ${req.path}`);
   next();
@@ -4569,6 +4575,175 @@ app.post('/api/ssh/command', checkAuth, (req, res) => {
     
     stream.stderr.on('data', (data) => {
       errorOutput += data.toString();
+    });
+  });
+});
+
+
+// ============= PREMIUM UI API =============
+// Host telemetry with a short cache so dashboards can poll cheaply
+let _cpuSample = { at: 0, percent: 0 };
+function sampleCpuPercent() {
+  return new Promise((resolve) => {
+    const start = os.cpus().map(c => c.times);
+    setTimeout(() => {
+      const end = os.cpus().map(c => c.times);
+      let idle = 0, total = 0;
+      start.forEach((s, i) => {
+        const e = end[i] || s;
+        const d = {
+          user: e.user - s.user, nice: e.nice - s.nice, sys: e.sys - s.sys,
+          idle: e.idle - s.idle, irq: e.irq - s.irq
+        };
+        idle += d.idle;
+        total += d.user + d.nice + d.sys + d.idle + d.irq;
+      });
+      resolve(total > 0 ? Math.max(0, Math.min(100, ((total - idle) / total) * 100)) : 0);
+    }, 200);
+  });
+}
+async function getCpuPercent() {
+  if (Date.now() - _cpuSample.at < 2000) return _cpuSample.percent;
+  const percent = await sampleCpuPercent();
+  _cpuSample = { at: Date.now(), percent };
+  return percent;
+}
+function getDiskUsage(targetPath) {
+  try {
+    if (typeof fs.statfsSync !== 'function') return null;
+    const st = fs.statfsSync(targetPath);
+    const total = st.blocks * st.bsize;
+    const free = st.bfree * st.bsize;
+    const used = total - free;
+    return { total, used, free, percent: total ? (used / total) * 100 : 0, path: targetPath };
+  } catch (e) {
+    return null;
+  }
+}
+
+app.get('/api/system/metrics', checkAuth, async (req, res) => {
+  try {
+    const cpuPercent = await getCpuPercent();
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const load = os.loadavg();
+    const disk = getDiskUsage(VM_DIR);
+    const counts = await new Promise((resolve) => {
+      db.all(`SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+                SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END) AS stopped,
+                COALESCE(SUM(CASE WHEN status = 'running' THEN memory ELSE 0 END), 0) AS allocated_memory
+              FROM vms`, (err, rows) => {
+        if (err || !rows || !rows[0]) return resolve({ total: 0, running: 0, stopped: 0, allocated_memory: 0 });
+        const r = rows[0];
+        resolve({
+          total: Number(r.total) || 0,
+          running: Number(r.running) || 0,
+          stopped: Number(r.stopped) || 0,
+          allocated_memory: Number(r.allocated_memory) || 0
+        });
+      });
+    });
+
+    res.json({
+      cpu: {
+        percent: Math.round(cpuPercent * 10) / 10,
+        cores: os.cpus().length,
+        model: (os.cpus()[0] || {}).model || 'CPU',
+        load1: load[0],
+        load5: load[1],
+        load15: load[2]
+      },
+      memory: {
+        total: totalMem,
+        used: usedMem,
+        free: freeMem,
+        percent: totalMem ? (usedMem / totalMem) * 100 : 0
+      },
+      disk,
+      uptime: os.uptime(),
+      processUptime: process.uptime(),
+      platform: `${os.type()} ${os.release()}`,
+      arch: os.arch(),
+      hostname: os.hostname(),
+      node: process.version,
+      panelVersion: process.env.PANEL_VERSION || 'V2.0',
+      vms: counts
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Backwards-compatible compact status used by older dashboard builds
+app.get('/api/system/status', checkAuth, async (req, res) => {
+  try {
+    const cpuPercent = await getCpuPercent();
+    const totalMem = os.totalmem();
+    const usedMem = totalMem - os.freemem();
+    res.json({
+      cpu: `${Math.round(cpuPercent)}%`,
+      memory: `${Math.round((usedMem / totalMem) * 100)}%`,
+      cpuPercent,
+      memoryPercent: (usedMem / totalMem) * 100,
+      uptime: os.uptime(),
+      status: 'online'
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Recent activity feed (scoped: admins see everything, users only their VMs)
+function fetchActivity(req, res, adminOnly) {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 50);
+  const isAdmin = req.session.role === 'admin';
+  if (adminOnly && !isAdmin) return res.status(403).json({ error: 'Admin access required' });
+
+  const sql = `SELECT l.id, l.vm_id, l.action, l.status, l.message, l.timestamp,
+                      v.vm_name AS vm_name, v.owner_id AS owner_id
+               FROM vm_logs l
+               LEFT JOIN vms v ON v.vm_id = l.vm_id
+               ${isAdmin ? '' : 'WHERE v.owner_id = ?'}
+               ORDER BY l.id DESC
+               LIMIT ?`;
+  const params = isAdmin ? [limit] : [req.session.userId, limit];
+
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows || []);
+  });
+}
+
+app.get('/api/activity', checkAuth, (req, res) => fetchActivity(req, res, false));
+app.get('/api/admin/activity', checkAuth, checkAdmin, (req, res) => fetchActivity(req, res, true));
+
+// Unified search for the command palette
+app.get('/api/search', checkAuth, (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json({ vms: [], users: [] });
+  const like = `%${q}%`;
+  const isAdmin = req.session.role === 'admin';
+
+  const vmSql = `SELECT vms.vm_id, vms.vm_name, vms.status,
+                        COALESCE(t.template_name, vms.os_type) AS template_name,
+                        vms.os_type, vms.ipv4_address, vms.owner_id
+                 FROM vms
+                 LEFT JOIN os_templates t ON vms.template_type = t.template_key
+                 WHERE (vms.vm_name LIKE ? OR vms.hostname LIKE ? OR vms.ipv4_address LIKE ? OR CAST(vms.vm_id AS TEXT) = ?)
+                 ${isAdmin ? '' : 'AND vms.owner_id = ?'}
+                 ORDER BY vms.vm_name LIMIT 8`;
+  const vmParams = isAdmin ? [like, like, like, q] : [like, like, like, q, req.session.userId];
+
+  db.all(vmSql, vmParams, (err, vms) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!isAdmin) return res.json({ vms: vms || [], users: [] });
+    db.all(`SELECT id, username, email, role FROM users
+            WHERE username LIKE ? OR email LIKE ?
+            ORDER BY username LIMIT 5`, [like, like], (err2, users) => {
+      res.json({ vms: vms || [], users: err2 ? [] : (users || []) });
     });
   });
 });

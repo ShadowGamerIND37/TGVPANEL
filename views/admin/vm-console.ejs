@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>(function(){try{var t=localStorage.getItem('pm.theme')||'dark';var d=document.documentElement;if(t==='light')d.classList.add('pm-theme-light');d.style.colorScheme=t==='light'?'light':'dark';}catch(e){}})();</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0a0a0f">
@@ -117,6 +118,7 @@
       z-index: 1;
     }
   </style>
+  <link rel="stylesheet" href="/css/premium.css">
 </head>
 <body>
 
@@ -425,5 +427,6 @@ setTimeout(() => {
   if (t) t.scrollTop = t.scrollHeight;
 }, 500);
 </script>
+  <script src="/js/premium.js"></script>
 </body>
 </html>

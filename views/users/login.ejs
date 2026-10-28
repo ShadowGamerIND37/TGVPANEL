@@ -2,602 +2,451 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <meta name="theme-color" content="#0a0a0f">
-  <title><%= title || 'Login - HKVM Panel' %></title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#06070c">
+  <title><%= title || 'Sign in · ' + siteName %></title>
   <link rel="icon" href="<%= siteLogo %>" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="/css/admin.css">
+  <link rel="stylesheet" href="/css/premium.css">
   <style>
-    html, body {
-      height: auto;
-      min-height: 100vh;
-    }
-
+    .pm-login-wrap { width: min(1120px, 100%); }
+    .pm-login-form .form-group { margin-bottom: 16px; }
+    .pw-wrapper { position: relative; }
+    .pw-wrapper .form-control { padding-right: 44px; }
     .login-form-icon-toggle {
       position: absolute;
-      right: 12px; top: 50%;
+      right: 8px;
+      top: 50%;
       transform: translateY(-50%);
-      background: none; border: none;
-      color: var(--text-muted); cursor: pointer;
-      padding: 4px; font-size: 16px;
-      transition: color 0.15s;
-    }
-    .login-form-icon-toggle:hover { color: var(--text-primary); }
-    .pw-wrapper { position: relative; }
-    .pw-wrapper .form-control { padding-right: 40px; }
-    
-    @keyframes loginFloat {
-      0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.4; }
-      50% { transform: translateY(-15px) rotate(3deg); opacity: 0.8; }
-    }
-    
-    .login-float-icon {
-      position: absolute;
-      font-size: 24px;
-      animation: loginFloat ease-in-out infinite;
-      pointer-events: none;
-    }
-    
-    .shake {
-      animation: shake 0.4s ease;
-    }
-    
-    @keyframes shake {
-      0%, 100% { transform: translateX(0); }
-      25% { transform: translateX(-8px); }
-      75% { transform: translateX(8px); }
-    }
-
-    /* Logo inside card */
-    .login-card-header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 24px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid var(--border-color);
-    }
-
-    .login-logo-inside {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 8px;
-      flex-shrink: 0;
-    }
-
-    .login-logo-icon {
-      width: 64px;
-      height: 64px;
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      border: 1px solid transparent;
       background: transparent;
-      border-radius: 20px;
-      display: flex;
+      color: var(--pm-text-dim);
+      cursor: pointer;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: 48px;
-      animation: float 3.5s ease-in-out infinite;
+      transition: all 0.16s ease;
     }
-
-    /* Mobile Responsive */
-    @media (max-width: 768px) {
-      .login-page {
-        min-height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 16px;
-      }
-
-      .login-container {
-        max-width: 100%;
-        width: 100%;
-        padding: 20px;
-      }
-
-      .login-card-header {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 20px;
-        flex-wrap: wrap;
-      }
-
-      .login-logo-inside {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .login-logo-icon {
-        width: 56px;
-        height: 56px;
-        font-size: 36px;
-        margin: 0;
-      }
-
-      .login-logo-title {
-        font-size: 20px;
-      }
-
-      .login-logo-sub {
-        font-size: 12px;
-      }
-
-      .login-card {
-        padding: 24px 20px;
-        border-radius: 16px;
-      }
-
-      .login-title {
-        font-size: 16px;
-        margin-bottom: 6px;
-      }
-
-      .login-subtitle {
-        font-size: 12px;
-        margin-bottom: 20px;
-      }
-
-      .form-label {
-        font-size: 11px;
-      }
-
-      .form-control {
-        font-size: 14px;
-        padding: 10px 12px;
-      }
-
-      .btn-lg {
-        padding: 11px 20px;
-        font-size: 13px;
-      }
-
-      .login-footer {
-        font-size: 11px;
-        margin-top: 20px;
-      }
+    .login-form-icon-toggle:hover { color: var(--pm-text); background: rgba(148,163,184,.12); }
+    .login-caps {
+      display: none;
+      margin: -6px 0 12px;
+      font-size: 11px;
+      color: var(--pm-amber);
+      align-items: center;
+      gap: 6px;
     }
-
-    @media (max-width: 480px) {
-      .login-page {
-        padding: 12px;
-      }
-
-      .login-container {
-        padding: 16px;
-      }
-
-      .login-card-header {
-        flex-direction: column;
-        align-items: center;
-        text-align: center;
-      }
-
-      .login-logo-icon {
-        width: 48px;
-        height: 48px;
-        font-size: 32px;
-        margin: 0;
-      }
-
-      .login-logo-title {
-        font-size: 18px;
-      }
-
-      .login-card {
-        padding: 20px 16px;
-        border-radius: 14px;
-      }
-
-      .login-title {
-        font-size: 15px;
-      }
-
-      .login-subtitle {
-        font-size: 11px;
-      }
-
-      .form-group {
-        margin-bottom: 14px;
-      }
-
-      .form-label {
-        font-size: 10px;
-        margin-bottom: 6px;
-      }
-
-      .form-control {
-        font-size: 16px; /* Prevents zoom on iOS */
-        padding: 10px 12px;
-      }
-
-      .login-form-icon-toggle {
-        right: 10px;
-        font-size: 14px;
-      }
-
-      .btn-lg {
-        padding: 10px 18px;
-        font-size: 13px;
-        gap: 5px;
-      }
-
-      .login-footer {
-        font-size: 10px;
-        margin-top: 16px;
-      }
-
-      /* Hide floating icons on small screens */
-      .login-float-icon {
-        display: none;
-      }
+    .login-caps.show { display: flex; }
+    .login-divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 18px 0;
+      font-size: 10.5px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--pm-text-dim);
+    }
+    .login-divider::before, .login-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--pm-line), transparent);
+    }
+    .shake { animation: pm-shake 0.42s ease; }
+    @keyframes pm-shake {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-7px); }
+      40% { transform: translateX(7px); }
+      60% { transform: translateX(-4px); }
+      80% { transform: translateX(4px); }
+    }
+    .pm-login-form .form-control.is-valid { border-color: rgba(52,211,153,.5); }
+    .login-orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(46px);
+      opacity: 0.55;
+      pointer-events: none;
+    }
+    @media (max-width: 920px) {
+      .pm-login-aside { display: none; }
+      .pm-login { grid-template-columns: 1fr; }
     }
   </style>
 </head>
-<body>
-
-<!-- Animated Background -->
-<div class="login-bg"></div>
-<div class="login-bg-grid"></div>
-
-<!-- Floating Decorative Icons -->
-<span class="login-float-icon" style="top:10%; left:8%; animation-duration:4s; animation-delay:0s;">💻</span>
-<span class="login-float-icon" style="top:20%; right:10%; animation-duration:5s; animation-delay:1s;">🖥️</span>
-<span class="login-float-icon" style="bottom:15%; left:12%; animation-duration:6s; animation-delay:2s;">⚡</span>
-<span class="login-float-icon" style="bottom:25%; right:8%; animation-duration:4.5s; animation-delay:0.5s;">🔐</span>
-<span class="login-float-icon" style="top:50%; left:3%; animation-duration:7s; animation-delay:1.5s;">🌐</span>
+<body class="login-body">
 
 <div class="login-page">
-  <div class="login-container">
+  <div class="pm-login-wrap">
+    <div class="pm-login" id="loginCard">
 
-    <!-- Login Card -->
-    <div class="login-card" id="loginCard">
-      <!-- Logo Inside Card (Right Side) -->
-      <div class="login-card-header">
-        <div>
-          <div class="login-title">Welcome Back</div>
-          <div class="login-subtitle">Sign in to access your control panel</div>
-        </div>
-        <div class="login-logo-inside">
-          <div class="login-logo-icon" style="display: flex; align-items: center; justify-content: center;">
-            <img src="<%= siteLogo %>" style="width: 48px; height: 48px; object-fit: contain; border-radius: 8px;" alt="HKVM Logo">
+      <!-- Brand / marketing panel -->
+      <aside class="pm-login-aside">
+        <div class="login-orb" style="width:260px;height:260px;background:#6d5efc;top:-90px;left:-60px"></div>
+        <div class="login-orb" style="width:220px;height:220px;background:#22d3ee;bottom:-80px;right:-40px;opacity:.35"></div>
+
+        <div class="pm-login-brand">
+          <div class="pm-login-logo">
+            <img id="loginLogoImg" src="<%= siteLogo %>" alt="<%= siteName %>" onerror="this.style.display='none'">
+          </div>
+          <div>
+            <div class="pm-login-brand-name" id="loginSiteName"><%= siteName %></div>
+            <div class="pm-login-brand-sub"><%= panelVersion %> · Control plane</div>
           </div>
         </div>
-      </div>
 
-      <!-- Alert -->
-      <div id="loginAlert" style="display:none; margin-bottom: 16px;"></div>
-
-      <form id="loginForm" onsubmit="handleLogin(event)">
-
-        <!-- Username -->
-        <div class="form-group">
-          <label class="form-label" for="username">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;">
-              <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"></path>
-              <circle cx="12" cy="7" r="4"></circle>
-            </svg>
-            Username
-          </label>
-          <input
-            type="text"
-            id="username"
-            name="username"
-            class="form-control"
-            placeholder="Enter your username"
-            autocomplete="username"
-            autofocus
-            required
-          >
+        <div>
+          <h1 class="pm-login-headline">Virtual machines,<br><span>beautifully managed.</span></h1>
+          <p class="pm-login-desc" id="loginSiteDesc">
+            Provision, monitor and control your QEMU/KVM fleet from one refined control plane.
+          </p>
         </div>
 
-        <!-- Password -->
-        <div class="form-group">
-          <label class="form-label" for="password">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-              <path d="M7 11V7a5 5 0 0110 0v4"></path>
+        <div class="pm-login-features">
+          <div class="pm-login-feature">
+            <span class="pm-login-feature-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"></path>
+              </svg>
+            </span>
+            Instant provisioning with OS templates
+          </div>
+          <div class="pm-login-feature">
+            <span class="pm-login-feature-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                <path d="M8 20h8M12 16v4"></path>
+              </svg>
+            </span>
+            Live console &amp; browser-based SSH
+          </div>
+          <div class="pm-login-feature">
+            <span class="pm-login-feature-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                <path d="m9 12 2 2 4-4"></path>
+              </svg>
+            </span>
+            Role-based access, audit-ready activity
+          </div>
+        </div>
+
+        <div class="pm-login-stats">
+          <div>
+            <div class="pm-login-stat-value">24/7</div>
+            <div class="pm-login-stat-label">Availability</div>
+          </div>
+          <div>
+            <div class="pm-login-stat-value">QEMU/KVM</div>
+            <div class="pm-login-stat-label">Hypervisor</div>
+          </div>
+          <div>
+            <div class="pm-login-stat-value">TLS</div>
+            <div class="pm-login-stat-label">Encrypted</div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Sign-in panel -->
+      <section class="pm-login-form">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px">
+          <span class="pm-chip brand">
+            <span class="dot"></span>
+            Secure sign-in
+          </span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="toggleLoginTheme()" title="Toggle theme" aria-label="Toggle theme">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
             </svg>
-            Password
-          </label>
-          <div class="pw-wrapper">
+            Theme
+          </button>
+        </div>
+
+        <h2 class="pm-login-title">Welcome back</h2>
+        <p class="pm-login-sub">Sign in to your <span id="loginSiteNameInline"><%= siteName %></span> workspace.</p>
+
+        <div id="loginAlert" style="display:none;margin-bottom:16px"></div>
+
+        <form id="loginForm" onsubmit="handleLogin(event)" novalidate>
+          <div class="form-group">
+            <label class="form-label" for="username">Username</label>
             <input
-              type="password"
-              id="password"
-              name="password"
+              type="text"
+              id="username"
+              name="username"
               class="form-control"
-              placeholder="Enter your password"
-              autocomplete="current-password"
+              placeholder="your.username"
+              autocomplete="username"
+              spellcheck="false"
               required
+              autofocus
             >
-            <button type="button" class="login-form-icon-toggle" onclick="togglePassword()" id="pwToggle" aria-label="Toggle password">
-              👁️
+          </div>
+
+          <div class="form-group">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <label class="form-label" for="password">Password</label>
+              <span class="pm-muted" style="font-size:10.5px">Case-sensitive</span>
+            </div>
+            <div class="pw-wrapper">
+              <input
+                type="password"
+                id="password"
+                name="password"
+                class="form-control"
+                placeholder="••••••••"
+                autocomplete="current-password"
+                required
+              >
+              <button type="button" class="login-form-icon-toggle" onclick="togglePassword()" id="pwToggle" aria-label="Show password">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </button>
+            </div>
+            <div class="login-caps" id="capsWarning">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4 4 12h5v8h6v-8h5L12 4z"/></svg>
+              Caps Lock is on
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;justify-content:space-between;margin:4px 0 20px;gap:10px;flex-wrap:wrap">
+            <label class="toggle-switch" style="cursor:pointer;margin:0">
+              <input type="checkbox" class="toggle-input" id="rememberMe">
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              <span class="toggle-label" style="font-size:12px">Remember me</span>
+            </label>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="openShortcutsHelp()" title="Keyboard shortcuts">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
+              Shortcuts
             </button>
           </div>
-        </div>
 
-        <!-- Remember + Options -->
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 8px;">
-          <label class="toggle-switch" style="cursor:pointer;">
-            <input type="checkbox" class="toggle-input" id="rememberMe">
-            <div class="toggle-track">
-              <div class="toggle-thumb"></div>
-            </div>
-            <span class="toggle-label" style="font-size: 12px;">Remember me</span>
-          </label>
-        </div>
+          <button type="submit" class="btn btn-primary w-100 btn-lg" id="loginBtn">
+            <span class="pm-btn-label" style="display:inline-flex;align-items:center;gap:8px">
+              Sign in
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+                <polyline points="12 5 19 12 12 19"></polyline>
+              </svg>
+            </span>
+          </button>
+        </form>
 
-        <!-- Submit -->
-        <button type="submit" class="btn btn-primary w-100 btn-lg" id="loginBtn">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"></path>
-            <polyline points="10 17 15 12 10 7"></polyline>
-            <line x1="15" y1="12" x2="3" y2="12"></line>
+        <div class="login-divider" id="loginDivider" style="display:none">or continue with</div>
+
+        <button type="button" class="btn btn-lg w-100" id="discordLoginBtn" onclick="loginWithDiscord()" style="display:none;background:#5865F2;border:none;color:#fff">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M20.317 4.3632a19.791 19.791 0 00-4.885-1.515.074.074 0 00-.079.0366c-.211.3648-.444.8384-.607 1.2144a18.27 18.27 0 00-5.487 0c-.163-.3776-.385-.8496-.607-1.2144a.077.077 0 00-.079-.0365c-1.751.289-3.436.906-4.884 1.515a.07.07 0 00-.032.0277C1.533 8.93.013 12.3928 1.191 15.7839a.076.076 0 00.029.0335c2.409 1.796 4.776 2.894 7.102 3.622a.077.077 0 00.084-.0276c.462-.6392.873-1.3135 1.226-2.0137a.073.073 0 00-.041-.1008c-.663-.2565-1.289-.5666-1.88-.9235a.075.075 0 01-.008-.1242c.126-.0947.252-.1938.372-.2923a.072.072 0 01.075-.0102c3.928 1.7898 8.183 1.7898 12.061 0a.073.073 0 01.075.009c.12.099.246.1991.373.2924a.075.075 0 01-.006.1242c-.59.3569-1.216.6674-1.88.9235a.073.073 0 00-.041.1008c.353.6994.764 1.3745 1.226 2.0137a.076.076 0 00.084.0276c2.327-.7285 4.694-1.8386 7.102-3.6221a.077.077 0 00.03-.0334c1.278-3.4668-.213-6.9301-1.798-9.7839a.07.07 0 00-.031-.0277zM8.02 13.2823c-.842 0-1.54-.7734-1.54-1.7244 0-.951.686-1.7244 1.54-1.7244.856 0 1.551.7734 1.54 1.7244 0 .951-.686 1.7244-1.54 1.7244zm7.973 0c-.842 0-1.54-.7734-1.54-1.7244 0-.951.686-1.7244 1.54-1.7244.856 0 1.551.7734 1.54 1.7244 0 .951-.684 1.7244-1.54 1.7244z"/>
           </svg>
-          Sign In
+          Continue with Discord
         </button>
 
-      </form>
-
-      <!-- Divider -->
-      <div style="display: flex; align-items: center; gap: 12px; margin: 20px 0; opacity: 0.6;">
-        <div style="flex: 1; height: 1px; background: var(--border-color);"></div>
-        <span style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">Or continue with</span>
-        <div style="flex: 1; height: 1px; background: var(--border-color);"></div>
-      </div>
-
-      <!-- Discord Login Button -->
-      <button type="button" class="btn w-100 btn-lg" id="discordLoginBtn" onclick="loginWithDiscord()" style="background: #5865F2; color: white; border: none; display: none;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M20.317 4.3632a19.791 19.791 0 00-4.885-1.515a.074.074 0 00-.079.0366c-.211.3648-.444.8384-.607 1.2144a18.27 18.27 0 00-5.487 0c-.163-.3776-.385-.8496-.607-1.2144a.077.077 0 00-.079-.0365c-1.751.289-3.436.906-4.884 1.515a.07.07 0 00-.032.0277C1.533 8.93.013 12.3928 1.191 15.7839a.076.076 0 00.029.0335c2.409 1.796 4.776 2.894 7.102 3.622a.077.077 0 00.084-.0276c.462-.6392.873-1.3135 1.226-2.0137a.073.073 0 00-.041-.1008c-.663-.2565-1.289-.5666-1.88-.9235a.075.075 0 01-.008-.1242c.126-.0947.252-.1938.372-.2923a.072.072 0 01.075-.0102c3.928 1.7898 8.183 1.7898 12.061 0a.073.073 0 01.075.009c.12.099.246.1991.373.2924a.075.075 0 01-.006.1242c-.59.3569-1.216.6674-1.88.9235a.073.073 0 00-.041.1008c.353.6994.764 1.3745 1.226 2.0137a.076.076 0 00.084.0276c2.327-.7285 4.694-1.8386 7.102-3.6221a.077.077 0 00.03-.0334c1.278-3.4668-.213-6.9301-1.798-9.7839a.070.070 0 00-.031-.0277zM8.02 13.2823c-.842 0-1.54-.7734-1.54-1.7244c0-.951.686-1.7244 1.54-1.7244c.856 0 1.551.7734 1.54 1.7244c0 .951-.686 1.7244-1.54 1.7244zm7.973 0c-.842 0-1.54-.7734-1.54-1.7244c0-.951.686-1.7244 1.54-1.7244c.856 0 1.551.7734 1.54 1.7244c0 .951-.684 1.7244-1.54 1.7244z"/>
-        </svg>
-        Login with Discord
-      </button>
-
-    <div class="login-footer">
-      <%= siteName %> <%= panelVersion %> · &copy; <%= new Date().getFullYear() %> HopingBoyz
-      <br>
-      <span style="font-size: 10px; color: var(--text-muted);">Powered by QEMU/KVM + Express.js</span>
+        <div class="pm-login-footer">
+          <span>&copy; <%= new Date().getFullYear() %> <%= siteName %></span>
+          <span class="dot" style="width:3px;height:3px;border-radius:50%;background:var(--pm-text-dim);display:inline-block"></span>
+          <span>Powered by QEMU/KVM</span>
+        </div>
+      </section>
     </div>
-
   </div>
 </div>
 
 <script>
-// Toggle password visibility
-function togglePassword() {
-  const pw = document.getElementById('password');
-  const btn = document.getElementById('pwToggle');
-  if (pw.type === 'password') {
-    pw.type = 'text';
-    btn.textContent = '🙈';
-  } else {
-    pw.type = 'password';
-    btn.textContent = '👁️';
+  const storedTheme = (function () {
+    try { return localStorage.getItem('pm.theme'); } catch (e) { return null; }
+  })();
+  if (storedTheme === 'light') {
+    document.documentElement.classList.add('pm-theme-light');
+    document.body.classList.add('light-theme');
+  } else if (storedTheme === 'dark') {
+    document.body.classList.remove('light-theme');
   }
-}
 
-// Handle login
-async function handleLogin(e) {
-  e.preventDefault();
-  
-  const username = document.getElementById('username').value.trim();
-  const password = document.getElementById('password').value;
-  const btn = document.getElementById('loginBtn');
-  const alert = document.getElementById('loginAlert');
-  const card = document.getElementById('loginCard');
-  
-  if (!username || !password) {
-    showAlert('Please fill in all fields', 'error');
-    return;
+  function toggleLoginTheme() {
+    if (window.PM && PM.toggleTheme) { PM.toggleTheme(); return; }
+    document.body.classList.toggle('light-theme');
+    try { localStorage.setItem('pm.theme', document.body.classList.contains('light-theme') ? 'light' : 'dark'); }
+    catch (e) {}
   }
-  
-  btn.classList.add('loading');
-  btn.textContent = '';
-  btn.disabled = true;
-  alert.style.display = 'none';
-  
-  try {
-    const res = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
-    
-    const data = await res.json();
-    
-    if (res.ok && data.success) {
-      btn.innerHTML = '✅ Success! Redirecting...';
-      btn.style.background = 'var(--gradient-green)';
-      
-      setTimeout(() => {
-        window.location.href = '/dashboard';
-      }, 600);
+
+  function openShortcutsHelp() {
+    if (window.PM) PM.openShortcuts();
+  }
+
+  function togglePassword() {
+    const pw = document.getElementById('password');
+    const btn = document.getElementById('pwToggle');
+    const show = pw.type === 'password';
+    pw.type = show ? 'text' : 'password';
+    btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    btn.innerHTML = show
+      ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'
+      : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+    pw.focus();
+  }
+
+  function showAlert(message, type) {
+    const box = document.getElementById('loginAlert');
+    const icons = { error: 'alert', success: 'check', warning: 'alert', info: 'info' };
+    if (window.PM && PM.icon) {
+      box.innerHTML = '<div class="alert alert-' + type + '" style="display:flex;align-items:flex-start;gap:9px">' +
+        '<span style="flex-shrink:0;margin-top:1px">' + PM.icon(icons[type] || 'info', 15) + '</span>' +
+        '<span>' + message + '</span></div>';
     } else {
-      card.classList.add('shake');
-      setTimeout(() => card.classList.remove('shake'), 400);
-      showAlert(data.error || 'Invalid username or password', 'error');
-      btn.classList.remove('loading');
-      btn.disabled = false;
-      btn.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"></path>
-          <polyline points="10 17 15 12 10 7"></polyline>
-          <line x1="15" y1="12" x2="3" y2="12"></line>
-        </svg>
-        Sign In
-      `;
+      box.innerHTML = '<div class="alert alert-' + type + '">' + message + '</div>';
     }
-  } catch (err) {
-    card.classList.add('shake');
-    setTimeout(() => card.classList.remove('shake'), 400);
-    showAlert('Connection error. Please try again.', 'error');
-    btn.classList.remove('loading');
-    btn.disabled = false;
-    btn.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"></path>
-        <polyline points="10 17 15 12 10 7"></polyline>
-        <line x1="15" y1="12" x2="3" y2="12"></line>
-      </svg>
-      Sign In
-    `;
+    box.style.display = 'block';
   }
-}
 
-function showAlert(message, type) {
-  const alert = document.getElementById('loginAlert');
-  const icons = { error: '❌', success: '✅', warning: '⚠️', info: 'ℹ️' };
-  alert.className = `alert alert-${type}`;
-  alert.innerHTML = `<span class="alert-icon">${icons[type]}</span><span>${message}</span>`;
-  alert.style.display = 'flex';
-}
-
-// Enter key on password
-document.getElementById('password').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    document.getElementById('loginForm').dispatchEvent(new Event('submit'));
+  function setLoginLoading(loading, label) {
+    const btn = document.getElementById('loginBtn');
+    if (!btn) return;
+    btn.disabled = loading;
+    btn.style.opacity = loading ? '0.85' : '';
+    btn.innerHTML = loading
+      ? '<span style="display:inline-flex;align-items:center;gap:9px"><span class="spinner" style="width:14px;height:14px;border-width:2px"></span>' + (label || 'Signing in…') + '</span>'
+      : '<span style="display:inline-flex;align-items:center;gap:8px">Sign in' +
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg></span>';
   }
-});
 
-// Load login page branding
-async function loadLoginBranding() {
-  try {
-    const res = await fetch('/api/settings');
-    if (!res.ok) return;
-    const settings = await res.json();
-    
-    const siteIconUrl = settings['site_icon_url'] || '/images/logo.png';
-    const siteName = settings['site_name'] || 'HKVM Panel';
-    const siteDesc = settings['site_description'] || 'Professional VM Management Platform';
-    
-    const iconImg = document.getElementById('loginIconImg');
-    const iconFallback = document.getElementById('loginIconFallback');
-    const nameEl = document.querySelector('.login-logo-title');
-    const descEl = document.querySelector('.login-logo-sub');
-    
-    if (iconImg && siteIconUrl) {
-      iconImg.src = siteIconUrl;
-      iconImg.style.display = 'block';
-      if (iconFallback) iconFallback.style.display = 'none';
-    } else {
-      if (iconImg) iconImg.style.display = 'none';
-      if (iconFallback) iconFallback.style.display = 'flex';
+  async function handleLogin(e) {
+    e.preventDefault();
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const card = document.getElementById('loginCard');
+    const alertBox = document.getElementById('loginAlert');
+    const remember = document.getElementById('rememberMe');
+
+    alertBox.style.display = 'none';
+
+    if (!username || !password) {
+      showAlert('Please enter both your username and password.', 'warning');
+      return;
     }
-    
-    if (nameEl) nameEl.textContent = siteName;
-    if (descEl) descEl.textContent = siteDesc;
-  } catch(e) {
-    console.error('Failed to load branding:', e);
-    // Fallback: show default logo
-    const iconImg = document.getElementById('loginIconImg');
-    const iconFallback = document.getElementById('loginIconFallback');
-    if (iconImg) {
-      iconImg.src = '/images/logo.png';
-      iconImg.style.display = 'block';
-    }
-    if (iconFallback) iconFallback.style.display = 'none';
-  }
-}
 
-// Check if Discord auth is enabled and show Discord button
-async function loadDiscordSettings() {
-  try {
-    const res = await fetch('/api/discord-enabled');
-    if (!res.ok) return;
-    const settings = await res.json();
-    
-    if (settings.enabled) {
-      const discordBtn = document.getElementById('discordLoginBtn');
-      if (discordBtn) {
-        discordBtn.style.display = 'flex';
-        discordBtn.style.alignItems = 'center';
-        discordBtn.style.justifyContent = 'center';
-        discordBtn.style.gap = '8px';
+    setLoginLoading(true);
+
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        try {
+          if (remember && remember.checked) localStorage.setItem('pm.remember', username);
+          else localStorage.removeItem('pm.remember');
+        } catch (err) {}
+
+        setLoginLoading(true, 'Welcome back!');
+        if (window.PM) PM.toast('Signed in successfully — loading workspace', 'success', { duration: 1600 });
+        setTimeout(function () { window.location.href = '/dashboard'; }, 550);
+        return;
       }
-    }
-  } catch(e) {
-    console.error('Failed to load Discord settings:', e);
-  }
-}
 
-// Discord OAuth login
-async function loginWithDiscord() {
-  const btn = document.getElementById('discordLoginBtn');
-  const alert = document.getElementById('loginAlert');
-  
-  try {
-    btn.disabled = true;
-    btn.style.opacity = '0.6';
-    
-    const res = await fetch('/api/discord-auth-url');
-    if (!res.ok) {
-      throw new Error('Failed to get Discord auth URL');
+      card.classList.add('shake');
+      setTimeout(function () { card.classList.remove('shake'); }, 450);
+      showAlert(data.error || 'Invalid username or password.', 'error');
+      setLoginLoading(false);
+      document.getElementById('password').select();
+    } catch (err) {
+      card.classList.add('shake');
+      setTimeout(function () { card.classList.remove('shake'); }, 450);
+      showAlert('Connection problem — check your network and try again.', 'error');
+      setLoginLoading(false);
     }
-    
-    const data = await res.json();
-    window.location.href = data.url;
-  } catch (err) {
-    showAlert('Discord authentication setup incomplete. Please contact administrator.', 'error');
-    btn.disabled = false;
-    btn.style.opacity = '1';
-    console.error('Discord login error:', err);
   }
-}
 
-// Load login page branding
-async function loadLoginBranding() {
-  try {
-    const res = await fetch('/api/settings');
-    if (!res.ok) return;
-    const settings = await res.json();
-    
-    const siteIconUrl = settings['site_icon_url'] || '/images/logo.png';
-    const siteName = settings['site_name'] || 'HKVM Panel';
-    const siteDesc = settings['site_description'] || 'Professional VM Management Platform';
-    
-    const iconImg = document.getElementById('loginIconImg');
-    const iconFallback = document.getElementById('loginIconFallback');
-    const nameEl = document.querySelector('.login-logo-title');
-    const descEl = document.querySelector('.login-logo-sub');
-    
-    if (iconImg && siteIconUrl) {
-      iconImg.src = siteIconUrl;
-      iconImg.style.display = 'block';
-      if (iconFallback) iconFallback.style.display = 'none';
-    } else {
-      if (iconImg) iconImg.style.display = 'none';
-      if (iconFallback) iconFallback.style.display = 'flex';
+  document.addEventListener('DOMContentLoaded', function () {
+    const pw = document.getElementById('password');
+    const caps = document.getElementById('capsWarning');
+    if (pw && caps) {
+      pw.addEventListener('keyup', function (e) {
+        if (typeof e.getModifierState !== 'function') return;
+        caps.classList.toggle('show', e.getModifierState('CapsLock'));
+      });
     }
-    
-    if (nameEl) nameEl.textContent = siteName;
-    if (descEl) descEl.textContent = siteDesc;
-  } catch(e) {
-    console.error('Failed to load branding:', e);
-    // Fallback: show default logo
-    const iconImg = document.getElementById('loginIconImg');
-    const iconFallback = document.getElementById('loginIconFallback');
-    if (iconImg) {
-      iconImg.src = '/images/logo.png';
-      iconImg.style.display = 'block';
-    }
-    if (iconFallback) iconFallback.style.display = 'none';
+    const user = document.getElementById('username');
+    try {
+      const remembered = localStorage.getItem('pm.remember');
+      if (remembered && user) {
+        user.value = remembered;
+        document.getElementById('rememberMe').checked = true;
+        document.getElementById('password').focus();
+      }
+    } catch (e) {}
+  });
+
+  // Branding (server values + live settings)
+  async function loadLoginBranding() {
+    try {
+      const res = await fetch('/api/settings');
+      if (!res.ok) return;
+      const settings = await res.json();
+      const icon = settings['site_icon_url'] || '<%= siteLogo %>';
+      const name = settings['site_name'] || '<%= siteName %>';
+      const desc = settings['site_description'] || 'Provision, monitor and control your QEMU/KVM fleet from one refined control plane.';
+
+      const logo = document.getElementById('loginLogoImg');
+      if (logo && icon) logo.src = icon;
+      ['loginSiteName', 'loginSiteNameInline'].forEach(function (id) {
+        const node = document.getElementById(id);
+        if (node) node.textContent = name;
+      });
+      const descEl = document.getElementById('loginSiteDesc');
+      if (descEl) descEl.textContent = desc;
+      document.title = 'Sign in · ' + name;
+    } catch (e) {}
   }
-}
 
-// Load branding on page load
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
+  async function loadDiscordSettings() {
+    try {
+      const res = await fetch('/api/discord-enabled');
+      if (!res.ok) return;
+      const settings = await res.json();
+      if (!settings.enabled) return;
+      const btn = document.getElementById('discordLoginBtn');
+      const divider = document.getElementById('loginDivider');
+      if (btn) btn.style.display = 'inline-flex';
+      if (divider) divider.style.display = 'flex';
+    } catch (e) {}
+  }
+
+  async function loginWithDiscord() {
+    const btn = document.getElementById('discordLoginBtn');
+    try {
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+      const res = await fetch('/api/discord-auth-url');
+      if (!res.ok) throw new Error('Discord not configured');
+      const data = await res.json();
+      window.location.href = data.url;
+    } catch (err) {
+      showAlert('Discord sign-in is not configured yet. Please contact your administrator.', 'error');
+      btn.disabled = false;
+      btn.style.opacity = '1';
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { loadLoginBranding(); loadDiscordSettings(); });
+  } else {
     loadLoginBranding();
     loadDiscordSettings();
-  });
-} else {
-  loadLoginBranding();
-  loadDiscordSettings();
-}
+  }
 </script>
+<script src="/js/premium.js"></script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>(function(){try{var t=localStorage.getItem('pm.theme')||'dark';var d=document.documentElement;if(t==='light')d.classList.add('pm-theme-light');d.style.colorScheme=t==='light'?'light':'dark';}catch(e){}})();</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0a0a0f">
@@ -8,6 +9,7 @@
   <link rel="icon" href="<%= siteLogo %>" type="image/png">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="/css/admin.css">
+  <link rel="stylesheet" href="/css/premium.css">
 </head>
 <body>
 <div class="admin-wrapper">
@@ -252,7 +254,7 @@ function renderUsers() {
 }
 
 async function deleteUser(id, username) {
-  const confirmed = confirm(`Delete user "${username}"? This action cannot be undone.`);
+  const confirmed = await PM.confirm(`Delete user "${username}"? This action cannot be undone.`, { title: 'Delete user', confirmText: 'Delete user', danger: true });
   if (!confirmed) return;
   
   try {
@@ -276,5 +278,6 @@ function escHtml(str) {
 
 loadUsers();
 </script>
+  <script src="/js/premium.js"></script>
 </body>
 </html>

@@ -1,92 +1,94 @@
 <%
   const cp = currentPage || '';
   const u = user || {};
+  const isAdminUser = u.role === 'admin';
 %>
-
-<!-- Admin Sidebar -->
+<!-- ============ SIDEBAR ============ -->
 <aside class="admin-sidebar" id="adminSidebar">
 
-  <!-- Brand -->
-  <a href="/admin/dashboard" class="sidebar-brand">
-    <div class="sidebar-brand-icon" style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--radius-md); overflow: hidden; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-      <img src="<%= siteLogo %>" style="width: 100%; height: 100%; border-radius: var(--radius-md); object-fit: cover; padding: 2px;" alt="<%= siteName %> Logo">
+  <a href="<%= isAdminUser ? '/admin/dashboard' : '/dashboard' %>" class="sidebar-brand">
+    <div class="sidebar-brand-icon">
+      <img src="<%= siteLogo %>" alt="<%= siteName %>" onerror="this.style.display='none'">
     </div>
     <div class="sidebar-brand-text">
       <div class="sidebar-brand-name"><%= siteName %></div>
-      <div class="sidebar-brand-version"><%= panelVersion %>  HKVM PANEL</div>
+      <div class="sidebar-brand-version"><%= panelVersion %> · <%= isAdminUser ? 'Admin' : 'User' %></div>
     </div>
   </a>
 
-  <!-- Navigation -->
   <nav class="sidebar-nav">
 
-    <!-- Core -->
+    <!-- Quick filter -->
+    <div style="padding:0 4px 12px;position:relative" class="pm-nav-filter-wrap">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--pm-text-dim);pointer-events:none">
+        <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
+      </svg>
+      <input id="pmNavFilter" type="text" placeholder="Jump to…" aria-label="Filter navigation"
+             style="width:100%;height:34px;border-radius:9px;border:1px solid var(--pm-line);background:rgba(148,163,184,.06);
+                    color:var(--pm-text);font-size:12px;padding:0 10px 0 33px;outline:none"
+             onfocus="this.style.borderColor='var(--pm-brand-line)';this.style.boxShadow='0 0 0 3px rgba(var(--pm-brand-rgb),.14)'"
+             onblur="this.style.borderColor='';this.style.boxShadow=''">
+    </div>
+
     <div class="nav-section">
       <div class="nav-section-label">Overview</div>
 
       <a href="/admin/dashboard" class="nav-item <%= cp === 'dashboard' ? 'active' : '' %>">
         <span class="nav-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="3" width="7" height="9" rx="1"></rect>
-            <rect x="14" y="3" width="7" height="5" rx="1"></rect>
-            <rect x="14" y="12" width="7" height="9" rx="1"></rect>
-            <rect x="3" y="16" width="7" height="5" rx="1"></rect>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="9" rx="1.5"></rect>
+            <rect x="14" y="3" width="7" height="5" rx="1.5"></rect>
+            <rect x="14" y="12" width="7" height="9" rx="1.5"></rect>
+            <rect x="3" y="16" width="7" height="5" rx="1.5"></rect>
           </svg>
         </span>
-        <span class="nav-text">Dashboard</span>
+        <span class="nav-text">Admin Dashboard</span>
         <span class="nav-badge" id="runningBadge" style="display:none">0</span>
       </a>
-      
-      <a href="/dashboard" class="nav-item nav-item-highlight">
+
+      <a href="/dashboard" class="nav-item">
         <span class="nav-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 12H5"></path>
-            <path d="M12 19l-7-7 7-7"></path>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5"></path><path d="M12 19l-7-7 7-7"></path>
           </svg>
         </span>
-        <span class="nav-text">Back to User Panel</span>
+        <span class="nav-text">User Panel</span>
       </a>
     </div>
 
-    <!-- Virtual Machines -->
     <div class="nav-section">
-      <div class="nav-section-label">Virtual Machines</div>
+      <div class="nav-section-label">Virtual machines</div>
 
-      <a href="/admin/vms" class="nav-item <%= cp === 'vms' || cp === 'vm-detail' ? 'active' : '' %>">
+      <a href="/admin/vms" class="nav-item <%= (cp === 'vms' || cp === 'vm-detail' || cp === 'vm-console' || cp === 'vm-ssh' || cp === 'vm-edit') ? 'active' : '' %>">
         <span class="nav-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="4" width="20" height="16" rx="2"></rect>
-            <path d="M8 20h8"></path>
-            <path d="M12 16v4"></path>
-            <circle cx="12" cy="12" r="3"></circle>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="20" height="7" rx="2"></rect>
+            <rect x="2" y="13" width="20" height="7" rx="2"></rect>
+            <path d="M6 7.5h.01M6 16.5h.01"></path>
           </svg>
         </span>
         <span class="nav-text">All VMs</span>
         <span class="nav-badge" id="vmCountBadge" style="display:none">0</span>
       </a>
 
-      <% if (u.role === 'admin') { %>
       <a href="/admin/vm-create" class="nav-item <%= cp === 'vm-create' ? 'active' : '' %>">
         <span class="nav-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="8" x2="12" y2="16"></line>
-            <line x1="8" y1="12" x2="16" y2="12"></line>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5v14M5 12h14"></path>
           </svg>
         </span>
         <span class="nav-text">Create VM</span>
+        <span class="pm-kbd" style="margin-left:auto;font-size:9px">N</span>
       </a>
-      <% } %>
     </div>
 
-    <!-- Management -->
-    <% if (u.role === 'admin') { %>
     <div class="nav-section">
-      <div class="nav-section-label">Management</div>
+      <div class="nav-section-label">Manage</div>
 
       <a href="/admin/users" class="nav-item <%= cp === 'users' ? 'active' : '' %>">
         <span class="nav-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
             <circle cx="9" cy="7" r="4"></circle>
             <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
@@ -96,19 +98,9 @@
         <span class="nav-text">Users</span>
       </a>
 
-      <a href="/admin/settings" class="nav-item <%= cp === 'settings' ? 'active' : '' %>">
-        <span class="nav-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-        </span>
-        <span class="nav-text">Settings</span>
-      </a>
-
       <a href="/admin/templates" class="nav-item <%= cp === 'templates' ? 'active' : '' %>">
         <span class="nav-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
             <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
             <line x1="12" y1="22.08" x2="12" y2="12"></line>
@@ -116,184 +108,161 @@
         </span>
         <span class="nav-text">OS Templates</span>
       </a>
-    </div>
-    <% } %>
 
-    <!-- Tools -->
-    <div class="nav-section">
-      <div class="nav-section-label">Tools</div>
-
-      <div class="nav-item" onclick="openQuickActions()">
+      <a href="/admin/settings" class="nav-item <%= cp === 'settings' ? 'active' : '' %>">
         <span class="nav-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </span>
+        <span class="nav-text">Settings</span>
+      </a>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-section-label">Workspace</div>
+
+      <div class="nav-item" role="button" tabindex="0" onclick="if(window.PM)PM.openPalette('')">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
+          </svg>
+        </span>
+        <span class="nav-text">Command palette</span>
+        <span class="pm-kbd" style="margin-left:auto;font-size:9px">⌘K</span>
+      </div>
+
+      <div class="nav-item" role="button" tabindex="0" onclick="openQuickActions()">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
           </svg>
         </span>
-        <span class="nav-text">Quick Actions</span>
+        <span class="nav-text">Quick actions</span>
       </div>
 
-      <div class="nav-item" onclick="openSystemInfo()">
+      <div class="nav-item" role="button" tabindex="0" onclick="openSystemInfo()">
         <span class="nav-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10"></circle>
             <line x1="12" y1="16" x2="12" y2="12"></line>
             <line x1="12" y1="8" x2="12.01" y2="8"></line>
           </svg>
         </span>
-        <span class="nav-text">System Info</span>
+        <span class="nav-text">System info</span>
+      </div>
+
+      <div class="nav-item" role="button" tabindex="0" onclick="if(window.PM)PM.openShortcuts()">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+            <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"></path>
+          </svg>
+        </span>
+        <span class="nav-text">Shortcuts</span>
+        <span class="pm-kbd" style="margin-left:auto;font-size:9px">?</span>
       </div>
     </div>
-
   </nav>
 
-  <!-- Sidebar Footer -->
   <div class="sidebar-footer">
+    <div class="sidebar-usage" id="pmSidebarUsage">
+      <div class="sidebar-usage-head"><span>Host load</span><span>—</span></div>
+      <div class="sidebar-usage-bar"><span style="width:12%"></span></div>
+      <div class="sidebar-usage-row"><span>RAM</span><span>loading…</span></div>
+    </div>
 
-    <!-- User Info -->
-    <div class="sidebar-user" onclick="toggleDropdown('sidebarUserMenu')">
-      <div class="user-avatar" id="sidebarUserAvatar" style="background-size: cover; background-position: center; position: relative;">
+    <div class="sidebar-user" onclick="toggleDropdown('sidebarUserMenu')" style="margin-top:10px;cursor:pointer">
+      <div class="user-avatar" id="sidebarUserAvatar" style="position:relative">
         <span id="userInitial"><%= u.username ? u.username.charAt(0).toUpperCase() : 'A' %></span>
-        <span id="discordBadge" style="position: absolute; bottom: -2px; right: -2px; width: 14px; height: 14px; background: #5865F2; border-radius: 50%; display: none; border: 2px solid var(--bg-primary);"></span>
+        <span id="discordBadge" style="position:absolute;bottom:-3px;right:-3px;width:12px;height:12px;background:#5865F2;border-radius:50%;display:none;border:2px solid var(--bg-primary)"></span>
       </div>
       <div class="user-info">
         <div class="user-name"><%= u.username || 'Admin' %></div>
-        <div class="user-role">
-          <% if (u.role === 'admin') { %>
-          <span style="display: inline-flex; align-items: center; gap: 4px;">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.2H22l-6 4.6 2.3 7.2-6.3-4.6-6.3 4.6L8 13.8l-6-4.6h7.6z"/></svg>
-            Administrator
-          </span>
-          <% } else { %>
-          <span style="display: inline-flex; align-items: center; gap: 4px;">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            User
-          </span>
-          <% } %>
-        </div>
+        <div class="user-role"><%= isAdminUser ? 'Administrator' : 'User' %></div>
       </div>
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted); flex-shrink:0;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--pm-text-dim);flex-shrink:0">
         <polyline points="6 9 12 15 18 9"></polyline>
       </svg>
     </div>
 
-    <!-- Sidebar User Dropdown -->
-    <div class="dropdown-menu" id="sidebarUserMenu" style="bottom: 100%; top: auto; margin-bottom: 6px; right: 0; left: 0; min-width: unset;">
-      <a href="/admin/settings" class="dropdown-item">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-        Profile & Settings
-      </a>
+    <div class="dropdown-menu" id="sidebarUserMenu" style="bottom:calc(100% + 6px);top:auto;left:12px;right:12px;min-width:0">
+      <a href="/profile" class="dropdown-item">My profile</a>
+      <a href="/admin/settings" class="dropdown-item">Panel settings</a>
+      <button class="dropdown-item" onclick="if(window.PM)PM.openShortcuts()">Keyboard shortcuts</button>
       <div class="dropdown-divider"></div>
-      <button class="dropdown-item danger" onclick="logout()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-          <polyline points="16 17 21 12 16 7"></polyline>
-          <line x1="21" y1="12" x2="9" y2="12"></line>
-        </svg>
-        Sign Out
-      </button>
+      <button class="dropdown-item danger" onclick="logout()">Sign out</button>
+    </div>
+
+    <div class="sidebar-hint">
+      <span>Command palette</span>
+      <span><kbd>⌘</kbd> <kbd>K</kbd></span>
     </div>
   </div>
 </aside>
 
-<!-- Quick Actions Modal -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
+<!-- ============ QUICK ACTIONS ============ -->
 <div class="modal-overlay" id="quickActionsModal">
-  <div class="modal">
+  <div class="modal" style="max-width:560px">
     <div class="modal-header">
-      <div class="modal-title">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
-          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-        </svg>
-        Quick Actions
-      </div>
-      <button class="modal-close" onclick="closeModal('quickActionsModal')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
+      <div class="modal-title">Quick actions</div>
+      <button class="modal-close" onclick="closeModal('quickActionsModal')" aria-label="Close">✕</button>
     </div>
     <div class="modal-body">
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-        <a href="/admin/vm-create" class="btn btn-primary btn-lg" style="justify-content: center;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="8" x2="12" y2="16"></line>
-            <line x1="8" y1="12" x2="16" y2="12"></line>
-          </svg>
-          Create VM
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <a href="/admin/vm-create" class="quick-action-card">
+          <span class="quick-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></span>
+          <span class="quick-action-text"><h4>Create VM</h4><p>Provision in seconds</p></span>
         </a>
-        <a href="/admin/vms" class="btn btn-outline btn-lg" style="justify-content: center;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
-            <rect x="2" y="4" width="20" height="16" rx="2"></rect>
-            <path d="M8 20h8"></path>
-            <path d="M12 16v4"></path>
-          </svg>
-          View All VMs
+        <a href="/admin/vms" class="quick-action-card">
+          <span class="quick-action-icon info"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="7" rx="2"/><rect x="2" y="13" width="20" height="7" rx="2"/></svg></span>
+          <span class="quick-action-text"><h4>All VMs</h4><p>Monitor & control</p></span>
         </a>
-        <% if (u.role === 'admin') { %>
-        <a href="/admin/users" class="btn btn-ghost btn-lg" style="justify-content: center;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
-            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-            <circle cx="9" cy="7" r="4"></circle>
-          </svg>
-          Manage Users
+        <a href="/admin/users" class="quick-action-card">
+          <span class="quick-action-icon warning"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span>
+          <span class="quick-action-text"><h4>Manage users</h4><p>Access & roles</p></span>
         </a>
-        <a href="/admin/settings" class="btn btn-ghost btn-lg" style="justify-content: center;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-          </svg>
-          Settings
+        <a href="/admin/settings" class="quick-action-card">
+          <span class="quick-action-icon success"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></span>
+          <span class="quick-action-text"><h4>Settings</h4><p>Panel configuration</p></span>
         </a>
-        <% } %>
+      </div>
+      <div style="margin-top:14px" class="pm-toolbar">
+        <button class="btn btn-ghost btn-sm" onclick="if(window.PM)PM.openPalette('')">Open command palette</button>
+        <button class="btn btn-ghost btn-sm" onclick="if(window.PM)PM.openStudio()">Appearance studio</button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- System Info Modal -->
+<!-- ============ SYSTEM INFO ============ -->
 <div class="modal-overlay" id="systemInfoModal">
-  <div class="modal">
+  <div class="modal" style="max-width:580px">
     <div class="modal-header">
-      <div class="modal-title">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 8px;">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="16" x2="12" y2="12"></line>
-          <line x1="12" y1="8" x2="12.01" y2="8"></line>
-        </svg>
-        System Information
-      </div>
-      <button class="modal-close" onclick="closeModal('systemInfoModal')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
+      <div class="modal-title">System information</div>
+      <button class="modal-close" onclick="closeModal('systemInfoModal')" aria-label="Close">✕</button>
     </div>
     <div class="modal-body">
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;" id="systemInfoGrid">
-        <div class="card" style="padding: 14px;">
-          <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">Panel Version</div>
-          <div style="font-size: 16px; font-weight: 700; color: var(--accent-primary);">v<%= panelVersion %></div>
-        </div>
-        <div class="card" style="padding: 14px;">
-          <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">Status</div>
-          <div style="font-size: 16px; font-weight: 700; color: var(--accent-green); display: flex; align-items: center;">
-            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981; margin-right: 6px;"></span>
-            Online
-          </div>
-        </div>
-        <div class="card" style="padding: 14px;">
-          <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">Platform</div>
-          <div style="font-size: 14px; font-weight: 600; color: var(--text-primary);">QEMU/KVM</div>
-        </div>
-        <div class="card" style="padding: 14px;">
-          <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.5px;">Engine</div>
-          <div style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Express + EJS</div>
-        </div>
+      <div id="pmSystemInfo" class="pm-grid auto-sm">
+        <div class="pm-card"><div class="pm-metric">
+          <div class="pm-metric-label">Panel version</div>
+          <div class="pm-metric-value" style="font-size:20px;margin-top:6px"><%= panelVersion %></div>
+        </div></div>
+        <div class="pm-card"><div class="pm-metric">
+          <div class="pm-metric-label">Status</div>
+          <div class="pm-metric-value" style="font-size:20px;margin-top:6px;color:var(--pm-green)">Online</div>
+        </div></div>
+        <div class="pm-card"><div class="pm-metric">
+          <div class="pm-metric-label">Platform</div>
+          <div class="pm-metric-value" style="font-size:18px;margin-top:6px">QEMU/KVM</div>
+        </div></div>
+        <div class="pm-card"><div class="pm-metric">
+          <div class="pm-metric-label">Engine</div>
+          <div class="pm-metric-value" style="font-size:18px;margin-top:6px">Express + EJS</div>
+        </div></div>
       </div>
     </div>
     <div class="modal-footer">
@@ -303,167 +272,92 @@
 </div>
 
 <script>
-// Load Discord profile picture if available
-async function loadSidebarUserAvatar() {
-  try {
-    console.log('[DEBUG] loadSidebarUserAvatar called');
-    
-    const avatar = document.getElementById('sidebarUserAvatar');
-    console.log('[DEBUG] sidebarUserAvatar element:', avatar);
-    
-    if (!avatar) {
-      console.error('[DEBUG] sidebarUserAvatar element not found');
-      return;
-    }
-    
-    const res = await fetch('/api/discord-account-info');
-    console.log('[DEBUG] Discord account info response:', res.ok);
-    
-    if (res.ok) {
-      const discordAccount = await res.json();
-      console.log('[DEBUG] Discord account data:', discordAccount);
-      
-      if (discordAccount && discordAccount.discord_avatar && discordAccount.discord_id) {
-        // Build Discord CDN avatar URL with hash
-        const discordAvatarUrl = `https://cdn.discordapp.com/avatars/${discordAccount.discord_id}/${discordAccount.discord_avatar}.png?size=128`;
-        console.log('[DEBUG] Discord avatar URL:', discordAvatarUrl);
-        
-        const initial = document.getElementById('userInitial');
-        const badge = document.getElementById('discordBadge');
-        
-        console.log('[DEBUG] Initial element:', initial);
-        console.log('[DEBUG] Badge element:', badge);
-        
-        // Set background image
-        avatar.style.backgroundImage = `url('${discordAvatarUrl}')`;
-        avatar.style.backgroundSize = 'cover';
-        avatar.style.backgroundPosition = 'center';
-        
-        // Hide the initial text
-        if (initial) {
-          initial.style.display = 'none';
-          console.log('[DEBUG] Hidden initial text');
-        }
-        
-        // Show Discord badge
-        if (badge) {
-          badge.style.display = 'block';
-          console.log('[DEBUG] Showing Discord badge');
-        }
-        
-        console.log('[DEBUG] Discord avatar applied successfully!');
-      } else {
-        console.log('[DEBUG] No Discord avatar data:', { avatar: discordAccount?.discord_avatar, id: discordAccount?.discord_id });
-      }
-    } else {
-      console.log('[DEBUG] Discord account info fetch not ok:', res.status);
-    }
-  } catch(e) {
-    console.error('[Discord Avatar Error]', e);
+  /* Shared modal helpers (kept for existing pages) */
+  function openModal(id) {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.classList.add('show');
+    document.body.style.overflow = 'hidden';
   }
-}
-
-// Sidebar functionality
-function toggleSidebar() {
-  const sidebar = document.getElementById('adminSidebar');
-  const overlay = document.getElementById('sidebarOverlay');
-  sidebar.classList.toggle('open');
-  overlay.classList.toggle('open');
-  document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
-}
-
-function closeSidebar() {
-  const sidebar = document.getElementById('adminSidebar');
-  const overlay = document.getElementById('sidebarOverlay');
-  sidebar.classList.remove('open');
-  overlay.classList.remove('open');
-  document.body.style.overflow = '';
-}
-
-// Modal functions
-function openModal(id) {
-  document.getElementById(id).classList.add('show');
-  document.body.style.overflow = 'hidden';
-}
-
-function closeModal(id) {
-  document.getElementById(id).classList.remove('show');
-  document.body.style.overflow = '';
-}
-
-function openQuickActions() { openModal('quickActionsModal'); }
-function openSystemInfo() { openModal('systemInfoModal'); }
-
-// Close modal on overlay click
-document.addEventListener('click', (e) => {
-  if (e.target.classList.contains('modal-overlay')) {
-    document.querySelectorAll('.modal-overlay').forEach(m => {
-      m.classList.remove('show');
-    });
+  function closeModal(id) {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.classList.remove('show');
     document.body.style.overflow = '';
   }
-});
-
-// Load sidebar stats
-async function loadSidebarStats() {
-  try {
-    const [vmsRes, settingsRes] = await Promise.all([
-      fetch('/api/vms'),
-      fetch('/api/settings')
-    ]);
-    
-    if (vmsRes.ok) {
-      const vms = await vmsRes.json();
-      const runningCount = vms.filter(vm => vm.status === 'running').length;
-      const vmCountBadge = document.getElementById('vmCountBadge');
-      const runningBadge = document.getElementById('runningBadge');
-      
-      if (vmCountBadge) {
-        vmCountBadge.textContent = vms.length;
-        vmCountBadge.style.display = 'inline-flex';
-      }
-      
-      if (runningBadge) {
-        runningBadge.textContent = runningCount;
-        runningBadge.style.display = runningCount > 0 ? 'inline-flex' : 'none';
-      }
+  function openQuickActions() { openModal('quickActionsModal'); }
+  function openSystemInfo() {
+    openModal('systemInfoModal');
+    if (window.PM) {
+      PM.fetchJSON('/api/system/metrics').then(function (m) {
+        const host = document.getElementById('pmSystemInfo');
+        if (!host || !m) return;
+        host.insertAdjacentHTML('beforeend',
+          '<div class="pm-card"><div class="pm-metric"><div class="pm-metric-label">Host</div>' +
+          '<div style="font-size:15px;font-weight:650;margin-top:6px">' + PM.esc(m.hostname || 'this server') + '</div>' +
+          '<div class="pm-muted" style="font-size:11px">' + PM.esc(m.platform || '') + ' · ' + (m.cpu.cores || 0) + ' cores</div></div></div>' +
+          '<div class="pm-card"><div class="pm-metric"><div class="pm-metric-label">Uptime</div>' +
+          '<div class="pm-metric-value" style="font-size:20px;margin-top:6px">' + PM.formatUptime(m.uptime) + '</div>' +
+          '<div class="pm-muted" style="font-size:11px">Memory ' + PM.formatBytes(m.memory.used) + ' / ' + PM.formatBytes(m.memory.total) + '</div></div></div>');
+      }).catch(function () {});
     }
-    
-    if (settingsRes.ok) {
-      const settings = await settingsRes.json();
-      const siteName = settings['site_name'] || '<%= siteName %>';
-      const nameEl = document.getElementById('sidebarName');
-      if (nameEl) {
-        nameEl.textContent = siteName;
-      }
-    }
-  } catch(e) {
-    console.error('Failed to load sidebar data:', e);
   }
-}
 
-// Load sidebar data on page load
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', loadSidebarStats);
-} else {
-  loadSidebarStats();
-}
+  document.addEventListener('click', function (e) {
+    if (e.target.classList && e.target.classList.contains('modal-overlay')) {
+      document.querySelectorAll('.modal-overlay.show').forEach(function (m) { m.classList.remove('show'); });
+      document.body.style.overflow = '';
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-overlay.show').forEach(function (m) { m.classList.remove('show'); });
+      document.body.style.overflow = '';
+    }
+  });
 
-// Refresh stats every 30 seconds
-setInterval(loadSidebarStats, 30000);
+  /* Live sidebar counters */
+  async function loadSidebarStats() {
+    try {
+      const admin = <%= isAdminUser ? 'true' : 'false' %>;
+      const res = await fetch(admin ? '/api/admin/vms' : '/api/vms');
+      if (!res.ok) return;
+      const vms = await res.json();
+      const running = vms.filter(function (vm) { return vm.status === 'running'; }).length;
+      const vmBadge = document.getElementById('vmCountBadge');
+      const runBadge = document.getElementById('runningBadge');
+      if (vmBadge) {
+        vmBadge.textContent = vms.length;
+        vmBadge.style.display = vms.length ? 'inline-flex' : 'none';
+      }
+      if (runBadge) {
+        runBadge.textContent = running;
+        runBadge.style.display = running ? 'inline-flex' : 'none';
+      }
+    } catch (e) {}
+  }
 
-// === LOAD DISCORD AVATAR ===
-// Call on page load with multiple triggers
-document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(loadSidebarUserAvatar, 300);
-});
+  async function loadSidebarUserAvatar() {
+    try {
+      const res = await fetch('/api/discord-account-info');
+      if (!res.ok) return;
+      const account = await res.json();
+      if (!account || !account.discord_avatar || !account.discord_id) return;
+      const avatar = document.getElementById('sidebarUserAvatar');
+      const initial = document.getElementById('userInitial');
+      const badge = document.getElementById('discordBadge');
+      if (!avatar) return;
+      avatar.style.backgroundImage = "url('https://cdn.discordapp.com/avatars/" + account.discord_id + '/' + account.discord_avatar + ".png?size=128')";
+      avatar.style.backgroundSize = 'cover';
+      avatar.style.backgroundPosition = 'center';
+      if (initial) initial.style.display = 'none';
+      if (badge) badge.style.display = 'block';
+    } catch (e) {}
+  }
 
-window.addEventListener('load', () => {
-  setTimeout(loadSidebarUserAvatar, 300);
-});
-
-// If page is already loaded
-if (document.readyState === 'complete' || document.readyState === 'interactive') {
-  setTimeout(loadSidebarUserAvatar, 500);
-}
+  document.addEventListener('DOMContentLoaded', function () {
+    loadSidebarStats();
+    loadSidebarUserAvatar();
+    setInterval(loadSidebarStats, 30000);
+  });
 </script>

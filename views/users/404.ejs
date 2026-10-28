@@ -1,48 +1,135 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>(function(){try{var t=localStorage.getItem('pm.theme')||'dark';var d=document.documentElement;if(t==='light')d.classList.add('pm-theme-light');d.style.colorScheme=t==='light'?'light':'dark';}catch(e){}})();</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0a0a0f">
-  <title>404 - Page Not Found · HKVM Panel</title>
+  <meta name="theme-color" content="#06070c">
+  <title>Page not found · <%= siteName %></title>
   <link rel="icon" href="<%= siteLogo %>" type="image/png">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="/css/admin.css">
+  <link rel="stylesheet" href="/css/premium.css">
+  <style>
+    .notfound {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(20px, 5vw, 60px);
+    }
+    .notfound-card {
+      width: min(760px, 100%);
+      text-align: center;
+      position: relative;
+    }
+    .notfound-code {
+      font-size: clamp(90px, 22vw, 200px);
+      font-weight: 800;
+      line-height: 0.9;
+      letter-spacing: -0.07em;
+      background: linear-gradient(120deg, #ffffff 10%, var(--pm-brand) 55%, var(--pm-brand-3) 95%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      filter: drop-shadow(0 20px 60px rgba(var(--pm-brand-rgb), 0.35));
+    }
+    body.light-theme .notfound-code,
+    html.pm-theme-light .notfound-code {
+      background: linear-gradient(120deg, #0f172a 10%, #4f46e5 55%, #0891b2 95%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .notfound-title { font-size: clamp(20px, 3vw, 26px); font-weight: 700; letter-spacing: -0.03em; margin: 6px 0 8px; }
+    .notfound-desc { color: var(--pm-text-dim); font-size: 13.5px; max-width: 46ch; margin: 0 auto 22px; }
+    .notfound-search { max-width: 420px; margin: 0 auto 22px; position: relative; }
+    .notfound-links { display: flex; flex-wrap: wrap; gap: 9px; justify-content: center; margin-top: 26px; }
+    .notfound-links a {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 8px 13px; border-radius: 10px;
+      border: 1px solid var(--pm-line);
+      background: rgba(148,163,184,.06);
+      color: var(--pm-text-soft); font-size: 12px; font-weight: 600; text-decoration: none;
+      transition: all .16s var(--pm-ease);
+    }
+    .notfound-links a:hover { border-color: var(--pm-brand-line); background: var(--pm-brand-soft); color: var(--pm-text); transform: translateY(-1px); }
+    .notfound-glow {
+      position: absolute; width: 420px; height: 420px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(var(--pm-brand-rgb), .22), transparent 68%);
+      top: -20%; left: 50%; transform: translateX(-50%); filter: blur(30px); z-index: -1;
+    }
+  </style>
 </head>
 <body>
-<div class="login-bg"></div>
-<div class="login-bg-grid"></div>
 
-<div class="error-page" style="position: relative; z-index: 1;">
-  <div style="text-align: center; animation: fadeIn 0.6s ease;">
-    <div class="error-code">404</div>
-    <div class="error-title">Page Not Found</div>
-    <div class="error-desc">
-      <%= message || 'The page you are looking for does not exist or has been moved.' %>
-    </div>
-    
-    <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
-      <a href="/dashboard" class="btn btn-primary btn-lg">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"></path>
-          <polyline points="9 22 9 12 15 12 15 22"></polyline>
-        </svg>
-        Go Home
-      </a>
-      <button onclick="history.back()" class="btn btn-ghost btn-lg">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="15 18 9 12 15 6"></polyline>
-        </svg>
-        Go Back
-      </button>
+<div class="notfound">
+  <div class="notfound-card">
+    <div class="notfound-glow"></div>
+
+    <a href="/" class="pm-login-brand" style="justify-content:center;margin-bottom:26px;text-decoration:none">
+      <div class="pm-login-logo" style="width:38px;height:38px;border-radius:11px;background:var(--pm-brand-gradient)">
+        <img src="<%= siteLogo %>" alt="<%= siteName %>" style="padding:5px;background:#fff" onerror="this.style.display='none'">
+      </div>
+      <div style="text-align:left">
+        <div class="pm-login-brand-name" style="font-size:13.5px;color:var(--pm-text)"><%= siteName %></div>
+        <div class="pm-login-brand-sub" style="color:var(--pm-text-dim);font-size:9.5px">Control plane</div>
+      </div>
+    </a>
+
+    <div class="notfound-code">404</div>
+    <div class="notfound-title">This page slipped off the grid</div>
+    <p class="notfound-desc">
+      <%= message || 'The page you are looking for does not exist, has been moved, or you may not have access to it.' %>
+    </p>
+
+    <div class="notfound-search">
+      <div class="search-input-wrapper">
+        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" class="search-input" id="notFoundSearch" placeholder="Search for a VM, user or page…" autocomplete="off">
+      </div>
     </div>
 
-    <div style="margin-top: 40px; display: flex; justify-content: center; gap: 20px; flex-wrap: wrap;">
-      <a href="/admin/vms" style="color: var(--text-muted); text-decoration: none; font-size: 13px;">🖥️ VMs</a>
-      <a href="/admin/users" style="color: var(--text-muted); text-decoration: none; font-size: 13px;">👥 Users</a>
-      <a href="/admin/settings" style="color: var(--text-muted); text-decoration: none; font-size: 13px;">⚙️ Settings</a>
+    <div class="pm-row" style="justify-content:center;gap:9px;flex-wrap:wrap">
+      <a href="/dashboard" class="btn btn-primary btn-lg">Back to dashboard</a>
+      <button class="btn btn-ghost btn-lg" onclick="history.length > 1 ? history.back() : location.assign('/dashboard')">Go back</button>
+    </div>
+
+    <div class="notfound-links">
+      <a href="/vms">Virtual machines</a>
+      <a href="/profile">My profile</a>
+      <a href="/admin/dashboard" class="nf-admin" style="display:none">Admin dashboard</a>
+      <a href="/admin/users" class="nf-admin" style="display:none">Users</a>
+      <a href="/admin/settings" class="nf-admin" style="display:none">Settings</a>
+      <button class="btn btn-ghost btn-sm" onclick="if(window.PM)PM.openPalette('')">Command palette ⌘K</button>
     </div>
   </div>
 </div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', async function () {
+    // Reveal admin links only for administrators
+    try {
+      const res = await fetch('/api/auth/check');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.authenticated && data.user && data.user.role === 'admin') {
+          document.querySelectorAll('.nf-admin').forEach((node) => { node.style.display = 'inline-flex'; });
+        }
+      }
+    } catch (e) {}
+
+    const input = document.getElementById('notFoundSearch');
+    if (input) {
+      input.addEventListener('focus', () => { if (window.PM) PM.openPalette(input.value); });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); if (window.PM) PM.openPalette(input.value); }
+      });
+    }
+  });
+</script>
+<script src="/js/premium.js"></script>
 </body>
 </html>

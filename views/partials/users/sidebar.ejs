@@ -1,248 +1,214 @@
+<%
+  const cp = currentPage || '';
+  const u = user || {};
+%>
 <aside class="admin-sidebar" id="adminSidebar">
-    
-    <!-- Brand -->
-    <a href="/dashboard" class="sidebar-brand">
-        <div class="sidebar-brand-icon" style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--radius-md); overflow: hidden; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-          <img src="<%= siteLogo %>" style="width: 100%; height: 100%; border-radius: var(--radius-md); object-fit: cover; padding: 2px;" alt="<%= siteName %> Logo">
-        </div>
-        <div class="sidebar-brand-text">
-            <div class="sidebar-brand-name" id="userSidebarName"><%= siteName %></div>
-            <div class="sidebar-brand-version"><%= panelVersion %> User</div>
-        </div>
-    </a>
-    
-    <nav class="sidebar-nav">
-        <div class="nav-section">
-            <div class="nav-section-label">Menu</div>
-            
-            <a href="/dashboard" class="nav-item <%= currentPage === 'dashboard' ? 'active' : '' %>">
-                <span class="nav-icon">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="3" y="3" width="7" height="9" rx="1"></rect>
-                        <rect x="14" y="3" width="7" height="5" rx="1"></rect>
-                        <rect x="14" y="12" width="7" height="9" rx="1"></rect>
-                        <rect x="3" y="16" width="7" height="5" rx="1"></rect>
-                    </svg>
-                </span>
-                <span class="nav-text">Dashboard</span>
-            </a>
-            
-            <a href="/vms" class="nav-item <%= currentPage === 'vms' ? 'active' : '' %>">
-                <span class="nav-icon">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="2" y="4" width="20" height="16" rx="2"></rect>
-                        <path d="M8 20h8"></path>
-                        <path d="M12 16v4"></path>
-                        <circle cx="12" cy="12" r="3"></circle>
-                    </svg>
-                </span>
-                <span class="nav-text">My Virtual Machines</span>
-            </a>
-            
-            <a href="/profile" class="nav-item <%= currentPage === 'profile' ? 'active' : '' %>">
-                <span class="nav-icon">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                        <circle cx="12" cy="7" r="4"></circle>
-                    </svg>
-                </span>
-                <span class="nav-text">My Profile</span>
-            </a>
-        </div>
-        
-        <!-- Admin Section (shown only to admins) -->
-        <% if (user && user.role === 'admin') { %>
-        <div class="nav-section">
-            <div class="nav-section-label">Administration</div>
-            
-            <a href="/admin/dashboard" class="nav-item nav-item-highlight">
-                <span class="nav-icon">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 15a7 7 0 1 0 0-14 7 7 0 0 0 0 14z"></path>
-                        <path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"></path>
-                    </svg>
-                </span>
-                <span class="nav-text">Admin Panel</span>
-                <span class="nav-badge nav-badge-admin">ADMIN</span>
-            </a>
-        </div>
-        <% } %>
-    </nav>
-    
-    <div class="sidebar-footer">
-        <div class="sidebar-user" onclick="toggleDropdown('userSidebarMenu')">
-            <div class="user-avatar" id="userSidebarAvatar" style="background-size: cover; background-position: center; position: relative;">
-                <span id="userSidebarInitial"><%= user ? user.username.charAt(0).toUpperCase() : 'U' %></span>
-                <span id="userSidebarDiscordBadge" style="position: absolute; bottom: -2px; right: -2px; width: 14px; height: 14px; background: #5865F2; border-radius: 50%; display: none; border: 2px solid var(--bg-primary);"></span>
-            </div>
-            <div class="user-info">
-                <div class="user-name"><%= user ? user.username : 'Guest' %></div>
-                <div class="user-role">
-                    <span style="display: inline-flex; align-items: center; gap: 4px;">
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                            <circle cx="12" cy="7" r="4"></circle>
-                        </svg>
-                        User
-                    </span>
-                </div>
-            </div>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted); flex-shrink:0;">
-                <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-        </div>
 
-        <div class="dropdown-menu" id="userSidebarMenu" style="bottom: 100%; top: auto; margin-bottom: 6px; right: 0; left: 0; min-width: unset;">
-            <button class="dropdown-item danger" onclick="userLogout()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
-                    <polyline points="16 17 21 12 16 7"></polyline>
-                    <line x1="21" y1="12" x2="9" y2="12"></line>
-                </svg>
-                Sign Out
-            </button>
-        </div>
+  <a href="/dashboard" class="sidebar-brand">
+    <div class="sidebar-brand-icon">
+      <img src="<%= siteLogo %>" alt="<%= siteName %>" onerror="this.style.display='none'">
     </div>
+    <div class="sidebar-brand-text">
+      <div class="sidebar-brand-name" id="userSidebarName"><%= siteName %></div>
+      <div class="sidebar-brand-version"><%= panelVersion %> · Workspace</div>
+    </div>
+  </a>
+
+  <nav class="sidebar-nav">
+    <div style="padding:0 4px 12px;position:relative" class="pm-nav-filter-wrap">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--pm-text-dim);pointer-events:none">
+        <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
+      </svg>
+      <input id="pmNavFilter" type="text" placeholder="Jump to…" aria-label="Filter navigation"
+             style="width:100%;height:34px;border-radius:9px;border:1px solid var(--pm-line);background:rgba(148,163,184,.06);
+                    color:var(--pm-text);font-size:12px;padding:0 10px 0 33px;outline:none"
+             onfocus="this.style.borderColor='var(--pm-brand-line)';this.style.boxShadow='0 0 0 3px rgba(var(--pm-brand-rgb),.14)'"
+             onblur="this.style.borderColor='';this.style.boxShadow=''">
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-section-label">Workspace</div>
+
+      <a href="/dashboard" class="nav-item <%= cp === 'dashboard' ? 'active' : '' %>">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="9" rx="1.5"></rect>
+            <rect x="14" y="3" width="7" height="5" rx="1.5"></rect>
+            <rect x="14" y="12" width="7" height="9" rx="1.5"></rect>
+            <rect x="3" y="16" width="7" height="5" rx="1.5"></rect>
+          </svg>
+        </span>
+        <span class="nav-text">Dashboard</span>
+        <span class="nav-badge" id="userRunningBadge" style="display:none">0</span>
+      </a>
+
+      <a href="/vms" class="nav-item <%= (cp === 'vms' || cp === 'vm-detail' || cp === 'vm-console' || cp === 'vm-ssh') ? 'active' : '' %>">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="4" width="20" height="7" rx="2"></rect>
+            <rect x="2" y="13" width="20" height="7" rx="2"></rect>
+            <path d="M6 7.5h.01M6 16.5h.01"></path>
+          </svg>
+        </span>
+        <span class="nav-text">My virtual machines</span>
+        <span class="nav-badge" id="userVmBadge" style="display:none">0</span>
+      </a>
+
+      <a href="/profile" class="nav-item <%= cp === 'profile' ? 'active' : '' %>">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+        </span>
+        <span class="nav-text">My profile</span>
+      </a>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-section-label">Tools</div>
+
+      <div class="nav-item" role="button" tabindex="0" onclick="if(window.PM)PM.openPalette('')">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
+          </svg>
+        </span>
+        <span class="nav-text">Command palette</span>
+        <span class="pm-kbd" style="margin-left:auto;font-size:9px">⌘K</span>
+      </div>
+
+      <div class="nav-item" role="button" tabindex="0" onclick="if(window.PM)PM.openShortcuts()">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+            <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"></path>
+          </svg>
+        </span>
+        <span class="nav-text">Shortcuts</span>
+        <span class="pm-kbd" style="margin-left:auto;font-size:9px">?</span>
+      </div>
+
+      <div class="nav-item" role="button" tabindex="0" onclick="if(window.PM)PM.openStudio()">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="13.5" cy="6.5" r="1.2"></circle>
+            <circle cx="17.5" cy="10.5" r="1.2"></circle>
+            <circle cx="8.5" cy="7.5" r="1.2"></circle>
+            <circle cx="6.5" cy="12.5" r="1.2"></circle>
+            <path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.2 0-1.1.9-2 2-2h2.5c2.5 0 4.5-2 4.5-4.5C22 5.6 17.5 2 12 2z"></path>
+          </svg>
+        </span>
+        <span class="nav-text">Appearance</span>
+      </div>
+    </div>
+
+    <% if (u.role === 'admin') { %>
+    <div class="nav-section">
+      <div class="nav-section-label">Administration</div>
+      <a href="/admin/dashboard" class="nav-item">
+        <span class="nav-icon">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 15a7 7 0 1 0 0-14 7 7 0 0 0 0 14z"></path>
+            <path d="M8.21 13.89 7 23l5-3 5 3-1.21-9.12"></path>
+          </svg>
+        </span>
+        <span class="nav-text">Admin panel</span>
+        <span class="nav-badge" style="margin-left:auto">ADMIN</span>
+      </a>
+    </div>
+    <% } %>
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="sidebar-usage" id="pmSidebarUsage">
+      <div class="sidebar-usage-head"><span>Host load</span><span>—</span></div>
+      <div class="sidebar-usage-bar"><span style="width:12%"></span></div>
+      <div class="sidebar-usage-row"><span>RAM</span><span>loading…</span></div>
+    </div>
+
+    <div class="sidebar-user" onclick="toggleDropdown('userSidebarMenu')" style="margin-top:10px;cursor:pointer">
+      <div class="user-avatar" id="userSidebarAvatar" style="position:relative">
+        <span id="userSidebarInitial"><%= user && user.username ? user.username.charAt(0).toUpperCase() : 'U' %></span>
+        <span id="userSidebarDiscordBadge" style="position:absolute;bottom:-3px;right:-3px;width:12px;height:12px;background:#5865F2;border-radius:50%;display:none;border:2px solid var(--bg-primary)"></span>
+      </div>
+      <div class="user-info">
+        <div class="user-name"><%= user && user.username ? user.username : 'Guest' %></div>
+        <div class="user-role"><%= (user && user.role === 'admin') ? 'Administrator' : 'Member' %></div>
+      </div>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--pm-text-dim);flex-shrink:0">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+    </div>
+
+    <div class="dropdown-menu" id="userSidebarMenu" style="bottom:calc(100% + 6px);top:auto;left:12px;right:12px;min-width:0">
+      <a href="/profile" class="dropdown-item">My profile</a>
+      <button class="dropdown-item" onclick="if(window.PM)PM.openStudio()">Appearance</button>
+      <div class="dropdown-divider"></div>
+      <button class="dropdown-item danger" onclick="userLogout()">Sign out</button>
+    </div>
+
+    <div class="sidebar-hint">
+      <span>Command palette</span>
+      <span><kbd>⌘</kbd> <kbd>K</kbd></span>
+    </div>
+  </div>
 </aside>
 
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
 <script>
-    // Handle user logout
-    async function userLogout() {
-        try {
-            const response = await fetch('/api/logout', { 
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            });
-            if (response.ok) {
-                window.location.href = '/';
-            } else {
-                // Force redirect even on error
-                window.location.href = '/';
-            }
-        } catch (error) {
-            console.error('[Logout Error]', error);
-            window.location.href = '/';
-        }
-    }
-    
-    // Load site name from API on page load to refresh
-    async function loadUserSiteName() {
-        try {
-            const res = await fetch('/api/settings');
-            if (!res.ok) return;
-            const settings = await res.json();
-            const siteName = settings['site_name'] || '<%= siteName %>';
-            const nameEl = document.getElementById('userSidebarName');
-            if (nameEl) {
-                nameEl.textContent = siteName;
-            }
-        } catch(e) {
-            console.error('Failed to load site name:', e);
-        }
-    }
-    
-    // Sidebar toggle functions
-    function toggleSidebar() {
-        const sidebar = document.getElementById('adminSidebar');
-        const overlay = document.getElementById('sidebarOverlay');
-        sidebar.classList.toggle('open');
-        overlay.classList.toggle('open');
-        document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
-    }
-    
-    function closeSidebar() {
-        const sidebar = document.getElementById('adminSidebar');
-        const overlay = document.getElementById('sidebarOverlay');
-        sidebar.classList.remove('open');
-        overlay.classList.remove('open');
-        document.body.style.overflow = '';
-    }
-    
-    // Load site name on page load
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', loadUserSiteName);
-    } else {
-        loadUserSiteName();
-    }
-    
-    // Auto-refresh site name every 30 seconds
-    setInterval(loadUserSiteName, 30000);
+  async function userLogout() {
+    try { await fetch('/api/logout', { method: 'POST' }); } catch (e) {}
+    window.location.href = '/';
+  }
 
-    // === LOAD DISCORD AVATAR ===
-    async function loadUserSidebarAvatar() {
-      try {
-        console.log('[DEBUG] loadUserSidebarAvatar called');
-        
-        const avatar = document.getElementById('userSidebarAvatar');
-        console.log('[DEBUG] userSidebarAvatar element:', avatar);
-        
-        if (!avatar) {
-          console.error('[DEBUG] userSidebarAvatar element not found');
-          return;
-        }
-        
-        const res = await fetch('/api/discord-account-info');
-        console.log('[DEBUG] Discord account info response:', res.ok);
-        
-        if (res.ok) {
-          const discordAccount = await res.json();
-          console.log('[DEBUG] Discord account data:', discordAccount);
-          
-          if (discordAccount && discordAccount.discord_avatar && discordAccount.discord_id) {
-            // Build Discord CDN avatar URL with hash
-            const discordAvatarUrl = `https://cdn.discordapp.com/avatars/${discordAccount.discord_id}/${discordAccount.discord_avatar}.png?size=128`;
-            console.log('[DEBUG] Discord avatar URL:', discordAvatarUrl);
-            
-            const initial = document.getElementById('userSidebarInitial');
-            const badge = document.getElementById('userSidebarDiscordBadge');
-            
-            console.log('[DEBUG] Initial element:', initial);
-            console.log('[DEBUG] Badge element:', badge);
-            
-            // Set background image
-            avatar.style.backgroundImage = `url('${discordAvatarUrl}')`;
-            avatar.style.backgroundSize = 'cover';
-            avatar.style.backgroundPosition = 'center';
-            
-            // Hide the initial text
-            if (initial) {
-              initial.style.display = 'none';
-              console.log('[DEBUG] Hidden initial text');
-            }
-            
-            // Show Discord badge
-            if (badge) {
-              badge.style.display = 'block';
-              console.log('[DEBUG] Showing Discord badge');
-            }
-            
-            console.log('[DEBUG] Discord avatar applied successfully!');
-          } else {
-            console.log('[DEBUG] No Discord avatar data:', { avatar: discordAccount?.discord_avatar, id: discordAccount?.discord_id });
-          }
-        } else {
-          console.log('[DEBUG] Discord account info fetch not ok:', res.status);
-        }
-      } catch(e) {
-        console.error('[Discord Avatar Error]', e);
-      }
-    }
+  async function loadUserSiteName() {
+    try {
+      const res = await fetch('/api/settings');
+      if (!res.ok) return;
+      const settings = await res.json();
+      const nameEl = document.getElementById('userSidebarName');
+      if (nameEl && settings['site_name']) nameEl.textContent = settings['site_name'];
+    } catch (e) {}
+  }
 
-    // Call on page load with multiple triggers
-    document.addEventListener('DOMContentLoaded', () => {
-      setTimeout(loadUserSidebarAvatar, 300);
-    });
+  async function loadUserSidebarStats() {
+    try {
+      const res = await fetch('/api/vms');
+      if (!res.ok) return;
+      const vms = await res.json();
+      const running = vms.filter(function (vm) { return vm.status === 'running'; }).length;
+      const vmBadge = document.getElementById('userVmBadge');
+      const runBadge = document.getElementById('userRunningBadge');
+      if (vmBadge) { vmBadge.textContent = vms.length; vmBadge.style.display = vms.length ? 'inline-flex' : 'none'; }
+      if (runBadge) { runBadge.textContent = running; runBadge.style.display = running ? 'inline-flex' : 'none'; }
+    } catch (e) {}
+  }
 
-    window.addEventListener('load', () => {
-      setTimeout(loadUserSidebarAvatar, 300);
-    });
+  async function loadUserSidebarAvatar() {
+    try {
+      const res = await fetch('/api/discord-account-info');
+      if (!res.ok) return;
+      const account = await res.json();
+      if (!account || !account.discord_avatar || !account.discord_id) return;
+      const avatar = document.getElementById('userSidebarAvatar');
+      const initial = document.getElementById('userSidebarInitial');
+      const badge = document.getElementById('userSidebarDiscordBadge');
+      if (!avatar) return;
+      avatar.style.backgroundImage = "url('https://cdn.discordapp.com/avatars/" + account.discord_id + '/' + account.discord_avatar + ".png?size=128')";
+      avatar.style.backgroundSize = 'cover';
+      avatar.style.backgroundPosition = 'center';
+      if (initial) initial.style.display = 'none';
+      if (badge) badge.style.display = 'block';
+    } catch (e) {}
+  }
 
-    // If page is already loaded
-    if (document.readyState === 'complete' || document.readyState === 'interactive') {
-      setTimeout(loadUserSidebarAvatar, 500);
-    }
+  document.addEventListener('DOMContentLoaded', function () {
+    loadUserSiteName();
+    loadUserSidebarStats();
+    loadUserSidebarAvatar();
+    setInterval(loadUserSidebarStats, 30000);
+  });
 </script>

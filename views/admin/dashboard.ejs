@@ -1,775 +1,74 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>(function(){try{var t=localStorage.getItem('pm.theme')||'dark';var d=document.documentElement;if(t==='light')d.classList.add('pm-theme-light');d.style.colorScheme=t==='light'?'light':'dark';}catch(e){}})();</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0a0a0f">
-  <title><%= title || 'Admin Dashboard - HKVM Panel' %></title>
+  <meta name="theme-color" content="#06070c">
+  <title><%= title || 'Admin Dashboard · ' + siteName %></title>
   <link rel="icon" href="<%= siteLogo %>" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="/css/admin.css">
+  <link rel="stylesheet" href="/css/premium.css">
   <style>
-    /* ============ SVG ICON SYSTEM ============ */
-    .icon {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 1em;
-      height: 1em;
-      vertical-align: -0.125em;
-      flex-shrink: 0;
-    }
-    .icon svg { width: 100%; height: 100%; display: block; }
-
-    /* ============ PAGE HEADER ============ */
-    .page-header-enhanced {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 16px;
-      margin-bottom: 24px;
-      padding: 0px;
-      background: none;
-      border: none;
-      border-radius: 0;
-      position: relative;
-      overflow: visible;
-    }
-    .page-header-enhanced::before {
-      content: none;
-    }
-    .page-title-enhanced {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      font-size: 24px;
-      font-weight: 700;
-      margin: 0 0 6px 0;
-      color: var(--text-primary);
-    }
-    .page-subtitle-enhanced {
-      color: var(--text-muted);
-      margin: 0;
-      font-size: 13px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .live-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 3px 10px;
-      background: rgba(16, 185, 129, 0.12);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      color: #10B981;
-      border-radius: 20px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-    .live-badge .pulse {
-      width: 6px;
-      height: 6px;
-      background: #10B981;
-      border-radius: 50%;
-      animation: pulse-live 2s ease-in-out infinite;
-    }
-    @keyframes pulse-live {
-      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
-      50% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
-    }
-
-    /* ============ ADMIN STATS ============ */
-    .stats-enhanced {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .stat-card-enhanced {
-      background: var(--bg-card);
-      border: 1px solid var(--border-card);
-      border-radius: 14px;
-      padding: 18px;
-      position: relative;
-      overflow: hidden;
-      transition: all 0.3s ease;
-    }
-    .stat-card-enhanced::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 3px;
-      background: var(--accent-color, #6366F1);
-    }
-    .stat-card-enhanced:hover {
-      transform: translateY(-3px);
-      border-color: var(--accent-color, #6366F1);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
-    }
-    .stat-card-enhanced .stat-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 14px;
-    }
-    .stat-icon-box {
-      width: 42px;
-      height: 42px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 10px;
-      font-size: 20px;
-      background: color-mix(in srgb, var(--accent-color, #6366F1) 15%, transparent);
-      color: var(--accent-color, #6366F1);
-    }
-    .stat-trend {
-      font-size: 10px;
-      font-weight: 700;
-      padding: 3px 8px;
-      border-radius: 6px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .stat-trend.up { background: rgba(16, 185, 129, 0.1); color: #10B981; }
-    .stat-trend.down { background: rgba(239, 68, 68, 0.1); color: #EF4444; }
-    .stat-trend.neutral { background: rgba(156, 163, 175, 0.1); color: #9CA3AF; }
-    .stat-value-enhanced {
-      font-size: 28px;
-      font-weight: 700;
-      color: var(--text-primary);
-      line-height: 1;
-      margin-bottom: 6px;
-    }
-    .stat-label-enhanced {
-      font-size: 12px;
-      color: var(--text-muted);
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    /* ============ QUICK ACTIONS ============ */
-    .quick-actions-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .quick-action-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border-card);
-      border-radius: 14px;
-      padding: 16px 20px;
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      text-decoration: none;
-      color: var(--text-primary);
-      transition: all 0.3s ease;
-      cursor: pointer;
-    }
-    .quick-action-card:hover {
-      transform: translateY(-2px);
-      border-color: var(--accent-color, #6366F1);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-    }
-    .quick-action-icon {
-      width: 44px;
-      height: 44px;
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 20px;
-      flex-shrink: 0;
-    }
-    .quick-action-icon.primary { background: rgba(99, 102, 241, 0.15); color: #6366F1; }
-    .quick-action-icon.success { background: rgba(16, 185, 129, 0.15); color: #10B981; }
-    .quick-action-icon.warning { background: rgba(245, 158, 11, 0.15); color: #F59E0B; }
-    .quick-action-icon.danger { background: rgba(239, 68, 68, 0.15); color: #EF4444; }
-    .quick-action-icon.info { background: rgba(6, 182, 212, 0.15); color: #06B6D4; }
-    .quick-action-text { flex: 1; }
-    .quick-action-text h4 { margin: 0 0 2px 0; font-size: 14px; font-weight: 600; }
-    .quick-action-text p { margin: 0; font-size: 11px; color: var(--text-muted); }
-    .quick-action-arrow { color: var(--text-muted); font-size: 16px; }
-
-    /* ============ RECENT ACTIVITY & SYSTEM STATUS ============ */
-    .admin-grid {
-      display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 18px;
-      margin-bottom: 24px;
-    }
-    .admin-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border-card);
-      border-radius: 14px;
-      padding: 18px;
-      transition: all 0.3s ease;
-    }
-    .admin-card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 14px;
-    }
-    .admin-card-header h3 {
-      margin: 0;
-      font-size: 15px;
-      font-weight: 700;
-      color: var(--text-primary);
-    }
-    .admin-card-header .badge-count {
-      background: rgba(99, 102, 241, 0.15);
-      color: #6366F1;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-size: 11px;
-      font-weight: 600;
-    }
-
-    /* ============ ACTIVITY LIST ============ */
-    .activity-list {
-      max-height: 320px;
-      overflow-y: auto;
-    }
-    .activity-list::-webkit-scrollbar { width: 4px; }
-    .activity-list::-webkit-scrollbar-track { background: var(--bg-subtle); border-radius: 4px; }
-    .activity-list::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
-    .activity-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-    .activity-item:last-child { border-bottom: none; }
-    .activity-icon {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      flex-shrink: 0;
-    }
-    .activity-icon.start { background: rgba(16, 185, 129, 0.12); color: #10B981; }
-    .activity-icon.stop { background: rgba(239, 68, 68, 0.12); color: #EF4444; }
-    .activity-icon.create { background: rgba(99, 102, 241, 0.12); color: #6366F1; }
-    .activity-icon.delete { background: rgba(239, 68, 68, 0.12); color: #EF4444; }
-    .activity-icon.edit { background: rgba(245, 158, 11, 0.12); color: #F59E0B; }
-    .activity-icon.login { background: rgba(6, 182, 212, 0.12); color: #06B6D4; }
-    .activity-content {
-      flex: 1;
-      min-width: 0;
-    }
-    .activity-content .title {
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text-primary);
-      margin-bottom: 2px;
-    }
-    .activity-content .desc {
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-    .activity-time {
-      font-size: 10px;
-      color: var(--text-muted);
-      white-space: nowrap;
-    }
-
-    /* ============ SYSTEM STATUS ============ */
-    .status-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 8px 0;
-      border-bottom: 1px solid var(--border-subtle);
-    }
-    .status-item:last-child { border-bottom: none; }
-    .status-label {
-      font-size: 12px;
-      color: var(--text-secondary);
-    }
-    .status-value {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-primary);
-    }
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      display: inline-block;
-      margin-right: 6px;
-    }
-    .status-dot.green { background: #10B981; }
-    .status-dot.yellow { background: #F59E0B; }
-    .status-dot.red { background: #EF4444; }
-
-    /* ============ VM GRID (for admin) ============ */
-    .section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 14px;
-    }
-    .section-header h3 {
-      margin: 0;
-      font-size: 16px;
-      font-weight: 700;
-      color: var(--text-primary);
-    }
-    .vm-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-      gap: 18px;
-    }
-    .vm-card-enhanced {
-      background: var(--bg-card);
-      border: 1px solid var(--border-card);
-      border-radius: 14px;
-      padding: 18px;
-      transition: all 0.3s ease;
-      position: relative;
-      overflow: hidden;
-    }
-    .vm-card-enhanced::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 3px;
-      transition: all 0.3s;
-    }
-    .vm-card-enhanced.running::before { background: linear-gradient(90deg, #10B981, #06B6D4); }
-    .vm-card-enhanced.stopped::before { background: linear-gradient(90deg, #6B7280, #4B5563); }
-    .vm-card-enhanced.paused::before { background: linear-gradient(90deg, #F59E0B, #F97316); }
-    .vm-card-enhanced:hover {
-      transform: translateY(-4px);
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
-      border-color: rgba(99, 102, 241, 0.4);
-    }
-
-    .vm-card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
-      margin-bottom: 14px;
-    }
-    .vm-title-block {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-width: 0;
-      flex: 1;
-    }
+    .kpi-card { padding: 18px; }
+    .kpi-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .kpi-label { font-size: 11.5px; color: var(--pm-text-dim); display: flex; align-items: center; gap: 7px; font-weight: 500; }
+    .kpi-value { font-size: 30px; font-weight: 700; letter-spacing: -0.04em; line-height: 1.05; margin-top: 10px; font-variant-numeric: tabular-nums; }
+    .kpi-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 11px; color: var(--pm-text-dim); }
+    .kpi-icon { width: 34px; height: 34px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .resource-ring-row { display: flex; align-items: center; gap: 18px; padding: 4px 0 8px; }
+    .resource-cell { display: flex; align-items: center; gap: 12px; flex: 1; }
+    .resource-cell .label { font-size: 11.5px; color: var(--pm-text-dim); }
+    .resource-cell .value { font-size: 14px; font-weight: 650; }
+    .host-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+    .host-meta div { font-size: 11px; color: var(--pm-text-dim); }
+    .host-meta strong { display: block; color: var(--pm-text); font-size: 12.5px; font-weight: 600; margin-top: 2px; }
+    .vm-toolbar-input { max-width: 300px; }
+    .vm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+    .vm-card-enhanced { padding: 16px; border-radius: 15px; display: flex; flex-direction: column; gap: 13px; }
+    .vm-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .vm-title-block { display: flex; gap: 11px; min-width: 0; flex: 1; }
     .vm-os-icon {
-      width: 42px;
-      height: 42px;
-      border-radius: 10px;
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.08));
-      border: 1px solid rgba(99, 102, 241, 0.2);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      overflow: hidden;
-      padding: 6px;
-    }
-    .vm-os-icon img {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-    }
-    .vm-name-enhanced {
-      font-size: 15px;
-      font-weight: 700;
-      color: var(--text-primary);
-      margin: 0 0 3px 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .vm-meta-enhanced {
-      font-size: 11px;
-      color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .vm-owner-tag {
-      background: rgba(99, 102, 241, 0.1);
-      color: #6366F1;
-      padding: 1px 7px;
-      border-radius: 6px;
-      font-size: 10px;
-      font-weight: 600;
-    }
-
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.4px;
-      white-space: nowrap;
-    }
-    .status-badge.running {
-      background: rgba(16, 185, 129, 0.12);
-      color: #10B981;
-      border: 1px solid rgba(16, 185, 129, 0.3);
-    }
-    .status-badge.stopped {
-      background: rgba(107, 114, 128, 0.12);
-      color: #9CA3AF;
-      border: 1px solid rgba(107, 114, 128, 0.3);
-    }
-    .status-badge.paused {
-      background: rgba(245, 158, 11, 0.12);
-      color: #F59E0B;
-      border: 1px solid rgba(245, 158, 11, 0.3);
-    }
-    .status-badge .status-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-    }
-    .status-badge.running .status-dot {
-      animation: pulse-live 2s ease-in-out infinite;
-    }
-
-    .vm-specs {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      padding: 12px;
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid var(--border-subtle);
-      border-radius: 10px;
-      margin-bottom: 12px;
-    }
-    .spec-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-    }
-    .spec-icon {
-      width: 26px;
-      height: 26px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 6px;
-      font-size: 13px;
-      flex-shrink: 0;
-    }
-    .spec-icon.mem { background: rgba(16, 185, 129, 0.12); color: #10B981; }
-    .spec-icon.cpu { background: rgba(236, 72, 153, 0.12); color: #EC4899; }
-    .spec-icon.disk { background: rgba(6, 182, 212, 0.12); color: #06B6D4; }
-    .spec-icon.net { background: rgba(59, 130, 246, 0.12); color: #3B82F6; }
-    .spec-content {
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-      flex: 1;
-    }
-    .spec-label {
-      font-size: 9px;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      line-height: 1;
-      margin-bottom: 2px;
-    }
-    .spec-value {
-      font-size: 12px;
-      color: var(--text-primary);
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .vm-actions-enhanced {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 8px;
-    }
-    .btn-action {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      padding: 8px 10px;
-      border-radius: 8px;
-      font-size: 12px;
-      font-weight: 600;
-      border: 1px solid var(--border-color);
-      background: transparent;
-      color: var(--text-secondary);
-      text-decoration: none;
-      cursor: pointer;
-      transition: all 0.2s ease;
-    }
-    .btn-action:hover {
-      transform: translateY(-1px);
-      border-color: var(--accent-primary);
-      color: var(--accent-primary);
-    }
-    .btn-action.start {
-      background: linear-gradient(135deg, #10B981, #059669);
-      border-color: transparent;
-      color: white;
-    }
-    .btn-action.start:hover {
-      box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
-      color: white;
-    }
-    .btn-action.stop {
-      background: linear-gradient(135deg, #EF4444, #DC2626);
-      border-color: transparent;
-      color: white;
-    }
-    .btn-action.stop:hover {
-      box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
-      color: white;
-    }
-    .btn-action.primary {
-      background: linear-gradient(135deg, #6366F1, #8B5CF6);
-      border-color: transparent;
-      color: white;
-    }
-    .btn-action.primary:hover {
-      box-shadow: 0 6px 16px rgba(99, 102, 241, 0.4);
-      color: white;
-    }
-
-    .btn-refresh {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 16px;
-      background: rgba(99, 102, 241, 0.1);
-      border: 1px solid rgba(99, 102, 241, 0.3);
-      border-radius: 10px;
-      color: #6366F1;
-      font-weight: 600;
-      font-size: 13px;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .btn-refresh:hover {
-      background: rgba(99, 102, 241, 0.18);
-      transform: translateY(-1px);
-    }
-    .btn-refresh.spinning svg { animation: spin 0.8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    .empty-enhanced {
-      background: var(--bg-card);
-      border: 1px dashed var(--border-color);
-      border-radius: 16px;
-      padding: 60px 24px;
-      text-align: center;
-    }
-    .empty-icon-wrap {
-      width: 80px;
-      height: 80px;
-      margin: 0 auto 20px;
-      background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(139, 92, 246, 0.05));
-      border-radius: 20px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #6366F1;
-      font-size: 36px;
-    }
-    .empty-title { font-size: 18px; font-weight: 700; color: var(--text-primary); margin-bottom: 8px; }
-    .empty-desc { color: var(--text-muted); font-size: 13px; max-width: 400px; margin: 0 auto 20px; }
-
-    .skeleton-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border-card);
-      border-radius: 14px;
-      padding: 18px;
-      height: 280px;
-      position: relative;
-      overflow: hidden;
-    }
-    .skeleton-card::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.04), transparent);
-      animation: shimmer 1.5s infinite;
-    }
-    @keyframes shimmer { to { transform: translateX(100%); } }
-
-    /* ============ TOASTS ============ */
-    .toast-container {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      z-index: 3000;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      max-width: 380px;
-    }
-    .toast {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px 16px;
-      background: var(--bg-card);
-      border: 1px solid var(--border-card);
-      border-left: 3px solid #6366F1;
-      border-radius: 10px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-      animation: slideInToast 0.3s ease-out;
-      min-width: 300px;
-    }
-    .toast.removing { animation: slideOutToast 0.3s ease-out forwards; }
-    .toast-success { border-left-color: #10B981; }
-    .toast-error { border-left-color: #EF4444; }
-    .toast-warning { border-left-color: #F59E0B; }
-    .toast-info { border-left-color: #6366F1; }
-    .toast-icon {
-      width: 24px;
-      height: 24px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-    .toast-success .toast-icon { color: #10B981; }
-    .toast-error .toast-icon { color: #EF4444; }
-    .toast-warning .toast-icon { color: #F59E0B; }
-    .toast-info .toast-icon { color: #6366F1; }
-    .toast-message { flex: 1; color: var(--text-primary); font-size: 13px; font-weight: 500; }
-    .toast-close {
-      background: transparent; border: none; color: var(--text-muted);
-      cursor: pointer; font-size: 18px; padding: 0; width: 20px; height: 20px;
+      width: 38px; height: 38px; border-radius: 10px; overflow: hidden; flex-shrink: 0;
+      background: rgba(148,163,184,.1); border: 1px solid var(--pm-line);
       display: flex; align-items: center; justify-content: center;
     }
-    .toast-close:hover { color: var(--text-primary); }
-
-    @keyframes slideInToast {
-      from { transform: translateX(120%); opacity: 0; }
-      to { transform: translateX(0); opacity: 1; }
+    .vm-os-icon img { width: 100%; height: 100%; object-fit: cover; }
+    .vm-name-enhanced { font-size: 14px; font-weight: 650; color: var(--pm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .vm-meta-enhanced { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 11px; color: var(--pm-text-dim); margin-top: 2px; }
+    .vm-id-chip { font-family: ui-monospace, monospace; font-size: 10px; padding: 1px 5px; border-radius: 5px; background: rgba(148,163,184,.12); }
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 99px;
+      font-size: 10px; font-weight: 650; text-transform: capitalize; flex-shrink: 0;
+      border: 1px solid var(--pm-line);
     }
-    @keyframes slideOutToast {
-      to { transform: translateX(120%); opacity: 0; }
-    }
-    @keyframes slideInModal {
-      from { transform: scale(0.9) translateY(-20px); opacity: 0; }
-      to { transform: scale(1) translateY(0); opacity: 1; }
-    }
-
-    /* ============ RESPONSIVE ============ */
-    @media (max-width: 992px) {
-      .admin-grid {
-        grid-template-columns: 1fr;
-      }
-    }
-    @media (max-width: 768px) {
-      .vm-actions-enhanced { grid-template-columns: 1fr; }
-      .vm-specs { grid-template-columns: 1fr; }
-      .page-header-enhanced { padding: 0px; }
-      .page-title-enhanced { font-size: 20px; }
-      .quick-actions-grid { grid-template-columns: 1fr 1fr; }
-    }
-    @media (max-width: 480px) {
-      .quick-actions-grid { grid-template-columns: 1fr; }
-      .stats-enhanced { grid-template-columns: 1fr 1fr; }
-    }
+    .status-badge .status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+    .status-badge.running { color: #34d399; background: rgba(52,211,153,.12); border-color: rgba(52,211,153,.3); }
+    .status-badge.stopped { color: var(--pm-text-soft); background: rgba(148,163,184,.1); }
+    .status-badge.error { color: #fb7185; background: rgba(251,113,133,.12); border-color: rgba(251,113,133,.3); }
+    .vm-specs { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    .spec-item { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .spec-icon { width: 26px; height: 26px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .spec-icon.mem { background: rgba(52,211,153,.12); color: #34d399; }
+    .spec-icon.cpu { background: rgba(236,72,153,.12); color: #f472b6; }
+    .spec-icon.disk { background: rgba(34,211,238,.12); color: #22d3ee; }
+    .spec-icon.net { background: rgba(96,165,250,.12); color: #60a5fa; }
+    .spec-content { min-width: 0; }
+    .spec-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--pm-text-dim); line-height: 1.2; }
+    .spec-value { font-size: 11.5px; font-weight: 600; color: var(--pm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .vm-actions-enhanced { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 7px; margin-top: auto; }
+    .btn-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 7px 8px; font-size: 11.5px; }
+    .empty-enhanced { grid-column: 1 / -1; padding: 46px 20px; border-radius: 16px; text-align: center; border: 1px dashed var(--pm-line-strong); background: var(--pm-surface); }
+    .empty-icon-wrap { width: 50px; height: 50px; margin: 0 auto 12px; border-radius: 14px; display: flex; align-items: center; justify-content: center; color: var(--pm-brand-2); background: var(--pm-brand-gradient-soft); border: 1px solid var(--pm-brand-line); }
+    .empty-title { font-size: 14px; font-weight: 650; }
+    .empty-desc { font-size: 12px; color: var(--pm-text-dim); margin: 5px 0 14px; }
+    .skeleton-card { height: 210px; border-radius: 15px; }
   </style>
 </head>
 <body>
-
-<!-- SVG ICON DEFINITIONS -->
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <defs>
-    <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/>
-      <line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/>
-    </symbol>
-    <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-    </symbol>
-    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></symbol>
-    <symbol id="i-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
-    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
-    </symbol>
-    <symbol id="i-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
-    </symbol>
-    <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>
-      <line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/>
-      <line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/>
-      <line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/>
-      <line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>
-    </symbol>
-    <symbol id="i-mem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>
-    </symbol>
-    <symbol id="i-disk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
-    </symbol>
-    <symbol id="i-network" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-    </symbol>
-    <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-    </symbol>
-    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="20 6 9 17 4 12"/>
-    </symbol>
-    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-    </symbol>
-    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-      <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-    </symbol>
-    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-    </symbol>
-    <symbol id="i-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>
-    </symbol>
-    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
-      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-    </symbol>
-    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-    </symbol>
-    <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
-    </symbol>
-  </defs>
-</svg>
 
 <div class="admin-wrapper">
   <%- include('../partials/admin/sidebar') %>
@@ -779,166 +78,228 @@
 
     <div class="admin-content">
 
-      <!-- Enhanced Header -->
-      <div class="page-header-enhanced">
-        <div style="position: relative; z-index: 1;">
-          <h1 class="page-title-enhanced">
-            Admin Dashboard
-          </h1>
-          <p class="page-subtitle-enhanced">
-            Welcome back, <strong style="color: var(--accent-primary);"><%= user.username %></strong>
-            <span class="live-badge"><span class="pulse"></span>Live · Auto-refresh 30s</span>
-            <span id="lastUpdate" style="opacity: 0.7;"></span>
-          </p>
+      <!-- ================= HERO ================= -->
+      <section class="pm-hero">
+        <div class="pm-hero-inner">
+          <div style="max-width:640px">
+            <div class="pm-hero-eyebrow">
+              <span style="width:6px;height:6px;border-radius:50%;background:var(--pm-brand-2);box-shadow:0 0 10px var(--pm-brand-2)"></span>
+              Control plane
+            </div>
+            <h1 class="pm-hero-title" id="heroGreeting">Welcome back, <span><%= user.username %></span></h1>
+            <p class="pm-hero-sub">
+              Your fleet at a glance — live health, activity and every machine under one roof.
+            </p>
+            <div class="pm-toolbar" style="margin-top:16px">
+              <span class="pm-chip brand"><span class="dot"></span><span id="heroRunning">Loading fleet…</span></span>
+              <span class="pm-chip" id="heroUptime">Host —</span>
+              <span class="pm-chip" id="heroSync">Sync —</span>
+            </div>
+          </div>
+          <div class="pm-hero-actions">
+            <a href="/admin/vm-create" class="btn btn-primary btn-lg">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              New virtual machine
+            </a>
+            <button class="btn btn-ghost btn-lg" onclick="if(window.PM)PM.openPalette('')">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              Search
+              <span class="pm-kbd" style="margin-left:2px">⌘K</span>
+            </button>
+            <button class="btn btn-outline btn-lg" id="refreshBtn" onclick="loadAdminData()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+              Refresh
+            </button>
+          </div>
         </div>
-        <div style="position: relative; z-index: 1; display: flex; gap: 10px;">
-          <a href="/admin/vm-create" class="btn-refresh" style="background: white; color: #333; border-color: transparent;">
-            <svg class="icon"><use href="#i-plus"/></svg>
-            New VM
-          </a>
-          <button class="btn-refresh" id="refreshBtn" onclick="loadAdminData()">
-            <svg class="icon"><use href="#i-refresh"/></svg>
-            Refresh
-          </button>
+      </section>
+
+      <!-- ================= KPIs ================= -->
+      <div class="pm-grid cols-4" style="margin-bottom:16px">
+        <div class="pm-card kpi-card">
+          <div class="kpi-top">
+            <div>
+              <div class="kpi-label">Total machines</div>
+              <div class="kpi-value" id="totalVMs">—</div>
+            </div>
+            <span class="kpi-icon" style="background:rgba(129,140,248,.14);color:#818cf8;border:1px solid rgba(129,140,248,.25)">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="7" rx="2"></rect><rect x="2" y="13" width="20" height="7" rx="2"></rect><path d="M6 7.5h.01M6 16.5h.01"></path>
+              </svg>
+            </span>
+          </div>
+          <div class="pm-spark" id="sparkTotal"></div>
+          <div class="kpi-foot"><span>Registered in panel</span><span class="pm-chip" style="font-size:10px;padding:2px 7px">all time</span></div>
+        </div>
+
+        <div class="pm-card kpi-card">
+          <div class="kpi-top">
+            <div>
+              <div class="kpi-label">Running now</div>
+              <div class="kpi-value" id="runningVMs" style="color:#34d399">—</div>
+            </div>
+            <span class="kpi-icon" style="background:rgba(52,211,153,.14);color:#34d399;border:1px solid rgba(52,211,153,.25)">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 20 12 7 20 7 4"/></svg>
+            </span>
+          </div>
+          <div class="pm-spark" id="sparkRunning"></div>
+          <div class="kpi-foot"><span id="runningRatio">—</span><span class="pm-chip" style="font-size:10px;padding:2px 7px">live</span></div>
+        </div>
+
+        <div class="pm-card kpi-card">
+          <div class="kpi-top">
+            <div>
+              <div class="kpi-label">Stopped</div>
+              <div class="kpi-value" id="stoppedVMs">—</div>
+            </div>
+            <span class="kpi-icon" style="background:rgba(148,163,184,.12);color:var(--pm-text-soft);border:1px solid var(--pm-line)">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </span>
+          </div>
+          <div class="pm-spark" id="sparkStopped"></div>
+          <div class="kpi-foot"><span>Ready to boot</span><span class="pm-chip" style="font-size:10px;padding:2px 7px">idle</span></div>
+        </div>
+
+        <div class="pm-card kpi-card">
+          <div class="kpi-top">
+            <div>
+              <div class="kpi-label">Team members</div>
+              <div class="kpi-value" id="totalUsers">—</div>
+            </div>
+            <span class="kpi-icon" style="background:rgba(168,85,247,.14);color:#c084fc;border:1px solid rgba(168,85,247,.25)">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+            </span>
+          </div>
+          <div class="pm-spark" id="sparkUsers"></div>
+          <div class="kpi-foot"><span>Panel accounts</span><a href="/admin/users" class="pm-chip" style="font-size:10px;padding:2px 7px">Manage</a></div>
         </div>
       </div>
 
-      <!-- Stats -->
-      <div class="stats-enhanced">
-        <div class="stat-card-enhanced" style="--accent-color: var(--color-indigo);">
-          <div class="stat-header">
-            <div class="stat-icon-box"><svg class="icon"><use href="#i-server"/></svg></div>
-            <span class="stat-trend neutral">Total</span>
+      <!-- ================= HOST + ACTIVITY ================= -->
+      <div class="pm-grid split" style="margin-bottom:16px">
+        <div class="pm-card">
+          <div class="pm-card-head">
+            <h3 class="pm-card-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+              Host resources
+            </h3>
+            <span class="pm-chip" id="hostChip">QEMU/KVM</span>
           </div>
-          <div class="stat-value-enhanced" id="totalVMs">—</div>
-          <div class="stat-label-enhanced">Total Virtual Machines</div>
+          <div class="pm-card-body">
+            <div class="resource-ring-row">
+              <div class="resource-cell">
+                <div class="pm-ring" id="ringCpu"><div class="pm-ring-label">0%</div></div>
+                <div>
+                  <div class="label">CPU load</div>
+                  <div class="value" id="cpuValue">—</div>
+                  <div class="pm-muted" style="font-size:10.5px" id="cpuCores">— cores</div>
+                </div>
+              </div>
+              <div class="resource-cell">
+                <div class="pm-ring" id="ringMem"><div class="pm-ring-label">0%</div></div>
+                <div>
+                  <div class="label">Memory</div>
+                  <div class="value" id="memValue">—</div>
+                  <div class="pm-muted" style="font-size:10.5px" id="memTotal">—</div>
+                </div>
+              </div>
+            </div>
+
+            <div style="margin-top:10px">
+              <div class="pm-spread" style="font-size:11.5px;color:var(--pm-text-dim);margin-bottom:6px">
+                <span>Disk · VM storage</span><span id="diskValue">—</span>
+              </div>
+              <div class="pm-bar" id="diskBar"><i style="width:0%"></i></div>
+            </div>
+
+            <div class="host-meta">
+              <div>Operating system<strong id="hostOs">—</strong></div>
+              <div>Hostname<strong id="hostName">—</strong></div>
+              <div>Uptime<strong id="hostUptime">—</strong></div>
+              <div>Node runtime<strong id="hostNode">—</strong></div>
+            </div>
+          </div>
         </div>
-        <div class="stat-card-enhanced" style="--accent-color: var(--color-emerald);">
-          <div class="stat-header">
-            <div class="stat-icon-box"><svg class="icon"><use href="#i-play"/></svg></div>
-            <span class="stat-trend up">Active</span>
+
+        <div class="pm-card">
+          <div class="pm-card-head">
+            <h3 class="pm-card-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+              Recent activity
+            </h3>
+            <span class="badge-count" id="activityCount">0</span>
           </div>
-          <div class="stat-value-enhanced" id="runningVMs">—</div>
-          <div class="stat-label-enhanced">Running</div>
-        </div>
-        <div class="stat-card-enhanced" style="--accent-color: var(--color-red);">
-          <div class="stat-header">
-            <div class="stat-icon-box"><svg class="icon"><use href="#i-stop"/></svg></div>
-            <span class="stat-trend down">Idle</span>
+          <div class="pm-activity-feed" id="activityList" style="max-height:344px;overflow-y:auto">
+            <div style="padding:26px;text-align:center;color:var(--pm-text-dim);font-size:12px">Loading activity…</div>
           </div>
-          <div class="stat-value-enhanced" id="stoppedVMs">—</div>
-          <div class="stat-label-enhanced">Stopped</div>
-        </div>
-        <div class="stat-card-enhanced" style="--accent-color: var(--color-violet);">
-          <div class="stat-header">
-            <div class="stat-icon-box"><svg class="icon"><use href="#i-users"/></svg></div>
-            <span class="stat-trend neutral">Users</span>
+          <div class="pm-card-foot pm-spread">
+            <span>Auto-refresh every 30s</span>
+            <a href="/admin/vms" class="pm-chip" style="font-size:10.5px">All machines →</a>
           </div>
-          <div class="stat-value-enhanced" id="totalUsers">—</div>
-          <div class="stat-label-enhanced">Registered Users</div>
         </div>
       </div>
 
-      <!-- Quick Actions -->
-      <div class="quick-actions-grid">
+      <!-- ================= QUICK ACTIONS ================= -->
+      <div class="pm-quick-actions" style="margin-bottom:20px">
         <a href="/admin/vm-create" class="quick-action-card">
-          <div class="quick-action-icon primary"><svg class="icon"><use href="#i-plus"/></svg></div>
-          <div class="quick-action-text">
-            <h4>Create VM</h4>
-            <p>Provision new virtual machine</p>
-          </div>
+          <span class="quick-action-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
+          <span class="quick-action-text"><h4>Create VM</h4><p>Deploy from a template</p></span>
           <span class="quick-action-arrow">→</span>
         </a>
         <a href="/admin/users" class="quick-action-card">
-          <div class="quick-action-icon info"><svg class="icon"><use href="#i-users"/></svg></div>
-          <div class="quick-action-text">
-            <h4>Manage Users</h4>
-            <p>Add or modify users</p>
-          </div>
+          <span class="quick-action-icon info"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span>
+          <span class="quick-action-text"><h4>Users &amp; access</h4><p>Invite and manage members</p></span>
           <span class="quick-action-arrow">→</span>
         </a>
         <a href="/admin/templates" class="quick-action-card">
-          <div class="quick-action-icon warning"><svg class="icon"><use href="#i-disk"/></svg></div>
-          <div class="quick-action-text">
-            <h4>OS Templates</h4>
-            <p>Manage VM templates</p>
-          </div>
+          <span class="quick-action-icon warning"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/></svg></span>
+          <span class="quick-action-text"><h4>OS templates</h4><p>Images, ISOs and caching</p></span>
           <span class="quick-action-arrow">→</span>
         </a>
         <a href="/admin/settings" class="quick-action-card">
-          <div class="quick-action-icon success"><svg class="icon"><use href="#i-settings"/></svg></div>
-          <div class="quick-action-text">
-            <h4>Settings</h4>
-            <p>Panel configuration</p>
-          </div>
+          <span class="quick-action-icon success"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6h.09A1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+          <span class="quick-action-text"><h4>Panel settings</h4><p>Branding &amp; Discord login</p></span>
           <span class="quick-action-arrow">→</span>
         </a>
       </div>
 
-      <!-- Admin Grid: Recent Activity & System Status -->
-      <div class="admin-grid">
-        <!-- Recent Activity -->
-        <div class="admin-card">
-          <div class="admin-card-header">
-            <h3>Recent Activity</h3>
-            <span class="badge-count" id="activityCount">0</span>
+      <!-- ================= MACHINES ================= -->
+      <div class="pm-card">
+        <div class="pm-card-head" style="flex-wrap:wrap">
+          <div class="pm-row">
+            <h3 class="pm-card-title">Virtual machines</h3>
+            <span class="badge-count" id="vmCount">0</span>
           </div>
-          <div class="activity-list" id="activityList">
-            <div style="text-align: center; color: var(--text-muted); padding: 30px 0; font-size: 13px;">
-              Loading activity...
+          <div class="pm-toolbar">
+            <div class="search-input-wrapper vm-toolbar-input">
+              <svg class="search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <input type="text" class="search-input" id="vmSearch" placeholder="Filter machines…" style="height:34px;font-size:12px" oninput="renderMachines()">
             </div>
-          </div>
-        </div>
-
-        <!-- System Status -->
-        <div class="admin-card">
-          <div class="admin-card-header">
-            <h3>System Status</h3>
-            <span class="badge-count" style="background: var(--color-emerald-light); color: var(--color-emerald);">Online</span>
-          </div>
-          <div id="systemStatus">
-            <div class="status-item">
-              <span class="status-label">QEMU/KVM</span>
-              <span class="status-value"><span class="status-dot green"></span>Running</span>
+            <div class="pm-segmented" id="vmFilter">
+              <button class="active" data-filter="">All</button>
+              <button data-filter="running">Running</button>
+              <button data-filter="stopped">Stopped</button>
             </div>
-            <div class="status-item">
-              <span class="status-label">Database</span>
-              <span class="status-value"><span class="status-dot green"></span>Connected</span>
-            </div>
-            <div class="status-item">
-              <span class="status-label">Node</span>
-              <span class="status-value"><span class="status-dot green"></span>localhost</span>
-            </div>
-            <div class="status-item">
-              <span class="status-label">Total VMs</span>
-              <span class="status-value" id="statusTotalVMs">—</span>
-            </div>
-            <div class="status-item">
-              <span class="status-label">CPU Usage</span>
-              <span class="status-value" id="statusCpu">—</span>
-            </div>
-            <div class="status-item">
-              <span class="status-label">Memory Usage</span>
-              <span class="status-value" id="statusMemory">—</span>
-            </div>
-            <div class="status-item">
-              <span class="status-label">Panel Version</span>
-              <span class="status-value"><%= panelVersion || 'V1.0' %></span>
-            </div>
+            <button class="btn btn-ghost btn-sm" onclick="loadAdminData()" title="Refresh machines">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
+            </button>
           </div>
         </div>
-      </div>
-
-      <!-- All VMs Section -->
-      <div class="section-header">
-        <h3>All Virtual Machines</h3>
-        <span class="badge-count" id="vmCount">0</span>
-      </div>
-      <div id="allVMContainer">
-        <div class="vm-grid">
-          <div class="skeleton-card"></div>
-          <div class="skeleton-card"></div>
-          <div class="skeleton-card"></div>
+        <div class="pm-card-body">
+          <div class="vm-grid" id="allVMContainer">
+            <div class="skeleton skeleton-card"></div>
+            <div class="skeleton skeleton-card"></div>
+            <div class="skeleton skeleton-card"></div>
+          </div>
         </div>
       </div>
 
@@ -949,348 +310,311 @@
 </div>
 
 <script>
-function formatMem(mem) {
-  if (!mem) return '—';
-  return mem >= 1024 ? (mem / 1024).toFixed(1) + ' GB' : mem + ' MB';
-}
+  let allVMs = [];
+  let currentFilter = '';
 
-function formatTime() {
-  const d = new Date();
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function escHtml(str) {
-  if (!str) return '';
-  return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-// ============ TOAST SYSTEM ============
-function showToast(msg, type = 'info') {
-  const container = document.getElementById('toastContainer') || createToastContainer();
-  const iconMap = { success: 'i-check', error: 'i-x', warning: 'i-alert', info: 'i-info' };
-  
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-  toast.innerHTML = `
-    <span class="toast-icon"><svg class="icon" style="width:18px;height:18px"><use href="#${iconMap[type] || 'i-info'}"/></svg></span>
-    <span class="toast-message">${escHtml(msg)}</span>
-    <button class="toast-close" onclick="this.parentElement.remove()">×</button>
-  `;
-  container.appendChild(toast);
-  
-  setTimeout(() => {
-    toast.classList.add('removing');
-    setTimeout(() => toast.remove(), 300);
-  }, 4000);
-}
-
-function createToastContainer() {
-  const container = document.createElement('div');
-  container.id = 'toastContainer';
-  container.className = 'toast-container';
-  document.body.appendChild(container);
-  return container;
-}
-
-// ============ CONFIRMATION MODAL ============
-function confirmAction(msg, title) {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:2000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(8px);';
-    
-    const modal = document.createElement('div');
-    modal.style.cssText = 'background:var(--bg-card);border:1px solid var(--border-card);border-radius:14px;width:100%;max-width:450px;box-shadow:0 20px 60px rgba(0,0,0,0.6);animation:slideInModal 0.3s ease-out;overflow:hidden;';
-    
-    modal.innerHTML = `
-      <div style="padding:20px 22px 14px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;gap:12px;">
-        <div style="width:38px;height:38px;background:rgba(245,158,11,0.15);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#F59E0B;">
-          <svg class="icon" style="width:20px;height:20px;"><use href="#i-alert"/></svg>
-        </div>
-        <h2 style="margin:0;color:var(--text-primary);font-size:16px;font-weight:700;">${escHtml(title)}</h2>
-      </div>
-      <div style="padding:20px 22px;">
-        <p style="margin:0;color:var(--text-secondary);font-size:14px;line-height:1.5;">${escHtml(msg)}</p>
-      </div>
-      <div style="padding:14px 22px 18px;border-top:1px solid var(--border-subtle);display:flex;gap:10px;justify-content:flex-end;">
-        <button id="cancelBtn" style="padding:9px 18px;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px;background:transparent;color:var(--text-secondary);border:1px solid var(--border-color);">Cancel</button>
-        <button id="confirmBtn" style="padding:9px 18px;border-radius:8px;cursor:pointer;border:none;font-weight:600;font-size:13px;background:linear-gradient(135deg, var(--color-amber), var(--color-orange));color:var(--text-primary);box-shadow:0 4px 12px var(--color-amber-light);">Confirm</button>
-      </div>
-    `;
-    
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    
-    const cleanup = () => overlay.remove();
-    modal.querySelector('#confirmBtn').onclick = () => { cleanup(); resolve(true); };
-    modal.querySelector('#cancelBtn').onclick = () => { cleanup(); resolve(false); };
-    overlay.onclick = (e) => { if (e.target === overlay) { cleanup(); resolve(false); } };
-    document.addEventListener('keydown', function esc(e) {
-      if (e.key === 'Escape') { cleanup(); resolve(false); document.removeEventListener('keydown', esc); }
-    });
-  });
-}
-
-// ============ VM ACTIONS ============
-async function vmAction(action, vmId, vmName) {
-  const confirmed = await confirmAction(
-    `Are you sure you want to ${action} VM "${vmName}"?`,
-    action.charAt(0).toUpperCase() + action.slice(1) + ' Virtual Machine'
-  );
-  if (!confirmed) return;
-  
-  try {
-    showToast(`${action.charAt(0).toUpperCase() + action.slice(1)}ing VM...`, 'info');
-    const res = await fetch(`/api/vms/${vmId}/${action}`, { method: 'POST' });
-    const data = await res.json();
-    if (res.ok && data.success) {
-      showToast(`VM ${action}ed successfully`, 'success');
-      setTimeout(loadAdminData, 1200);
-    } else {
-      showToast(`Failed: ${data.error || 'Unknown error'}`, 'error');
-    }
-  } catch(e) {
-    showToast('Error: ' + e.message, 'error');
+  function escHtml(str) {
+    if (str == null) return '';
+    return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
-}
 
-// ============ ANIMATE NUMBER ============
-function animateNumber(id, target) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  const current = parseInt(el.textContent) || 0;
-  const duration = 600;
-  const start = performance.now();
-  function step(now) {
-    const p = Math.min((now - start) / duration, 1);
-    const eased = 1 - Math.pow(1 - p, 3);
-    el.textContent = Math.round(current + (target - current) * eased);
-    if (p < 1) requestAnimationFrame(step);
+  function toast(msg, type) {
+    if (window.PM) PM.toast(msg, type || 'info');
   }
-  requestAnimationFrame(step);
-}
 
-// ============ RENDER VM CARD (Admin) ============
-function renderVMCard(vm) {
-  const icon = vm.template_icon;
-  const displayIcon = (icon && icon.startsWith('http')) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
-  const status = vm.status || 'stopped';
-  const ownerName = vm.owner_username || 'Unassigned';
-  
-  return `
-    <div class="vm-card-enhanced ${status}">
-      <div class="vm-card-header">
-        <div class="vm-title-block">
-          <div class="vm-os-icon">
-            <img src="${displayIcon}" alt="${escHtml(vm.template_name || 'OS')}" onerror="this.src='https://i.imgur.com/wu0Ob6B.png'">
-          </div>
-          <div style="min-width: 0; flex: 1;">
-            <div class="vm-name-enhanced">${escHtml(vm.vm_name)}</div>
-            <div class="vm-meta-enhanced">
-              <span>${escHtml(vm.template_name || vm.os_type || 'Custom OS')}</span>
-              <span class="vm-owner-tag">👤 ${escHtml(ownerName)}</span>
-              <span class="vm-id-chip">#${vm.vm_id}</span>
-            </div>
-          </div>
-        </div>
-        <span class="status-badge ${status}">
-          <span class="status-dot"></span>${status}
-        </span>
-      </div>
+  function history(key, value) {
+    const storeKey = 'pm.hist.' + key;
+    let arr = [];
+    try {
+      arr = JSON.parse(localStorage.getItem(storeKey) || '[]');
+      if (!Array.isArray(arr)) arr = [];
+    } catch (e) { arr = []; }
+    arr.push(Number(value) || 0);
+    if (arr.length > 24) arr = arr.slice(arr.length - 24);
+    try { localStorage.setItem(storeKey, JSON.stringify(arr)); } catch (e) {}
+    return arr.length > 1 ? arr : [arr[0], arr[0]];
+  }
 
-      <div class="vm-specs">
-        <div class="spec-item">
-          <div class="spec-icon mem"><svg class="icon"><use href="#i-mem"/></svg></div>
-          <div class="spec-content">
-            <div class="spec-label">Memory</div>
-            <div class="spec-value">${vm.memory ? vm.memory + ' MB' : '—'}</div>
-          </div>
-        </div>
-        <div class="spec-item">
-          <div class="spec-icon cpu"><svg class="icon"><use href="#i-cpu"/></svg></div>
-          <div class="spec-content">
-            <div class="spec-label">vCPUs</div>
-            <div class="spec-value">${vm.cpus || '—'} Cores</div>
-          </div>
-        </div>
-        <div class="spec-item">
-          <div class="spec-icon disk"><svg class="icon"><use href="#i-disk"/></svg></div>
-          <div class="spec-content">
-            <div class="spec-label">Storage</div>
-            <div class="spec-value">${vm.disk_size || '—'}</div>
-          </div>
-        </div>
-        <div class="spec-item">
-          <div class="spec-icon net"><svg class="icon"><use href="#i-network"/></svg></div>
-          <div class="spec-content">
-            <div class="spec-label">Network</div>
-            <div class="spec-value">${vm.ipv4_address || (vm.network_type === 'nat' ? 'DHCP' : '—')}</div>
-          </div>
-        </div>
-      </div>
+  function paintSpark(id, values, color) {
+    if (window.PM) PM.sparkline(document.getElementById(id), values, { color: color, height: 34 });
+  }
 
-      <div class="vm-actions-enhanced">
-        ${status === 'stopped'
-          ? `<button class="btn-action start" onclick="vmAction('start', ${vm.vm_id}, '${escHtml(vm.vm_name)}')">
-              <svg class="icon"><use href="#i-play"/></svg> Start
-            </button>`
-          : `<button class="btn-action stop" onclick="vmAction('stop', ${vm.vm_id}, '${escHtml(vm.vm_name)}')">
-              <svg class="icon"><use href="#i-stop"/></svg> Stop
-            </button>`
-        }
-        <a href="/admin/vm/${vm.vm_id}" class="btn-action primary">
-          <svg class="icon"><use href="#i-info"/></svg> Details
-        </a>
-        <a href="/admin/vm/${vm.vm_id}/console" class="btn-action">
-          <svg class="icon"><use href="#i-terminal"/></svg> Console
-        </a>
-      </div>
-    </div>
-  `;
-}
+  function greeting() {
+    const h = new Date().getHours();
+    let text = 'Welcome back, ';
+    if (h < 5) text = 'Burning the midnight oil, ';
+    else if (h < 12) text = 'Good morning, ';
+    else if (h < 18) text = 'Good afternoon, ';
+    else text = 'Good evening, ';
+    const node = document.getElementById('heroGreeting');
+    if (node) node.innerHTML = text + '<span><%= user.username %></span>';
+  }
 
-// ============ LOAD ADMIN DATA ============
-async function loadAdminData() {
-  const btn = document.getElementById('refreshBtn');
-  if (btn) btn.classList.add('spinning');
-  
-  try {
-    // Fetch admin dashboard stats
-    const statsRes = await fetch('/api/admin/dashboard');
-    if (statsRes.ok) {
-      const stats = await statsRes.json();
-      animateNumber('totalVMs', stats.totalVMs || 0);
-      animateNumber('runningVMs', stats.runningVMs || 0);
-      animateNumber('stoppedVMs', (stats.totalVMs || 0) - (stats.runningVMs || 0));
-      animateNumber('totalUsers', stats.totalUsers || 0);
-      document.getElementById('statusTotalVMs').textContent = stats.totalVMs || 0;
-    }
-
-    // Fetch all VMs
-    const vmsRes = await fetch('/api/admin/vms');
-    if (!vmsRes.ok) throw new Error('Failed to load VMs');
-    const vms = await vmsRes.json();
-    
-    document.getElementById('vmCount').textContent = vms.length;
-    document.getElementById('lastUpdate').textContent = `· Updated ${formatTime()}`;
-    
+  function renderMachines() {
     const container = document.getElementById('allVMContainer');
-    
-    if (vms.length === 0) {
-      container.innerHTML = `
-        <div class="empty-enhanced">
-          <div class="empty-icon-wrap"><svg class="icon"><use href="#i-server"/></svg></div>
-          <div class="empty-title">No Virtual Machines</div>
-          <div class="empty-desc">Get started by creating your first virtual machine.</div>
-          <a href="/admin/vm-create" class="btn-refresh" style="background: linear-gradient(135deg, var(--color-indigo), var(--color-violet)); color: var(--text-primary); border-color: transparent;">
-            <svg class="icon"><use href="#i-plus"/></svg> Create VM
-          </a>
-        </div>`;
+    if (!container) return;
+    const q = (document.getElementById('vmSearch')?.value || '').toLowerCase();
+
+    const filtered = allVMs.filter((vm) => {
+      const matchesFilter = !currentFilter || (vm.status || 'stopped') === currentFilter;
+      const hay = [vm.vm_name, vm.vm_id, vm.os_type, vm.template_name, vm.ipv4_address, vm.owner_username]
+        .join(' ').toLowerCase();
+      return matchesFilter && (!q || hay.indexOf(q) !== -1);
+    });
+
+    if (!filtered.length) {
+      container.innerHTML =
+        '<div class="empty-enhanced">' +
+          '<div class="empty-icon-wrap">' +
+            '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="7" rx="2"/><rect x="2" y="13" width="20" height="7" rx="2"/></svg>' +
+          '</div>' +
+          '<div class="empty-title">' + (allVMs.length ? 'No machines match this view' : 'No virtual machines yet') + '</div>' +
+          '<div class="empty-desc">' + (allVMs.length
+            ? 'Try another filter or clear the search to see every machine.'
+            : 'Spin up your first machine from an OS template in under a minute.') + '</div>' +
+          (allVMs.length
+            ? '<button class="btn btn-ghost btn-sm" onclick="currentFilter=\'\';document.getElementById(\'vmSearch\').value=\'\';document.querySelectorAll(\'#vmFilter button\').forEach(b=>b.classList.toggle(\'active\',b.dataset.filter===\'\'));renderMachines()">Clear filters</button>'
+            : '<a href="/admin/vm-create" class="btn btn-primary btn-sm">Create virtual machine</a>') +
+        '</div>';
       return;
     }
-    
-    container.innerHTML = `
-      <div class="vm-grid">
-        ${vms.map(vm => renderVMCard(vm)).join('')}
-      </div>`;
-      
-  } catch(e) {
-    document.getElementById('allVMContainer').innerHTML = `
-      <div class="empty-enhanced">
-        <div class="empty-icon-wrap" style="color: var(--color-red); background: linear-gradient(135deg, var(--color-red-light), rgba(239,68,68,0.05));">
-          <svg class="icon"><use href="#i-alert"/></svg>
-        </div>
-        <div class="empty-title">Failed to Load VMs</div>
-        <div class="empty-desc">${escHtml(e.message)}</div>
-        <button class="btn-refresh" onclick="loadAdminData()">
-          <svg class="icon"><use href="#i-refresh"/></svg> Try Again
-        </button>
-      </div>`;
-  } finally {
-    if (btn) setTimeout(() => btn.classList.remove('spinning'), 500);
+
+    container.innerHTML = filtered.map(renderVMCard).join('');
   }
 
-  // Load recent activity
-  loadRecentActivity();
-}
+  function renderVMCard(vm) {
+    const status = vm.status || 'stopped';
+    const icon = vm.template_icon && String(vm.template_icon).startsWith('http')
+      ? vm.template_icon
+      : '/images/logo.png';
+    const mem = vm.memory ? (vm.memory >= 1024 ? (vm.memory / 1024).toFixed(1) + ' GB' : vm.memory + ' MB') : '—';
 
-// ============ LOAD RECENT ACTIVITY ============
-async function loadRecentActivity() {
-  try {
-    // Try to fetch recent logs from all VMs
-    const res = await fetch('/api/admin/activity?limit=10');
-    if (res.ok) {
-      const activities = await res.json();
-      const container = document.getElementById('activityList');
-      document.getElementById('activityCount').textContent = activities.length;
-      
-      if (activities.length === 0) {
-        container.innerHTML = `
-          <div style="text-align: center; color: var(--text-muted); padding: 30px 0; font-size: 13px;">
-            No recent activity
-          </div>`;
+    return `
+      <div class="pm-card vm-card-enhanced ${escHtml(status)}">
+        <div class="vm-card-header">
+          <div class="vm-title-block">
+            <div class="vm-os-icon"><img src="${escHtml(icon)}" alt="" onerror="this.style.display='none'"></div>
+            <div style="min-width:0;flex:1">
+              <div class="vm-name-enhanced" title="${escHtml(vm.vm_name)}">${escHtml(vm.vm_name)}</div>
+              <div class="vm-meta-enhanced">
+                <span>${escHtml(vm.template_name || vm.os_type || 'Custom OS')}</span>
+                <span class="vm-id-chip">#${vm.vm_id}</span>
+                <span>${escHtml(vm.owner_username || 'Unassigned')}</span>
+              </div>
+            </div>
+          </div>
+          <span class="status-badge ${escHtml(status)}"><span class="status-dot"></span>${escHtml(status)}</span>
+        </div>
+
+        <div class="vm-specs">
+          <div class="spec-item">
+            <span class="spec-icon mem"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg></span>
+            <span class="spec-content"><span class="spec-label">Memory</span><span class="spec-value">${mem}</span></span>
+          </div>
+          <div class="spec-item">
+            <span class="spec-icon cpu"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg></span>
+            <span class="spec-content"><span class="spec-label">vCPU</span><span class="spec-value">${vm.cpus || '—'} cores</span></span>
+          </div>
+          <div class="spec-item">
+            <span class="spec-icon disk"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg></span>
+            <span class="spec-content"><span class="spec-label">Storage</span><span class="spec-value">${escHtml(vm.disk_size || '—')}</span></span>
+          </div>
+          <div class="spec-item">
+            <span class="spec-icon net"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg></span>
+            <span class="spec-content"><span class="spec-label">Network</span><span class="spec-value">${escHtml(vm.ipv4_address || (vm.network_type === 'nat' ? 'DHCP' : '—'))}</span></span>
+          </div>
+        </div>
+
+        <div class="vm-actions-enhanced">
+          ${status === 'running'
+            ? `<button class="btn btn-action pm-no-loader" style="background:rgba(251,113,133,.14);border-color:rgba(251,113,133,.3);color:#fb7185" onclick="vmAction('stop', ${vm.vm_id}, '${escHtml(vm.vm_name)}')">Stop</button>`
+            : `<button class="btn btn-action pm-no-loader" style="background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.3);color:#34d399" onclick="vmAction('start', ${vm.vm_id}, '${escHtml(vm.vm_name)}')">Start</button>`}
+          <a href="/admin/vm/${vm.vm_id}" class="btn btn-action btn-ghost">Details</a>
+          <a href="/admin/vm/${vm.vm_id}/console" class="btn btn-action btn-ghost">Console</a>
+        </div>
+      </div>
+    `;
+  }
+
+  async function loadAdminData() {
+    const btn = document.getElementById('refreshBtn');
+    if (btn) btn.classList.add('spinning');
+
+    try {
+      const [stats, vms] = await Promise.all([
+        fetch('/api/admin/dashboard').then((r) => r.json()).catch(() => ({})),
+        fetch('/api/admin/vms').then((r) => r.json())
+      ]);
+
+      const total = stats.totalVMs != null ? stats.totalVMs : (Array.isArray(vms) ? vms.length : 0);
+      const running = stats.runningVMs != null ? stats.runningVMs : (vms || []).filter((v) => v.status === 'running').length;
+      const stopped = Math.max(0, total - running);
+      const users = stats.totalUsers || 0;
+
+      if (window.PM) {
+        PM.countUp(document.getElementById('totalVMs'), total);
+        PM.countUp(document.getElementById('runningVMs'), running);
+        PM.countUp(document.getElementById('stoppedVMs'), stopped);
+        PM.countUp(document.getElementById('totalUsers'), users);
+      }
+
+      paintSpark('sparkTotal', history('total', total), '#818cf8');
+      paintSpark('sparkRunning', history('running', running), '#34d399');
+      paintSpark('sparkStopped', history('stopped', stopped), '#94a3b8');
+      paintSpark('sparkUsers', history('users', users), '#c084fc');
+
+      const ratio = total ? Math.round((running / total) * 100) : 0;
+      const ratioEl = document.getElementById('runningRatio');
+      if (ratioEl) ratioEl.textContent = ratio + '% of fleet active';
+
+      const heroRunning = document.getElementById('heroRunning');
+      if (heroRunning) heroRunning.textContent = running + ' of ' + total + ' machines running';
+
+      document.getElementById('vmCount').textContent = total;
+      const vmCountBadge = document.getElementById('vmCountBadge');
+      if (vmCountBadge) { vmCountBadge.textContent = total; vmCountBadge.style.display = total ? 'inline-flex' : 'none'; }
+      const runningBadge = document.getElementById('runningBadge');
+      if (runningBadge) { runningBadge.textContent = running; runningBadge.style.display = running ? 'inline-flex' : 'none'; }
+
+      allVMs = Array.isArray(vms) ? vms : [];
+      renderMachines();
+    } catch (e) {
+      document.getElementById('allVMContainer').innerHTML =
+        '<div class="empty-enhanced">' +
+          '<div class="empty-icon-wrap" style="color:#fb7185;background:rgba(251,113,133,.12);border-color:rgba(251,113,133,.3)">' +
+            '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg>' +
+          '</div>' +
+          '<div class="empty-title">Could not reach the panel API</div>' +
+          '<div class="empty-desc">' + escHtml(e.message) + '</div>' +
+          '<button class="btn btn-ghost btn-sm" onclick="loadAdminData()">Try again</button>' +
+        '</div>';
+    } finally {
+      if (btn) setTimeout(() => btn.classList.remove('spinning'), 600);
+      const sync = document.getElementById('heroSync');
+      if (sync) sync.textContent = 'Synced ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    loadHostMetrics();
+    loadRecentActivity();
+  }
+
+  async function loadHostMetrics() {
+    if (!window.PM) return;
+    try {
+      const m = await PM.fetchJSON('/api/system/metrics');
+
+      PM.ring(document.getElementById('ringCpu'), m.cpu.percent);
+      PM.ring(document.getElementById('ringMem'), m.memory.percent);
+
+      document.getElementById('cpuValue').textContent = m.cpu.percent.toFixed(1) + '%';
+      document.getElementById('cpuCores').textContent = m.cpu.cores + ' cores · load ' + (m.cpu.load1 || 0).toFixed(2);
+      document.getElementById('memValue').textContent = PM.formatBytes(m.memory.used);
+      document.getElementById('memTotal').textContent = 'of ' + PM.formatBytes(m.memory.total);
+
+      if (m.disk) {
+        document.getElementById('diskValue').textContent = PM.formatBytes(m.disk.used) + ' / ' + PM.formatBytes(m.disk.total);
+        const bar = document.querySelector('#diskBar > i');
+        if (bar) {
+          bar.style.width = Math.min(100, m.disk.percent).toFixed(1) + '%';
+          bar.parentElement.className = 'pm-bar ' + (m.disk.percent > 88 ? 'red' : m.disk.percent > 70 ? 'amber' : 'green');
+        }
+      } else {
+        document.getElementById('diskValue').textContent = 'Unavailable';
+      }
+
+      document.getElementById('hostOs').textContent = m.platform || '—';
+      document.getElementById('hostName').textContent = m.hostname || '—';
+      document.getElementById('hostUptime').textContent = PM.formatUptime(m.uptime);
+      document.getElementById('hostNode').textContent = m.node || '—';
+      document.getElementById('hostChip').textContent = m.arch ? m.arch + ' · ' + m.cpu.cores + ' threads' : 'QEMU/KVM';
+
+      const heroUptime = document.getElementById('heroUptime');
+      if (heroUptime) heroUptime.textContent = 'Host up ' + PM.formatUptime(m.uptime);
+    } catch (e) {
+      /* telemetry is best-effort */
+    }
+  }
+
+  async function loadRecentActivity() {
+    if (!window.PM) return;
+    try {
+      const rows = await PM.fetchJSON('/api/admin/activity?limit=14');
+      const list = document.getElementById('activityList');
+      const count = document.getElementById('activityCount');
+      if (count) count.textContent = rows.length;
+
+      if (!rows.length) {
+        list.innerHTML = '<div style="padding:30px 18px;text-align:center;color:var(--pm-text-dim);font-size:12px">' +
+          '<div class="pm-empty-icon" style="margin-bottom:10px">' + PM.icon('sparkles', 20) + '</div>' +
+          'No activity recorded yet.<br><span style="font-size:11px;opacity:.8">VM actions appear here in real time.</span></div>';
         return;
       }
-      
-      const iconMap = {
-        'start': 'start',
-        'stop': 'stop',
-        'create': 'create',
-        'delete': 'delete',
-        'edit': 'edit',
-        'login': 'login'
-      };
-      
-      container.innerHTML = activities.map(act => {
-        const iconType = iconMap[act.action] || 'edit';
-        return `
-          <div class="activity-item">
-            <div class="activity-icon ${iconType}">
-              <svg class="icon"><use href="#i-${act.action === 'start' ? 'play' : act.action === 'stop' ? 'stop' : act.action === 'create' ? 'plus' : act.action === 'delete' ? 'x' : act.action === 'login' ? 'users' : 'info'}"/></svg>
-            </div>
-            <div class="activity-content">
-              <div class="title">${escHtml(act.message || act.action)}</div>
-              <div class="desc">VM #${act.vm_id} · ${escHtml(act.status || '')}</div>
-            </div>
-            <div class="activity-time">${act.timestamp ? new Date(act.timestamp).toLocaleTimeString() : ''}</div>
-          </div>
-        `;
+
+      list.innerHTML = rows.map((row) => {
+        const kind = row.status === 'error' || row.action === 'delete' ? 'error'
+          : row.action === 'start' ? 'start'
+          : row.action === 'create' ? 'create' : 'stop';
+        const icon = row.action === 'start' ? 'play' : row.action === 'stop' ? 'stop'
+          : row.action === 'create' ? 'plus' : row.action === 'delete' ? 'x' : 'info';
+        return '<div class="pm-feed-item">' +
+            '<span class="pm-feed-icon ' + kind + '">' + PM.icon(icon, 13) + '</span>' +
+            '<span class="pm-feed-body">' +
+              '<span class="pm-feed-title">' + escHtml(row.message || row.action) + '</span>' +
+              '<span class="pm-feed-meta">' + escHtml(row.vm_name ? 'VM · ' + row.vm_name : 'Panel · #' + (row.vm_id || '—')) +
+                (row.status ? ' · ' + escHtml(row.status) : '') + '</span>' +
+            '</span>' +
+            '<span class="pm-feed-time">' + PM.timeAgo(row.timestamp) + '</span>' +
+          '</div>';
       }).join('');
-    } else {
-      // Fallback: show some mock activities or empty state
-      document.getElementById('activityList').innerHTML = `
-        <div style="text-align: center; color: var(--text-muted); padding: 20px 0; font-size: 13px;">
-          Activity feed unavailable
-        </div>`;
+    } catch (e) {
+      const list = document.getElementById('activityList');
+      if (list) list.innerHTML = '<div style="padding:24px;text-align:center;color:var(--pm-text-dim);font-size:12px">Activity feed unavailable</div>';
     }
-  } catch(e) {
-    // Silent fail for activity
-    document.getElementById('activityList').innerHTML = `
-      <div style="text-align: center; color: var(--text-muted); padding: 20px 0; font-size: 13px;">
-        No recent activity
-      </div>`;
   }
-}
 
-// ============ SYSTEM STATUS ============
-async function loadSystemStatus() {
-  try {
-    // Fetch system info
-    const res = await fetch('/api/system/status');
-    if (res.ok) {
-      const data = await res.json();
-      if (data.cpu) document.getElementById('statusCpu').textContent = data.cpu;
-      if (data.memory) document.getElementById('statusMemory').textContent = data.memory;
+  async function vmAction(action, vmId, vmName) {
+    const verb = action === 'start' ? 'Start' : action === 'stop' ? 'Stop' : action;
+    const confirmed = window.PM
+      ? await PM.confirm(verb + ' “' + vmName + '”? The machine will ' + (action === 'start' ? 'boot immediately.' : 'shut down gracefully.'), {
+          title: verb + ' virtual machine',
+          confirmText: verb,
+          danger: action !== 'start'
+        })
+      : window.confirm(verb + ' ' + vmName + '?');
+    if (!confirmed) return;
+
+    try {
+      toast(verb + 'ping ' + vmName + '…', 'info');
+      const res = await fetch('/api/vms/' + vmId + '/' + action, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && (data.success !== false)) {
+        toast(vmName + ' ' + (action === 'start' ? 'is booting' : 'is shutting down'), 'success');
+        setTimeout(loadAdminData, 1400);
+      } else {
+        toast(data.error || 'Action failed', 'error');
+      }
+    } catch (e) {
+      toast('Request failed: ' + e.message, 'error');
     }
-  } catch(e) {
-    // Silent fail
   }
-}
 
-// ============ INITIAL LOAD ============
-loadAdminData();
-loadSystemStatus();
-setInterval(loadAdminData, 30000);
-setInterval(loadSystemStatus, 60000);
+  document.addEventListener('DOMContentLoaded', function () {
+    greeting();
+    const filter = document.getElementById('vmFilter');
+    if (filter) {
+      filter.addEventListener('click', (e) => {
+        const btn = e.target.closest('button[data-filter]');
+        if (!btn) return;
+        currentFilter = btn.getAttribute('data-filter');
+        filter.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+        renderMachines();
+      });
+    }
+    loadAdminData();
+    setInterval(loadAdminData, 30000);
+    setInterval(loadHostMetrics, 15000);
+  });
 </script>
+  <script src="/js/premium.js"></script>
 </body>
 </html>

@@ -1,135 +1,213 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>(function(){try{var t=localStorage.getItem('pm.theme')||'dark';var d=document.documentElement;if(t==='light')d.classList.add('pm-theme-light');d.style.colorScheme=t==='light'?'light':'dark';}catch(e){}})();</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0a0a0f">
-  <title><%= title || 'Profile - HKVM Panel' %></title>
+  <meta name="theme-color" content="#06070c">
+  <title><%= title || 'My Profile · ' + siteName %></title>
   <link rel="icon" href="<%= siteLogo %>" type="image/png">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="/css/admin.css">
+  <link rel="stylesheet" href="/css/premium.css">
+  <style>
+    .profile-grid { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 16px; align-items: start; }
+    @media (max-width: 980px) { .profile-grid { grid-template-columns: minmax(0, 1fr); } }
+
+    .profile-avatar {
+      width: 84px; height: 84px; border-radius: 24px; margin: 0 auto 14px;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--pm-brand-gradient); color: #fff;
+      font-size: 30px; font-weight: 700; letter-spacing: -0.03em;
+      border: 1px solid rgba(255,255,255,.22);
+      box-shadow: 0 18px 40px -22px rgba(var(--pm-brand-rgb), 1);
+      overflow: hidden;
+    }
+    .profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .profile-name { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; text-align: center; }
+    .profile-sub { font-size: 11.5px; color: var(--pm-text-dim); text-align: center; margin-top: 2px; }
+
+    .info-tile {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 10px 12px; border-radius: 11px;
+      border: 1px solid var(--pm-line-soft);
+      background: rgba(148,163,184,.045);
+      font-size: 12px;
+    }
+    .info-tile + .info-tile { margin-top: 8px; }
+    .info-tile .k { color: var(--pm-text-dim); display: flex; align-items: center; gap: 7px; }
+    .info-tile .v { font-weight: 600; color: var(--pm-text); text-align: right; }
+
+    .strength-track { height: 6px; border-radius: 99px; background: rgba(148,163,184,.16); overflow: hidden; margin-top: 8px; }
+    .strength-track > i { display: block; height: 100%; width: 0; border-radius: 99px; transition: width .35s var(--pm-ease), background .35s; }
+    .strength-label { font-size: 11px; color: var(--pm-text-dim); display: flex; justify-content: space-between; margin-top: 6px; }
+
+    .section-title { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 650; }
+    .section-title svg { color: var(--pm-brand-2); }
+  </style>
 </head>
 <body>
-<div class="admin-wrapper">
 
+<div class="admin-wrapper">
   <%- include('../partials/users/sidebar') %>
 
   <div class="admin-main">
     <%- include('../partials/admin/header') %>
 
     <div class="admin-content">
-      <!-- Page Header -->
-      <div class="page-header">
+
+      <div class="page-header" style="align-items:center">
         <div>
-          <h1 class="page-title"><i class="fas fa-user" style="color: #6366F1;"></i> My Profile</h1>
-          <p style="color: var(--text-muted); margin-top: 4px;">Manage your account settings</p>
+          <h1 class="page-title">My profile</h1>
+          <p class="page-subtitle">Identity, contact details and account security</p>
+        </div>
+        <div class="page-actions">
+          <span class="pm-chip" id="profileRoleChip">
+            <span class="dot"></span>
+            <%= user.role === 'admin' ? 'Administrator' : 'Member' %>
+          </span>
+          <a href="<%= user.role === 'admin' ? '/admin/dashboard' : '/dashboard' %>" class="btn btn-ghost btn-sm">Back to dashboard</a>
         </div>
       </div>
 
-      <!-- Profile Content -->
-      <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 20px; max-width: 1000px;">
+      <div class="profile-grid">
 
-        <!-- Left: Avatar & Overview -->
-        <div class="card">
-          <div class="card-body" style="text-align: center;">
-            <div style="font-size: 64px; margin-bottom: 12px;" id="userProfileAvatar"><i class="fas fa-user-circle" style="color: #6366F1;"></i></div>
-            <div class="card-title" style="margin-bottom: 4px;" id="displayUsername">—</div>
-            <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 16px;">User Account</div>
-            
-            <div style="display: grid; gap: 12px;">
-              <div style="padding: 10px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.15); border-radius: 6px;">
-                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">User ID</div>
-                <div style="font-size: 14px; font-weight: 600;" id="displayUserID">—</div>
+        <!-- Identity card -->
+        <div class="pm-card">
+          <div class="pm-card-body" style="text-align:center;padding-top:22px">
+            <div class="profile-avatar" id="userProfileAvatar"><%= user.username ? user.username.charAt(0).toUpperCase() : 'U' %></div>
+            <div class="profile-name" id="displayUsername"><%= user.username %></div>
+            <div class="profile-sub" id="displayRoleText"><%= user.role === 'admin' ? 'Administrator account' : 'Member account' %></div>
+
+            <div style="display:flex;gap:8px;justify-content:center;margin:14px 0 18px;flex-wrap:wrap">
+              <span class="pm-chip brand" style="font-size:10.5px">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+                Verified
+              </span>
+              <span class="pm-chip" style="font-size:10.5px" id="displayUserID">#—</span>
+            </div>
+
+            <div style="text-align:left">
+              <div class="info-tile">
+                <span class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg> Member since</span>
+                <span class="v" id="displayCreatedAt">—</span>
               </div>
-              <div style="padding: 10px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.15); border-radius: 6px;">
-                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Role</div>
-                <div style="font-size: 14px; font-weight: 600;">User</div>
+              <div class="info-tile">
+                <span class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Last sign-in</span>
+                <span class="v" id="displayLastLogin">—</span>
               </div>
-              <div style="padding: 10px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.15); border-radius: 6px;">
-                <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Member Since</div>
-                <div style="font-size: 14px; font-weight: 600;" id="displayCreatedAt">—</div>
+              <div class="info-tile">
+                <span class="k"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Security</span>
+                <span class="v" style="color:var(--pm-green)">Active</span>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Right: Edit Forms -->
-        <div>
+        <!-- Forms -->
+        <div class="pm-stack">
 
-          <!-- Personal Information -->
-          <div class="card" style="margin-bottom: 20px;">
-            <div class="card-header">
-              <div class="card-title"><i class="fas fa-info-circle" style="color: #3B82F6;"></i> Personal Information</div>
+          <div class="pm-card">
+            <div class="pm-card-head">
+              <div class="section-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                Personal information
+              </div>
+              <span class="pm-chip" style="font-size:10.5px">Visible to admins</span>
             </div>
-            <div class="card-body">
-              <div class="form-group">
-                <label class="form-label">Full Name</label>
-                <input type="text" class="form-control" id="inputFullName" placeholder="Your full name">
+            <div class="pm-card-body">
+              <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                <div class="form-group">
+                  <label class="form-label" for="inputFullName">Full name</label>
+                  <input type="text" class="form-control" id="inputFullName" placeholder="Your full name" autocomplete="name">
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="inputEmail">Email address</label>
+                  <input type="email" class="form-control" id="inputEmail" placeholder="you@example.com" autocomplete="email">
+                </div>
               </div>
-              <div class="form-group">
-                <label class="form-label">Email Address</label>
-                <input type="email" class="form-control" id="inputEmail" placeholder="your@email.com">
-              </div>
-              <div style="display: flex; gap: 8px;">
-                <button class="btn btn-primary" onclick="updateProfile()"><i class="fas fa-save" style="color: #10B981;"></i> Save Changes</button>
-                <button class="btn btn-ghost" onclick="loadProfile()">Cancel</button>
+              <div class="pm-row" style="gap:9px">
+                <button class="btn btn-primary" onclick="updateProfile()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+                  Save changes
+                </button>
+                <button class="btn btn-ghost" onclick="loadProfile()">Reset</button>
               </div>
             </div>
           </div>
 
-          <!-- Change Password -->
-          <div class="card" style="margin-bottom: 20px;">
-            <div class="card-header">
-              <div class="card-title"><i class="fas fa-lock" style="color: #EF4444;"></i> Change Password</div>
-            </div>
-            <div class="card-body">
-              <div class="form-group">
-                <label class="form-label">Current Password <span class="required">*</span></label>
-                <input type="password" class="form-control" id="inputCurrentPassword" placeholder="Enter current password">
+          <div class="pm-card">
+            <div class="pm-card-head">
+              <div class="section-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                Password &amp; security
               </div>
+              <span class="pm-chip" style="font-size:10.5px">Use 12+ characters</span>
+            </div>
+            <div class="pm-card-body">
               <div class="form-group">
-                <label class="form-label">New Password <span class="required">*</span></label>
-                <input type="password" class="form-control" id="inputNewPassword" placeholder="Enter new password (min. 6 characters)">
-                <div style="font-size: 12px; color: var(--text-muted); margin-top: 6px;">
-                  Password strength: <span id="passwordStrength">—</span>
+                <label class="form-label" for="inputCurrentPassword">Current password</label>
+                <input type="password" class="form-control" id="inputCurrentPassword" placeholder="Enter current password" autocomplete="current-password">
+              </div>
+              <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                <div class="form-group">
+                  <label class="form-label" for="inputNewPassword">New password</label>
+                  <input type="password" class="form-control" id="inputNewPassword" placeholder="At least 6 characters" autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="inputConfirmPassword">Confirm new password</label>
+                  <input type="password" class="form-control" id="inputConfirmPassword" placeholder="Repeat new password" autocomplete="new-password">
                 </div>
               </div>
-              <div class="form-group">
-                <label class="form-label">Confirm New Password <span class="required">*</span></label>
-                <input type="password" class="form-control" id="inputConfirmPassword" placeholder="Confirm new password">
+
+              <div class="strength-track"><i id="strengthBar"></i></div>
+              <div class="strength-label">
+                <span>Password strength</span>
+                <span id="passwordStrength">—</span>
               </div>
-              <div style="display: flex; gap: 8px;">
-                <button class="btn btn-primary" onclick="changePassword()"><i class="fas fa-sync" style="color: #8B5CF6;"></i> Update Password</button>
+
+              <div class="pm-row" style="gap:9px;margin-top:16px">
+                <button class="btn btn-primary" onclick="changePassword()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+                  Update password
+                </button>
                 <button class="btn btn-ghost" onclick="clearPasswordForm()">Clear</button>
               </div>
             </div>
           </div>
 
-          <!-- Account Status -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title"><i class="fas fa-chart-bar" style="color: #06B6D4;"></i> Account Status</div>
+          <div class="pm-card">
+            <div class="pm-card-head">
+              <div class="section-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                Account status
+              </div>
             </div>
-            <div class="card-body">
-              <div style="display: grid; gap: 12px;">
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border-subtle);">
-                  <span style="font-size: 13px;">Account Status</span>
-                  <span class="badge badge-running"><i class="fas fa-check-circle" style="color: #10B981;"></i> Active</span>
+            <div class="pm-card-body">
+              <div class="pm-grid auto-sm">
+                <div class="info-tile" style="flex-direction:column;align-items:flex-start;gap:4px">
+                  <span class="k">Status</span>
+                  <span class="v" style="color:var(--pm-green)">Active</span>
                 </div>
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border-subtle);">
-                  <span style="font-size: 13px;">Last Login</span>
-                  <span style="font-size: 12px; color: var(--text-secondary);" id="displayLastLogin">—</span>
+                <div class="info-tile" style="flex-direction:column;align-items:flex-start;gap:4px">
+                  <span class="k">Role</span>
+                  <span class="v"><%= user.role === 'admin' ? 'Administrator' : 'Member' %></span>
                 </div>
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
-                  <span style="font-size: 13px;">Account Created</span>
-                  <span style="font-size: 12px; color: var(--text-secondary);" id="displayAccountCreated">—</span>
+                <div class="info-tile" style="flex-direction:column;align-items:flex-start;gap:4px">
+                  <span class="k">Created</span>
+                  <span class="v" id="displayAccountCreated">—</span>
+                </div>
+                <div class="info-tile" style="flex-direction:column;align-items:flex-start;gap:4px">
+                  <span class="k">Authentication</span>
+                  <span class="v">Password</span>
                 </div>
               </div>
             </div>
           </div>
 
         </div>
-
       </div>
 
     </div>
@@ -139,173 +217,167 @@
 </div>
 
 <script>
-let currentUser = null;
+  let currentUser = null;
 
-// Load user profile
-async function loadProfile() {
-  try {
-    const res = await fetch('/api/user/profile');
-    if (!res.ok) {
-      const data = await res.json();
-      throw new Error(data.error || 'Failed to load profile');
-    }
-    currentUser = await res.json();
-    
-    // Display user info - handle null/undefined values
-    document.getElementById('displayUsername').textContent = currentUser.username || '—';
-    document.getElementById('displayUserID').textContent = `#${currentUser.id || '—'}`;
-    document.getElementById('displayCreatedAt').textContent = currentUser.created_at ? formatDate(currentUser.created_at) : '—';
-    document.getElementById('displayLastLogin').textContent = currentUser.last_login ? formatDateTime(currentUser.last_login) : 'Never';
-    document.getElementById('displayAccountCreated').textContent = currentUser.created_at ? formatDateTime(currentUser.created_at) : '—';
-    
-    // Populate form fields
-    document.getElementById('inputFullName').value = currentUser.full_name || '';
-    document.getElementById('inputEmail').value = currentUser.email || '';
-    
-    // Load Discord avatar if linked
+  function notify(message, type) {
+    if (window.PM && PM.toast) PM.toast(message, type || 'info');
+    else if (type === 'error') console.error(message);
+  }
+
+  function setAvatar(letter) {
+    const node = document.getElementById('userProfileAvatar');
+    if (!node) return;
+    node.textContent = (letter || 'U').toUpperCase();
+  }
+
+  async function loadProfile() {
     try {
-      const discordRes = await fetch('/api/discord-account-info');
-      if (discordRes.ok) {
-        const discordAccount = await discordRes.json();
-        if (discordAccount && discordAccount.discord_avatar) {
-          const discordAvatarUrl = `https://cdn.discordapp.com/avatars/${discordAccount.discord_id}/${discordAccount.discord_avatar}.png?size=256`;
-          const avatarEl = document.getElementById('userProfileAvatar');
-          avatarEl.innerHTML = `<img src="${discordAvatarUrl}" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; border: 3px solid #6366F1;" alt="Discord Avatar">`;
-        }
+      const res = await fetch('/api/user/profile');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to load profile');
       }
-    } catch(e) {
-      // No Discord account, use default
-    }
-    
-  } catch(e) {
-    console.error('[Profile Error]', e);
-    alert('Failed to load profile: ' + e.message);
-  }
-}
+      currentUser = await res.json();
 
-// Update profile (name & email)
-async function updateProfile() {
-  const fullName = document.getElementById('inputFullName').value.trim();
-  const email = document.getElementById('inputEmail').value.trim();
-  
-  if (!email) {
-    alert('Email is required');
-    return;
+      const username = currentUser.username || '<%= user.username %>';
+      document.getElementById('displayUsername').textContent = username;
+      setAvatar(username.charAt(0));
+      document.getElementById('displayUserID').textContent = '#' + (currentUser.id || '—');
+      document.getElementById('displayCreatedAt').textContent = currentUser.created_at ? formatDate(currentUser.created_at) : '—';
+      document.getElementById('displayAccountCreated').textContent = currentUser.created_at ? formatDateTime(currentUser.created_at) : '—';
+      document.getElementById('displayLastLogin').textContent = currentUser.last_login ? formatDateTime(currentUser.last_login) : 'Never';
+
+      const roleText = currentUser.role === 'admin' ? 'Administrator account' : 'Member account';
+      document.getElementById('displayRoleText').textContent = roleText;
+      const chip = document.getElementById('profileRoleChip');
+      if (chip) chip.innerHTML = '<span class="dot"></span>' + (currentUser.role === 'admin' ? 'Administrator' : 'Member');
+
+      document.getElementById('inputFullName').value = currentUser.full_name || '';
+      document.getElementById('inputEmail').value = currentUser.email || '';
+
+      try {
+        const discordRes = await fetch('/api/discord-account-info');
+        if (discordRes.ok) {
+          const account = await discordRes.json();
+          if (account && account.discord_avatar && account.discord_id) {
+            const url = 'https://cdn.discordapp.com/avatars/' + account.discord_id + '/' + account.discord_avatar + '.png?size=256';
+            const avatar = document.getElementById('userProfileAvatar');
+            if (avatar) avatar.innerHTML = '<img src="' + url + '" alt="Discord avatar">';
+          }
+        }
+      } catch (e) { /* no linked discord account */ }
+    } catch (e) {
+      notify('Could not load profile: ' + e.message, 'error');
+    }
   }
-  
-  if (!isValidEmail(email)) {
-    alert('Please enter a valid email address');
-    return;
+
+  async function updateProfile() {
+    const fullName = document.getElementById('inputFullName').value.trim();
+    const email = document.getElementById('inputEmail').value.trim();
+
+    if (!email) return notify('Email address is required', 'warning');
+    if (!isValidEmail(email)) return notify('That email address looks invalid', 'warning');
+
+    try {
+      const res = await fetch('/api/user/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ full_name: fullName, email: email })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        notify('Profile updated successfully', 'success');
+        loadProfile();
+      } else {
+        notify('Update failed: ' + (data.error || 'unknown error'), 'error');
+      }
+    } catch (e) {
+      notify('Update failed: ' + e.message, 'error');
+    }
   }
-  
-  try {
-    const res = await fetch('/api/user/profile', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        full_name: fullName,
-        email: email
-      })
+
+  async function changePassword() {
+    const current = document.getElementById('inputCurrentPassword').value;
+    const next = document.getElementById('inputNewPassword').value;
+    const confirm = document.getElementById('inputConfirmPassword').value;
+
+    if (!current || !next || !confirm) return notify('All password fields are required', 'warning');
+    if (next.length < 6) return notify('New password must be at least 6 characters', 'warning');
+    if (next !== confirm) return notify('New password and confirmation do not match', 'error');
+
+    try {
+      const res = await fetch('/api/user/password', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: current, new_password: next })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        notify('Password changed successfully', 'success');
+        clearPasswordForm();
+      } else {
+        notify('Password change failed: ' + (data.error || 'unknown error'), 'error');
+      }
+    } catch (e) {
+      notify('Password change failed: ' + e.message, 'error');
+    }
+  }
+
+  function clearPasswordForm() {
+    ['inputCurrentPassword', 'inputNewPassword', 'inputConfirmPassword'].forEach((id) => {
+      const node = document.getElementById(id);
+      if (node) node.value = '';
     });
-    
-    const data = await res.json();
-    if (res.ok && data.success) {
-      alert('✅ Profile updated successfully!');
-      loadProfile();
-    } else {
-      alert('Failed: ' + (data.error || 'Unknown error'));
-    }
-  } catch(e) {
-    alert('Error: ' + e.message);
+    paintStrength('');
   }
-}
 
-// Change password
-async function changePassword() {
-  const current = document.getElementById('inputCurrentPassword').value;
-  const newPass = document.getElementById('inputNewPassword').value;
-  const confirm = document.getElementById('inputConfirmPassword').value;
-  
-  if (!current || !newPass || !confirm) {
-    alert('All password fields are required');
-    return;
+  function paintStrength(pass) {
+    const label = document.getElementById('passwordStrength');
+    const bar = document.getElementById('strengthBar');
+    if (!label || !bar) return;
+
+    let score = 0;
+    if (pass.length >= 6) score = 1;
+    if (pass.length >= 8) score = 2;
+    if (pass.length >= 10 && /[A-Z]/.test(pass)) score = 3;
+    if (pass.length >= 12 && /[A-Z]/.test(pass) && /[0-9]/.test(pass) && /[^a-zA-Z0-9]/.test(pass)) score = 4;
+
+    const map = [
+      { label: '—', color: 'transparent', width: '0%' },
+      { label: 'Weak', color: '#fb7185', width: '25%' },
+      { label: 'Fair', color: '#fbbf24', width: '50%' },
+      { label: 'Good', color: '#60a5fa', width: '75%' },
+      { label: 'Strong', color: '#34d399', width: '100%' }
+    ];
+    const state = map[score] || map[0];
+    label.textContent = state.label;
+    label.style.color = state.color;
+    bar.style.width = state.width;
+    bar.style.background = state.color;
   }
-  
-  if (newPass.length < 6) {
-    alert('New password must be at least 6 characters');
-    return;
+
+  function formatDate(value) {
+    if (!value) return '—';
+    const d = new Date(value);
+    return isNaN(d) ? value : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   }
-  
-  if (newPass !== confirm) {
-    alert('New password and confirmation do not match');
-    return;
+
+  function formatDateTime(value) {
+    if (!value) return '—';
+    const d = new Date(value);
+    return isNaN(d) ? value : d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
-  
-  try {
-    const res = await fetch('/api/user/password', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        current_password: current,
-        new_password: newPass
-      })
-    });
-    
-    const data = await res.json();
-    if (res.ok && data.success) {
-      alert('✅ Password changed successfully!');
-      clearPasswordForm();
-    } else {
-      alert('Failed: ' + (data.error || 'Unknown error'));
-    }
-  } catch(e) {
-    alert('Error: ' + e.message);
+
+  function isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
-}
 
-function clearPasswordForm() {
-  document.getElementById('inputCurrentPassword').value = '';
-  document.getElementById('inputNewPassword').value = '';
-  document.getElementById('inputConfirmPassword').value = '';
-  document.getElementById('passwordStrength').textContent = '—';
-}
-
-// Password strength indicator
-document.getElementById('inputNewPassword')?.addEventListener('input', function(e) {
-  const pass = e.target.value;
-  let strength = '—';
-  
-  if (pass.length < 6) {
-    strength = '<i class="fas fa-circle" style="color: #EF4444;"></i> Weak';
-  } else if (pass.length < 10 || !/[A-Z]/.test(pass) || !/[0-9]/.test(pass)) {
-    strength = '<i class="fas fa-circle" style="color: #F59E0B;"></i> Fair';
-  } else if (pass.length >= 12 && /[A-Z]/.test(pass) && /[0-9]/.test(pass) && /[^a-zA-Z0-9]/.test(pass)) {
-    strength = '<i class="fas fa-circle" style="color: #10B981;"></i> Strong';
-  } else {
-    strength = '<i class="fas fa-circle" style="color: #F59E0B;"></i> Good';
-  }
-  
-  document.getElementById('passwordStrength').innerHTML = strength;
-});
-
-// Utility functions
-function formatDate(dateStr) {
-  if (!dateStr) return '—';
-  return new Date(dateStr).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-function formatDateTime(dateStr) {
-  if (!dateStr) return '—';
-  return new Date(dateStr).toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-function isValidEmail(email) {
-  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return re.test(email);
-}
-
-// Load profile on page load
-loadProfile();
+  document.addEventListener('DOMContentLoaded', function () {
+    const input = document.getElementById('inputNewPassword');
+    if (input) input.addEventListener('input', (e) => paintStrength(e.target.value));
+    loadProfile();
+  });
 </script>
+<script src="/js/premium.js"></script>
 </body>
 </html>

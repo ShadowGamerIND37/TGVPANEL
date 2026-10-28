@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script>(function(){try{var t=localStorage.getItem('pm.theme')||'dark';var d=document.documentElement;if(t==='light')d.classList.add('pm-theme-light');d.style.colorScheme=t==='light'?'light':'dark';}catch(e){}})();</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="theme-color" content="#0a0a0f">
@@ -21,6 +22,7 @@
       }
     }
   </style>
+  <link rel="stylesheet" href="/css/premium.css">
 </head>
 <body>
 <div class="admin-wrapper">
@@ -620,7 +622,7 @@ async function loadTemplatesForReinstall() {
     if (typeof showToast === 'function') {
       showToast('Failed to load templates', 'error');
     } else {
-      alert('Failed to load templates: ' + e.message);
+      PM.error('Failed to load templates: ' + e.message);
     }
   }
 }
@@ -663,7 +665,7 @@ async function performReinstall(e) {
       if (typeof showToast === 'function') {
         showToast(result.message, 'success');
       } else {
-        alert(result.message);
+        PM.success(result.message);
       }
       closeReinstallModal();
       
@@ -678,7 +680,7 @@ async function performReinstall(e) {
     if (typeof showToast === 'function') {
       showToast('Reinstall error: ' + e.message, 'error');
     } else {
-      alert('Reinstall error: ' + e.message);
+      PM.error('Reinstall error: ' + e.message);
     }
     btn.innerHTML = '<i class="fas fa-sync-alt"></i> Reinstall';
     btn.disabled = false;
@@ -907,7 +909,7 @@ async function saveChanges(e) {
     if (typeof showToast === 'function') {
       showToast('Save failed: ' + e.message, 'error');
     } else {
-      alert('Save failed: ' + e.message);
+      PM.error('Save failed: ' + e.message);
     }
     
     btn.innerHTML = `
@@ -939,5 +941,6 @@ document.addEventListener('change', (e) => {
   }
 });
 </script>
+  <script src="/js/premium.js"></script>
 </body>
 </html>
