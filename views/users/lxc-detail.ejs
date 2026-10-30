@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %></title>
+  <link rel="icon" href="<%= siteLogo %>" type="image/png">
+  <link rel="stylesheet" href="/css/admin.css">
+  <style>
+    .lxc-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+    .lxc-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .lxc-tab { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border-card); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-size: 13px; font-weight: 600; }
+    .lxc-tab.active { background: var(--accent-primary, #6366f1); color: #fff; border-color: transparent; }
+    .lxc-pane { display: none; }
+    .lxc-pane.active { display: block; }
+    .lxc-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+    .lxc-stat { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 10px; padding: 14px; }
+    .lxc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .lxc-table th, .lxc-table td { padding: 9px 10px; border-bottom: 1px solid var(--border-subtle); text-align: left; color: var(--text-primary); }
+  </style>
+</head>
+<body>
+<div class="admin-wrapper">
+  <% if (isStaff) { %>
+    <%- include('../partials/admin/sidebar') %>
+  <% } else { %>
+    <%- include('../partials/users/sidebar') %>
+  <% } %>
+  <div class="admin-main">
+    <%- include('../partials/admin/header') %>
+    <div class="admin-content">
+
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:18px;">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">
+            <%= instance.name %>
+            <span style="font-size:12px;padding:3px 10px;border-radius:999px;background:rgba(6,182,212,0.16);color:#22d3ee;vertical-align:middle;">LXC CONTAINER</span>
+          </h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">
+            Node: <strong><%= instance.nodeName %></strong> • Template: <code><%= instance.osLabel %></code> • IP: <code id="hdrIp"><%= instance.primaryIp || 'DHCP/Unassigned' %></code> • Status: <strong id="hdrStatus"><%= instance.status %></strong>
+          </p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <a href="/lxc/<%= instance.refId %>/console" class="btn btn-primary">Open PTY Terminal</a>
+          <button class="btn btn-outline" onclick="doLxcAction('start')">Start</button>
+          <button class="btn btn-outline" onclick="doLxcAction('stop')">Stop</button>
+          <button class="btn btn-outline" onclick="doLxcAction('restart')">Restart</button>
+          <button class="btn btn-outline" onclick="doLxcAction('freeze')">Freeze</button>
+          <button class="btn btn-outline" onclick="doLxcAction('unfreeze')">Unfreeze</button>
+        </div>
+      </div>
+
+      <!-- Live Telemetry Cards -->
+      <div class="lxc-stat-grid">
+        <div class="lxc-stat"><div style="font-size:11px;color:var(--text-muted);">CPU USAGE</div><div style="font-size:20px;font-weight:700;color:var(--text-primary);" id="stCpu">0%</div><div style="font-size:12px;color:var(--text-muted);"><%= instance.cpuCores %> vCPU Cores</div></div>
+        <div class="lxc-stat"><div style="font-size:11px;color:var(--text-muted);">MEMORY</div><div style="font-size:20px;font-weight:700;color:var(--text-primary);" id="stRam">0 MB</div><div style="font-size:12px;color:var(--text-muted);">Allocated: <%= instance.ramMb %> MB (Swap <%= instance.swapMb %> MB)</div></div>
+        <div class="lxc-stat"><div style="font-size:11px;color:var(--text-muted);">ROOTFS STORAGE</div><div style="font-size:20px;font-weight:700;color:var(--text-primary);" id="stDisk">0 GB</div><div style="font-size:12px;color:var(--text-muted);">Quota: <%= instance.diskGb %> GB</div></div>
+        <div class="lxc-stat"><div style="font-size:11px;color:var(--text-muted);">NETWORK I/O</div><div style="font-size:15px;font-weight:700;color:var(--text-primary);" id="stNet">RX 0 B / TX 0 B</div><div style="font-size:12px;color:var(--text-muted);">Expires: <%= instance.expiresAt || 'Never' %></div></div>
+      </div>
+
+      <div class="lxc-tabs">
+        <button class="lxc-tab active" onclick="switchPane('access', this)">Credentials &amp; Reinstall</button>
+        <button class="lxc-tab" onclick="switchPane('files', this); loadFiles('/')">Rootfs File Manager</button>
+        <button class="lxc-tab" onclick="switchPane('snapshots', this); loadSnapsAndBackups()">Snapshots &amp; Backups</button>
+        <button class="lxc-tab" onclick="switchPane('processes', this); loadProcsAndLogs()">Processes &amp; Logs</button>
+        <button class="lxc-tab" onclick="switchPane('sharing', this)">Access Sharing</button>
+      </div>
+
+      <!-- PANE: Credentials & Reinstall -->
+      <div id="pane-access" class="lxc-pane active">
+        <div class="lxc-card">
+          <h3 style="margin-top:0;color:var(--text-primary);">Reset Container Root Password</h3>
+          <div style="display:flex;gap:10px;max-width:460px;">
+            <input id="newRootPass" type="password" placeholder="Leave blank to auto-generate strong password" style="flex:1;padding:9px;border-radius:8px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text-primary);">
+            <button class="btn btn-primary" onclick="resetPass()">Apply Root Password</button>
+          </div>
+          <pre id="passResult" style="display:none;margin-top:10px;padding:10px;background:rgba(0,0,0,0.3);border-radius:8px;color:#10b981;"></pre>
+        </div>
+
+        <div class="lxc-card">
+          <h3 style="margin-top:0;color:var(--text-primary);">Inject OpenSSH Public Key (<code>/root/.ssh/authorized_keys</code>)</h3>
+          <div style="display:flex;gap:10px;">
+            <input id="sshPubKey" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." style="flex:1;padding:9px;border-radius:8px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text-primary);">
+            <button class="btn btn-outline" onclick="addSshKey()">Inject Key</button>
+          </div>
+        </div>
+
+        <div class="lxc-card">
+          <h3 style="margin-top:0;color:#ef4444;">Reinstall Container Operating System</h3>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <select id="reinstallTpl" style="padding:9px 12px;border-radius:8px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text-primary);">
+              <% (templates || []).forEach(t => { %>
+              <option value="<%= t.slug %>"><%= t.name %> (<%= t.slug %>)</option>
+              <% }) %>
+            </select>
+            <button class="btn btn-outline" style="color:#ef4444;" onclick="reinstallContainer()">Destroy Rootfs &amp; Reinstall OS</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE: Confined Rootfs File Manager -->
+      <div id="pane-files" class="lxc-pane">
+        <div class="lxc-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+            <div>Current Path: <code id="curFilePath">/</code></div>
+            <div style="display:flex;gap:8px;">
+              <button class="btn btn-outline" onclick="loadFiles('/')">Root (/)</button>
+              <button class="btn btn-primary" onclick="newFilePrompt()">+ New / Edit File</button>
+            </div>
+          </div>
+          <table class="lxc-table">
+            <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead>
+            <tbody id="filesBody"></tbody>
+          </table>
+          <div id="editorBox" style="display:none;margin-top:14px;">
+            <div style="font-size:12px;margin-bottom:6px;color:var(--text-secondary);">Editing: <code id="editTarget"></code></div>
+            <textarea id="editContent" rows="12" style="width:100%;font-family:monospace;font-size:12px;padding:10px;border-radius:8px;background:#09090f;color:#e5e7eb;border:1px solid var(--border-color);"></textarea>
+            <div style="margin-top:8px;display:flex;gap:8px;">
+              <button class="btn btn-primary" onclick="saveFileContent()">Save File</button>
+              <button class="btn btn-outline" onclick="document.getElementById('editorBox').style.display='none'">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANE: Snapshots & Backups -->
+      <div id="pane-snapshots" class="lxc-pane">
+        <div class="lxc-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h3 style="margin:0;color:var(--text-primary);">Container Snapshots</h3>
+            <button class="btn btn-primary" onclick="createSnap()">+ Take Snapshot</button>
+          </div>
+          <table class="lxc-table"><thead><tr><th>Name</th><th>Description</th><th>Created</th><th>Actions</th></tr></thead><tbody id="lxcSnapsBody"></tbody></table>
+        </div>
+        <div class="lxc-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h3 style="margin:0;color:var(--text-primary);">SHA-256 Archive Backups</h3>
+            <button class="btn btn-outline" onclick="createBkp()">+ Create Archive Backup</button>
+          </div>
+          <table class="lxc-table"><thead><tr><th>Name</th><th>Size</th><th>SHA-256</th><th>Created</th></tr></thead><tbody id="lxcBkpsBody"></tbody></table>
+        </div>
+      </div>
+
+      <!-- PANE: Processes & Logs -->
+      <div id="pane-processes" class="lxc-pane">
+        <div class="lxc-card">
+          <h3 style="margin-top:0;color:var(--text-primary);">Live Container Processes (<code>ps</code>)</h3>
+          <table class="lxc-table"><thead><tr><th>PID</th><th>User</th><th>CPU%</th><th>MEM%</th><th>Command</th></tr></thead><tbody id="procsBody"></tbody></table>
+        </div>
+        <div class="lxc-card">
+          <h3 style="margin-top:0;color:var(--text-primary);">Container Runtime Logs</h3>
+          <pre id="logsPre" style="padding:12px;background:rgba(0,0,0,0.3);border-radius:8px;max-height:300px;overflow-y:auto;font-size:12px;color:var(--text-primary);"></pre>
+        </div>
+      </div>
+
+      <!-- PANE: Sharing -->
+      <div id="pane-sharing" class="lxc-pane">
+        <div class="lxc-card">
+          <h3 style="margin-top:0;color:var(--text-primary);">Co-Owner / Team Access Sharing</h3>
+          <p style="font-size:13px;color:var(--text-muted);">Comma-separated HKVM User IDs allowed to view console and manage power state of this container:</p>
+          <div style="display:flex;gap:10px;max-width:420px;">
+            <input id="shareIdsInput" value="<%= (instance.sharedWith || []).join(',') %>" placeholder="e.g. 2, 5" style="flex:1;padding:9px;border-radius:8px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text-primary);">
+            <button class="btn btn-primary" onclick="saveSharing()">Save Sharing</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <%- include('../partials/admin/footer') %>
+  </div>
+</div>
+
+<script>
+const LXC_ID = <%= instance.refId %>;
+
+function switchPane(name, btn) {
+  document.querySelectorAll('.lxc-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.lxc-tab').forEach(b => b.classList.remove('active'));
+  document.getElementById('pane-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+async function refreshTelemetry() {
+  try {
+    const { telemetry: t } = await hkvmApi(`/api/v1/instances/lxc/${LXC_ID}/telemetry`);
+    document.getElementById('hdrStatus').textContent = t.status;
+    document.getElementById('stCpu').textContent = t.cpuPercent + '%';
+    document.getElementById('stRam').textContent = t.ramUsedMb + ' MB (' + t.ramPercent + '%)';
+    document.getElementById('stDisk').textContent = t.diskUsedGb + ' GB';
+    document.getElementById('stNet').textContent = `RX ${(t.netRxBytes/1048576).toFixed(1)} MB / TX ${(t.netTxBytes/1048576).toFixed(1)} MB`;
+  } catch (_e) {}
+}
+
+async function doLxcAction(action) {
+  try {
+    await hkvmApi(`/api/v1/instances/lxc/${LXC_ID}/action`, { method: 'POST', body: { action } });
+    hkvmToast('Action "' + action + '" executed');
+    refreshTelemetry();
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function resetPass() {
+  try {
+    const out = await hkvmApi(`/api/v1/lxc/${LXC_ID}/password`, {
+      method: 'POST',
+      body: { password: document.getElementById('newRootPass').value || undefined }
+    });
+    const pre = document.getElementById('passResult');
+    pre.style.display = 'block';
+    pre.textContent = 'New Root Password: ' + out.rootPassword;
+    hkvmToast('Root password updated');
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function addSshKey() {
+  try {
+    await hkvmApi(`/api/v1/lxc/${LXC_ID}/ssh-key`, {
+      method: 'POST',
+      body: { publicKey: document.getElementById('sshPubKey').value }
+    });
+    hkvmToast('SSH public key injected into /root/.ssh/authorized_keys');
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function reinstallContainer() {
+  if (!confirm('WARNING: All data inside this LXC container will be permanently erased and reinstalled. Continue?')) return;
+  try {
+    const out = await hkvmApi(`/api/v1/lxc/${LXC_ID}/reinstall`, {
+      method: 'POST',
+      body: { templateSlug: document.getElementById('reinstallTpl').value }
+    });
+    alert('Container reinstalled! New root password: ' + out.rootPassword);
+    refreshTelemetry();
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function loadFiles(subPath) {
+  try {
+    const data = await hkvmApi(`/api/v1/lxc/${LXC_ID}/files?path=${encodeURIComponent(subPath)}`);
+    document.getElementById('curFilePath').textContent = data.path;
+    document.getElementById('filesBody').innerHTML = data.entries.map(ent => `<tr>
+      <td>${ent.isDirectory ? '📁' : '📄'} <strong>${hkvmEsc(ent.name)}</strong></td>
+      <td>${ent.isDirectory ? 'Directory' : 'File'}</td>
+      <td>${ent.size} B</td>
+      <td>${hkvmEsc(ent.modifiedAt)}</td>
+      <td>
+        ${ent.isDirectory
+          ? `<button class="btn btn-outline" onclick="loadFiles('${hkvmEsc(ent.path)}')">Open</button>`
+          : `<button class="btn btn-outline" onclick="openEditor('${hkvmEsc(ent.path)}')">Edit</button>`}
+        <button class="btn btn-outline" style="color:#ef4444;" onclick="removeFile('${hkvmEsc(ent.path)}')">Delete</button>
+      </td>
+    </tr>`).join('');
+  } catch (e) {
+    document.getElementById('filesBody').innerHTML = `<tr><td colspan="5" style="color:var(--text-muted);">${hkvmEsc(e.message)}</td></tr>`;
+  }
+}
+
+async function openEditor(filePath) {
+  try {
+    const data = await hkvmApi(`/api/v1/lxc/${LXC_ID}/files/content?path=${encodeURIComponent(filePath)}`);
+    document.getElementById('editorBox').style.display = 'block';
+    document.getElementById('editTarget').textContent = filePath;
+    document.getElementById('editContent').value = data.content;
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+function newFilePrompt() {
+  const cur = document.getElementById('curFilePath').textContent;
+  const name = prompt('Enter file path inside container:', (cur === '/' ? '/' : cur + '/') + 'config.txt');
+  if (!name) return;
+  document.getElementById('editorBox').style.display = 'block';
+  document.getElementById('editTarget').textContent = name;
+  document.getElementById('editContent').value = '';
+}
+
+async function saveFileContent() {
+  const path = document.getElementById('editTarget').textContent;
+  try {
+    await hkvmApi(`/api/v1/lxc/${LXC_ID}/files/content`, {
+      method: 'POST',
+      body: { path, content: document.getElementById('editContent').value }
+    });
+    hkvmToast('Saved ' + path);
+    document.getElementById('editorBox').style.display = 'none';
+    loadFiles(document.getElementById('curFilePath').textContent);
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function removeFile(path) {
+  if (!confirm('Delete ' + path + '?')) return;
+  try {
+    await hkvmApi(`/api/v1/lxc/${LXC_ID}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+    loadFiles(document.getElementById('curFilePath').textContent);
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function loadSnapsAndBackups() {
+  const [sRes, bRes] = await Promise.all([
+    hkvmApi(`/api/v1/snapshots/lxc/${LXC_ID}`),
+    hkvmApi(`/api/v1/backups?engine=lxc&refId=${LXC_ID}`)
+  ]);
+  document.getElementById('lxcSnapsBody').innerHTML = sRes.snapshots.length
+    ? sRes.snapshots.map(s => `<tr><td>${hkvmEsc(s.snapshot_name)}</td><td>${hkvmEsc(s.description || '')}</td><td>${hkvmEsc(s.created_at)}</td>
+        <td><button class="btn btn-outline" onclick="revertLxcSnap(${s.id})">Restore</button> <button class="btn btn-outline" onclick="deleteLxcSnap(${s.id})">Delete</button></td></tr>`).join('')
+    : '<tr><td colspan="4" style="color:var(--text-muted);">No snapshots created.</td></tr>';
+  document.getElementById('lxcBkpsBody').innerHTML = bRes.backups.length
+    ? bRes.backups.map(b => `<tr><td>${hkvmEsc(b.backup_name)}</td><td>${(b.size_bytes/1048576).toFixed(2)} MB</td><td><code>${hkvmEsc((b.checksum_sha256||'').slice(0,16))}...</code></td><td>${hkvmEsc(b.created_at)}</td></tr>`).join('')
+    : '<tr><td colspan="4" style="color:var(--text-muted);">No backups created.</td></tr>';
+}
+
+async function createSnap() {
+  const desc = prompt('Snapshot note (optional):', 'Manual snapshot');
+  if (desc === null) return;
+  try {
+    await hkvmApi(`/api/v1/snapshots/lxc/${LXC_ID}`, { method: 'POST', body: { description: desc } });
+    loadSnapsAndBackups();
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function revertLxcSnap(snapId) {
+  if (!confirm('Revert container to snapshot #' + snapId + '?')) return;
+  try { await hkvmApi(`/api/v1/snapshots/lxc/${LXC_ID}/${snapId}/restore`, { method: 'POST' }); hkvmToast('Snapshot restored'); }
+  catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function deleteLxcSnap(snapId) {
+  await hkvmApi(`/api/v1/snapshots/lxc/${LXC_ID}/${snapId}`, { method: 'DELETE' });
+  loadSnapsAndBackups();
+}
+
+async function createBkp() {
+  try {
+    await hkvmApi('/api/v1/backups', { method: 'POST', body: { engine: 'lxc', refId: LXC_ID } });
+    hkvmToast('Backup archive created');
+    loadSnapsAndBackups();
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function loadProcsAndLogs() {
+  try {
+    const pRes = await hkvmApi(`/api/v1/lxc/${LXC_ID}/processes`);
+    document.getElementById('procsBody').innerHTML = pRes.processes.length
+      ? pRes.processes.map(p => `<tr><td>${hkvmEsc(p.pid)}</td><td>${hkvmEsc(p.user)}</td><td>${hkvmEsc(p.cpu)}</td><td>${hkvmEsc(p.mem)}</td><td><code>${hkvmEsc(p.command)}</code></td></tr>`).join('')
+      : '<tr><td colspan="5" style="color:var(--text-muted);">Container not running or process list empty.</td></tr>';
+  } catch (e) {
+    document.getElementById('procsBody').innerHTML = `<tr><td colspan="5" style="color:var(--text-muted);">${hkvmEsc(e.message)}</td></tr>`;
+  }
+  try {
+    const lRes = await hkvmApi(`/api/v1/lxc/${LXC_ID}/logs`);
+    document.getElementById('logsPre').textContent = lRes.logs || 'No container log entries recorded.';
+  } catch (_e) {}
+}
+
+async function saveSharing() {
+  const ids = document.getElementById('shareIdsInput').value.split(',').map(s => Number(s.trim())).filter(Boolean);
+  try {
+    await hkvmApi(`/api/v1/lxc/${LXC_ID}/sharing`, { method: 'PUT', body: { userIds: ids } });
+    hkvmToast('Sharing permissions updated');
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  refreshTelemetry();
+  setInterval(refreshTelemetry, 10000);
+});
+</script>
+</body>
+</html>

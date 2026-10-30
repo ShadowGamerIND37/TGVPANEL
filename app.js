@@ -49,15 +49,25 @@ function logError(component, vm_id, action, error) {
   }
 }
 
+const { getSecretBundle, encryptSecret, decryptSecret, isEncryptedSecret } = require('./lib/security/crypto-vault');
+const { verifyPasswordWithLegacySupport } = require('./lib/db/hvm-importer');
+const { securityHeadersAndCsrfMiddleware, verifyCsrfMiddleware, createUnifiedAuthMiddleware } = require('./lib/security/middleware');
+const { initializeUnifiedHkvmRuntime, attachUnifiedWebSockets } = require('./lib/context');
+const { createApiV1Router } = require('./lib/api/v1/router');
+const { createUnifiedWebRouter } = require('./lib/api/web-routes');
+
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ noServer: true });
 const PORT = process.env.PORT || 8080;
+let hkvmV3Context = null;
+let v3PrincipalMiddleware = null;
+let v3ApiRouter = null;
+let v3WebRouter = null;
 
-// For binary: use home directory or custom location for database
-// __dirname will be /snapshot/hkvm (read-only in binary), so use home directory
-const dbDir = process.env.HKVM_DATA_DIR || path.join(os.homedir(), '.hkvm');
-const dbPath = path.join(dbDir, 'hkvm.db');
+// Unified HKVM V3 SQLite store inside ./data/hkvm.db (overridable via HKVM_DATA_DIR / HKVM_DB_PATH)
+const dbDir = process.env.HKVM_DATA_DIR || path.join(__dirname, 'data');
+const dbPath = process.env.HKVM_DB_PATH || path.join(dbDir, 'hkvm.db');
 
 // Ensure database directory exists and is writable
 try {
@@ -319,15 +329,35 @@ const OS_TEMPLATES = {
 };
 
 // Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(session({
-  secret: 'hopingboyz-secret-key-change-in-production',
+
+const sessionParser = session({
+  secret: getSecretBundle().sessionSecret,
   resave: false,
-  saveUninitialized: true,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
-}));
+  saveUninitialized: false,
+  cookie: {
+    secure: false,
+    httpOnly: true,
+    sameSite: 'lax',
+    maxAge: 24 * 60 * 60 * 1000
+  }
+});
+app.use(sessionParser);
+app.use(securityHeadersAndCsrfMiddleware);
+
+app.use((req, res, next) => {
+  res.locals.user = req.session && req.session.userId
+    ? {
+        id: req.session.userId,
+        userId: req.session.userId,
+        username: req.session.username,
+        role: req.session.role
+      }
+    : null;
+  next();
+});
 
 // Initialize License Middleware
 licenses.initLicenseMiddleware(app);
@@ -335,6 +365,20 @@ licenses.initLicenseMiddleware(app);
 // Set EJS as view engine
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
+
+// HKVM V3 Unified Principal, REST API v1, and Unified Web Routes
+app.use((req, res, next) => {
+  if (v3PrincipalMiddleware) return v3PrincipalMiddleware(req, res, next);
+  next();
+});
+app.use('/api/v1', verifyCsrfMiddleware, (req, res, next) => {
+  if (v3ApiRouter) return v3ApiRouter(req, res, next);
+  res.status(503).json({ error: 'HKVM V3 runtime is initializing' });
+});
+app.use((req, res, next) => {
+  if (v3WebRouter) return v3WebRouter(req, res, next);
+  next();
+});
 
 // VM Process Manager (Global)
 const vmProcesses = new Map();
@@ -613,9 +657,39 @@ app.post('/api/login', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
     
-    if (!user || !bcrypt.compareSync(password, user.password)) {
+    const verdict = user
+      ? verifyPasswordWithLegacySupport(String(password || ''), user.password)
+      : { valid: false, needsRehash: false };
+
+    if (!user || !verdict.valid) {
       console.warn(`[Auth Error] Invalid credentials for username: ${username}`);
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    if (verdict.needsRehash) {
+      const upgradedHash = bcrypt.hashSync(String(password), 12);
+      db.run(
+        `UPDATE users SET password = ? WHERE id = ?`,
+        [upgradedHash, user.id],
+        (rehashErr) => {
+          if (rehashErr) console.error('[DB Error] Legacy password rehash failed:', rehashErr);
+        }
+      );
+    }
+
+    // Check if TOTP 2FA is enabled for this user
+    if (user.two_factor_enabled && user.two_factor_secret_enc) {
+      req.session.pending2faUser = {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        email: user.email
+      };
+      return res.json({
+        success: true,
+        requires2FA: true,
+        redirectTo: '/login/2fa'
+      });
     }
     
     // Update last login
@@ -626,6 +700,18 @@ app.post('/api/login', (req, res) => {
     req.session.userId = user.id;
     req.session.username = user.username;
     req.session.role = user.role;
+    req.session.user = { id: user.id, username: user.username, role: user.role };
+    if (hkvmV3Context) {
+      hkvmV3Context.db
+        .logActivity({
+          userId: user.id,
+          action: 'auth.login',
+          resourceType: 'user',
+          resourceId: user.id,
+          ipAddress: req.ip
+        })
+        .catch(() => undefined);
+    }
     console.log(`[Auth Success] User ${user.id} (${user.username}) logged in with role: ${user.role}`);
     res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
   });
@@ -1417,7 +1503,7 @@ app.use((req, res, next) => {
   } : null;
   
   // Panel version from .env
-  res.locals.panelVersion = process.env.PANEL_VERSION || 'V2.0';
+  res.locals.panelVersion = process.env.PANEL_VERSION || 'V3.0';
   
   // Set default logo and site name
   res.locals.siteLogo = process.env.DEFAULT_LOGO_URL || '/images/logo.png';
@@ -1914,6 +2000,11 @@ app.get('/api/vms/:vm_id', checkAuth, (req, res) => {
   
   db.get(query, params, (err, vm) => {
     if (err || !vm) return res.status(404).json({ error: 'VM not found or access denied' });
+    if (vm.password && isEncryptedSecret(vm.password)) {
+      try {
+        vm.password = decryptSecret(vm.password);
+      } catch (e) {}
+    }
     res.json(vm);
   });
 });
@@ -1991,6 +2082,9 @@ app.post('/api/vms/:vm_id/console/command', checkAuth, async (req, res) => {
 app.get('/api/vms/:vm_id/edit', checkAuth, (req, res) => {
   db.get(`SELECT * FROM vms WHERE vm_id = ?`, [req.params.vm_id], (err, vm) => {
     if (err || !vm) return res.status(404).json({ error: 'VM not found' });
+    if (req.session.role !== 'admin' && vm.owner_id !== req.session.userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     
     // Return editable fields
     res.json({
@@ -2181,7 +2275,7 @@ app.put('/api/vms/:vm_id/edit', checkAuth, (req, res) => {
     if (cpu_model) { updates.push('cpu_model = ?'); values.push(cpu_model); }
     if (disk_size) { updates.push('disk_size = ?'); values.push(disk_size); }
     if (username) { updates.push('username = ?'); values.push(username); }
-    if (password) { updates.push('password = ?'); values.push(password); }
+    if (password) { updates.push('password = ?'); values.push(encryptSecret(String(password))); }
     if (enable_acpi !== undefined) { updates.push('enable_acpi = ?'); values.push(enable_acpi ? 1 : 0); }
     if (enable_kvm !== undefined) { updates.push('enable_kvm = ?'); values.push(enable_kvm ? 1 : 0); }
     if (extra_args !== undefined) { updates.push('extra_args = ?'); values.push(extra_args || ''); }
@@ -2286,7 +2380,11 @@ app.get('/api/vms/:vm_id/stats', checkAuth, async (req, res) => {
   try {
     db.get(`SELECT * FROM vms WHERE vm_id = ?`, [req.params.vm_id], async (err, vm) => {
       if (err || !vm) return res.status(404).json({ error: 'VM not found' });
+      if (req.session.role !== 'admin' && vm.owner_id !== req.session.userId) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
 
+      const activePid = vmProcesses.get(vm.vm_id) || vm.pid || null;
       const stats = {
         vm_id: vm.vm_id,
         vm_name: vm.vm_name,
@@ -2298,30 +2396,20 @@ app.get('/api/vms/:vm_id/stats', checkAuth, async (req, res) => {
         cpu_usage: 0,
         memory_usage: 0,
         disk_usage: 'N/A',
-        pid: vmProcesses.get(vm.vm_id) || null
+        pid: activePid
       };
 
-      if (vm.status === 'running' && vmProcesses.has(vm.vm_id)) {
-        const pidFile = path.join(VM_DIR, `vm-${vm.vm_id}.pid`);
+      if (hkvmV3Context) {
         try {
-          if (fs.existsSync(pidFile)) {
-            const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
-            const { stdout } = await execPromise(`ps -p ${pid} -o %cpu,%mem,etime 2>nul || echo "0 0 0:00"`, { shell: 'cmd' });
-            const lines = stdout.trim().split('\n');
-            if (lines.length > 0) {
-              const data = lines[0].trim().split(/\s+/);
-              stats.cpu_usage = parseFloat(data[0]) || 0;
-              stats.memory_usage = parseFloat(data[1]) || 0;
-            }
-          }
-        } catch (e) {
-          // Silent fail
-        }
-
-        if (fs.existsSync(vm.disk_file)) {
-          const size = fs.statSync(vm.disk_file).size / (1024 * 1024 * 1024);
-          stats.disk_usage = size.toFixed(2) + ' GB';
-        }
+          const tel = await hkvmV3Context.kvmAdapter.getTelemetry(vm.vm_id);
+          stats.cpu_usage = tel.cpuPercent;
+          stats.memory_usage = tel.ramPercent;
+          stats.disk_usage = `${tel.diskUsedGb} GB`;
+          stats.pid = tel.pid || activePid;
+        } catch (e) {}
+      } else if (vm.disk_file && fs.existsSync(vm.disk_file)) {
+        const size = fs.statSync(vm.disk_file).size / (1024 * 1024 * 1024);
+        stats.disk_usage = size.toFixed(2) + ' GB';
       }
 
       res.json(stats);
@@ -2699,7 +2787,7 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       vm_name, templateName, os_template || (isCloudInit ? 'cloud-init' : 'iso-installer'), hostname, 
-      username, password, memory, cpuCount, sockets, cores, threads, cpuModelToUse, custom_cpu_name || null,
+      username, password ? encryptSecret(String(password)) : '', memory, cpuCount, sockets, cores, threads, cpuModelToUse, custom_cpu_name || null,
       machine_type || 'pc', board_name || 'Main-Board', product_name || 'Virtual Machine', custom_smbios_manufacturer || 'QEMU',
       diskSizeVal, '', '', '',
       'stopped', 0, 'localhost',
@@ -2961,7 +3049,9 @@ app.post('/api/vms/:vm_id/start', checkAuth, async (req, res) => {
         const result = await startQemuVM(vm);
         if (result.success) {
           vmProcesses.set(vm.vm_id, result.pid);
-          db.run(`UPDATE vms SET status = 'running', uptime = 0 WHERE vm_id = ?`, [vm.vm_id]);
+          db.run(`UPDATE vms SET status = 'running', pid = ?, uptime = 0 WHERE vm_id = ?`, [result.pid, vm.vm_id], () => {
+            if (hkvmV3Context) hkvmV3Context.kvmAdapter.syncRegistryRow(vm.vm_id).catch(() => undefined);
+          });
           logVMAction(vm.vm_id, 'start', 'running', `VM started successfully`);
           console.log(`[API Success] VM ${vm.vm_id} started successfully`);
           res.json({ success: true, message: `VM ${vm.vm_name} (ID:${vm.vm_id}) started`, vm_id: vm.vm_id });
@@ -3028,7 +3118,9 @@ app.post('/api/vms/:vm_id/stop', checkAuth, (req, res) => {
 
       vmProcesses.delete(vm.vm_id);
       qemuStdins.delete(vm.vm_id);
-      db.run(`UPDATE vms SET status = 'stopped' WHERE vm_id = ?`, [vm.vm_id]);
+      db.run(`UPDATE vms SET status = 'stopped', pid = NULL WHERE vm_id = ?`, [vm.vm_id], () => {
+        if (hkvmV3Context) hkvmV3Context.kvmAdapter.syncRegistryRow(vm.vm_id).catch(() => undefined);
+      });
       logVMAction(vm.vm_id, 'stop', 'stopped', `VM stopped`);
       console.log(`[API Success] VM ${vm.vm_id} stopped successfully`);
       res.json({ success: true, message: `VM ${vm.vm_name} (ID:${vm.vm_id}) stopped` });
@@ -3090,6 +3182,9 @@ app.post('/api/vms/:vm_id/restart', checkAuth, async (req, res) => {
 app.delete('/api/vms/:vm_id', checkAuth, (req, res) => {
   db.get(`SELECT * FROM vms WHERE vm_id = ?`, [req.params.vm_id], (err, vm) => {
     if (err || !vm) return res.status(404).json({ error: 'VM not found' });
+    if (req.session.role !== 'admin' && vm.owner_id !== req.session.userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
     try {
       const pidFile = path.join(VM_DIR, `vm-${vm.vm_id}.pid`);
@@ -3100,13 +3195,15 @@ app.delete('/api/vms/:vm_id', checkAuth, (req, res) => {
         } catch (e) {}
       }
 
-      if (fs.existsSync(vm.img_file)) fs.unlinkSync(vm.img_file);
-      if (fs.existsSync(vm.seed_file)) fs.unlinkSync(vm.seed_file);
-      if (fs.existsSync(vm.disk_file)) fs.unlinkSync(vm.disk_file);
+      if (vm.img_file && fs.existsSync(vm.img_file)) fs.unlinkSync(vm.img_file);
+      if (vm.seed_file && fs.existsSync(vm.seed_file)) fs.unlinkSync(vm.seed_file);
+      if (vm.disk_file && fs.existsSync(vm.disk_file)) fs.unlinkSync(vm.disk_file);
 
       vmProcesses.delete(vm.vm_id);
       qemuStdins.delete(vm.vm_id);
-      db.run(`DELETE FROM vms WHERE vm_id = ?`, [vm.vm_id]);
+      db.run(`DELETE FROM vms WHERE vm_id = ?`, [vm.vm_id], () => {
+        if (hkvmV3Context) hkvmV3Context.kvmAdapter.syncRegistryRow(vm.vm_id).catch(() => undefined);
+      });
       db.run(`DELETE FROM vm_logs WHERE vm_id = ?`, [vm.vm_id]);
       
       logVMAction(vm.vm_id, 'delete', 'deleted', `VM ${vm.vm_name} deleted`);
@@ -3119,14 +3216,20 @@ app.delete('/api/vms/:vm_id', checkAuth, (req, res) => {
 
 // VM LOGS (Using VM ID)
 app.get('/api/vms/:vm_id/logs', checkAuth, (req, res) => {
-  db.all(
-    `SELECT * FROM vm_logs WHERE vm_id = ? ORDER BY timestamp DESC LIMIT 50`,
-    [req.params.vm_id],
-    (err, logs) => {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json(logs || []);
+  db.get(`SELECT owner_id FROM vms WHERE vm_id = ?`, [req.params.vm_id], (err, vm) => {
+    if (err || !vm) return res.status(404).json({ error: 'VM not found' });
+    if (req.session.role !== 'admin' && vm.owner_id !== req.session.userId) {
+      return res.status(403).json({ error: 'Access denied' });
     }
-  );
+    db.all(
+      `SELECT * FROM vm_logs WHERE vm_id = ? ORDER BY timestamp DESC LIMIT 50`,
+      [req.params.vm_id],
+      (err2, logs) => {
+        if (err2) return res.status(500).json({ error: err2.message });
+        res.json(logs || []);
+      }
+    );
+  });
 });
 
 // VM SNAPSHOTS (Using VM ID)
@@ -3276,7 +3379,7 @@ app.get('/api/vms/:vm_id/iso/status', checkAuth, async (req, res) => {
   }
 });
 
-app.post('/api/vms/:vm_id/snapshots', checkAuth, (req, res) => {
+app.post('/api/vms/:vm_id/snapshots', checkAuth, async (req, res) => {
   const userId = req.session.userId;
   const { snapshot_name, description } = req.body;
   
@@ -3289,18 +3392,20 @@ app.post('/api/vms/:vm_id/snapshots', checkAuth, (req, res) => {
     params.push(userId);
   }
   
-  db.get(query, params, (err, vm) => {
+  db.get(query, params, async (err, vm) => {
     if (err || !vm) return res.status(404).json({ error: 'VM not found or access denied' });
-    
-    db.run(
-      `INSERT INTO vm_snapshots (vm_id, snapshot_name, size_gb, description) VALUES (?, ?, 0, ?)`,
-      [req.params.vm_id, snapshot_name, description],
-      function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        logVMAction(req.params.vm_id, 'snapshot', 'completed', `Snapshot ${snapshot_name} created`);
-        res.json({ success: true, snapshot_id: this.lastID });
-      }
-    );
+    if (!hkvmV3Context) return res.status(503).json({ error: 'HKVM V3 runtime initializing' });
+    try {
+      const snap = await hkvmV3Context.kvmAdapter.createQcow2Snapshot(
+        Number(req.params.vm_id),
+        String(snapshot_name || ''),
+        String(description || '')
+      );
+      logVMAction(req.params.vm_id, 'snapshot', 'completed', `Snapshot ${snap.name} created`);
+      res.json({ success: true, snapshot_id: snap.id });
+    } catch (snapErr) {
+      res.status(400).json({ error: snapErr.message });
+    }
   });
 });
 
@@ -4828,24 +4933,18 @@ wss.on('connection', (ws, req) => {
   }
   vmConsoles.get(vmId).push(ws);
 
-  // Handle input from terminal
+  // Handle input from terminal (route directly to QEMU serial stdin when running)
   ws.on('message', (message) => {
     try {
       const msg = JSON.parse(message);
       if (msg.type === 'input' && msg.data) {
-        // Append to log file
-        fs.appendFileSync(logFile, msg.data);
-        
-        // Broadcast to other clients
-        if (vmConsoles.has(vmId)) {
-          vmConsoles.get(vmId).forEach(client => {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify({ type: 'output', data: msg.data }));
-            }
-          });
+        const numericVmId = Number(vmId);
+        const qemuStdin = qemuStdins.get(numericVmId);
+        if (qemuStdin && !qemuStdin.destroyed && qemuStdin.writable) {
+          qemuStdin.write(msg.data);
+        } else {
+          ws.send(JSON.stringify({ type: 'output', data: '\x1b[33m[VM serial stdin is not active — start the VM first]\x1b[0m\r\n' }));
         }
-        
-        console.log(`[Console-${vmId}] Input: ${msg.data.length} bytes`);
       }
     } catch (e) {
       console.error(`[Console-${vmId}] Message parse error:`, e.message);
@@ -4875,38 +4974,165 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-server.listen(PORT, async () => {
-  try {
-    // License system initialization
-    console.log('[License] License system ready');
-  } catch (error) {
-    console.error('[License] Init error (non-fatal):', error.message);
+// Authenticated WebSocket Upgrade Multiplexer for KVM (/console/:vmId, /ssh-terminal)
+// Note: /ws/lxc/* and /ws/nodes/* are handled by attachUnifiedWebSockets()
+server.on('upgrade', (req, socket, head) => {
+  const urlPath = (req.url || '').split('?')[0];
+  if (urlPath.startsWith('/ws/')) {
+    return;
   }
 
-  // Fix any VMs with invalid CPU models on startup
-  const validCpuModels = Object.keys(CPU_MODELS);
-  db.all(`SELECT vm_id, cpu_model FROM vms WHERE cpu_model NOT IN (${validCpuModels.map(() => '?').join(',')})`, validCpuModels, (err, vms) => {
-    if (!err && vms && vms.length > 0) {
-      console.log(`[Startup] Found ${vms.length} VMs with invalid CPU models, fixing...`);
-      vms.forEach(vm => {
-        console.warn(`[Startup] VM ${vm.vm_id}: CPU model '${vm.cpu_model}' is not available, resetting to 'host'`);
-        db.run(`UPDATE vms SET cpu_model = 'host' WHERE vm_id = ?`, [vm.vm_id]);
+  const dummyRes = new http.ServerResponse(req);
+  sessionParser(req, dummyRes, () => {
+    if (!req.session || !req.session.userId) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    if (urlPath.startsWith('/ssh-terminal')) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.authUser = { id: req.session.userId, role: req.session.role };
+        wss.emit('connection', ws, req);
       });
+      return;
+    }
+
+    let vmId = null;
+    if (urlPath.includes('/console/')) {
+      vmId = urlPath.split('/console/')[1];
+    } else {
+      vmId = urlPath.split('/').pop();
+    }
+
+    if (!vmId || isNaN(Number(vmId))) {
+      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    db.get(`SELECT owner_id, shared_with FROM vms WHERE vm_id = ?`, [Number(vmId)], (err, vm) => {
+      if (err || !vm) {
+        socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      let shared = [];
+      try { shared = JSON.parse(vm.shared_with || '[]'); } catch (e) {}
+      if (
+        req.session.role !== 'admin' &&
+        req.session.role !== 'subadmin' &&
+        vm.owner_id !== req.session.userId &&
+        !shared.includes(req.session.userId)
+      ) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.authUser = { id: req.session.userId, role: req.session.role };
+        wss.emit('connection', ws, req);
+      });
+    });
+  });
+});
+
+async function bootstrapHkvmV3() {
+  hkvmV3Context = await initializeUnifiedHkvmRuntime(db, dbPath, {
+    startVmById: async (vmId) => {
+      const vm = await hkvmV3Context.db.get(`SELECT * FROM vms WHERE vm_id = ?`, [vmId]);
+      if (!vm) throw new Error(`VM ${vmId} not found`);
+      if (vm.status === 'running') return;
+      const result = await startQemuVM(vm);
+      if (!result || !result.success) {
+        throw new Error('Failed to start QEMU process');
+      }
+      vmProcesses.set(vm.vm_id, result.pid);
+      await hkvmV3Context.db.run(
+        `UPDATE vms SET status = 'running', pid = ?, uptime = 0 WHERE vm_id = ?`,
+        [result.pid, vm.vm_id]
+      );
+      logVMAction(vm.vm_id, 'start', 'running', 'VM started via Unified Virtualization Manager');
+    },
+    stopVmById: async (vmId, force) => {
+      const pidFile = path.join(VM_DIR, `vm-${vmId}.pid`);
+      if (fs.existsSync(pidFile)) {
+        const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+        try {
+          process.kill(-pid, force ? 'SIGKILL' : 'SIGTERM');
+        } catch (e) {
+          try { process.kill(pid, force ? 'SIGKILL' : 'SIGTERM'); } catch (e2) {}
+        }
+      }
+      vmProcesses.delete(vmId);
+      qemuStdins.delete(vmId);
+      await hkvmV3Context.db.run(`UPDATE vms SET status = 'stopped', pid = NULL WHERE vm_id = ?`, [vmId]);
+      logVMAction(vmId, 'stop', 'stopped', 'VM stopped via Unified Virtualization Manager');
+    },
+    deleteVmById: async (vmId) => {
+      const vm = await hkvmV3Context.db.get(`SELECT * FROM vms WHERE vm_id = ?`, [vmId]);
+      if (!vm) return;
+      const pidFile = path.join(VM_DIR, `vm-${vmId}.pid`);
+      if (fs.existsSync(pidFile)) {
+        const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+        try { process.kill(pid, 'SIGKILL'); } catch (e) {}
+      }
+      if (vm.img_file && fs.existsSync(vm.img_file)) fs.unlinkSync(vm.img_file);
+      if (vm.seed_file && fs.existsSync(vm.seed_file)) fs.unlinkSync(vm.seed_file);
+      if (vm.disk_file && fs.existsSync(vm.disk_file)) fs.unlinkSync(vm.disk_file);
+      vmProcesses.delete(vmId);
+      qemuStdins.delete(vmId);
+      await hkvmV3Context.db.run(`DELETE FROM vms WHERE vm_id = ?`, [vmId]);
+      await hkvmV3Context.db.run(`DELETE FROM vm_logs WHERE vm_id = ?`, [vmId]);
     }
   });
 
-  console.log(`
+  v3PrincipalMiddleware = createUnifiedAuthMiddleware(hkvmV3Context.db);
+  v3ApiRouter = createApiV1Router(hkvmV3Context);
+  v3WebRouter = createUnifiedWebRouter(hkvmV3Context);
+  attachUnifiedWebSockets(server, sessionParser, hkvmV3Context);
+  return hkvmV3Context;
+}
+
+const hkvmReadyPromise = bootstrapHkvmV3()
+  .then(() => {
+    if (process.env.HKVM_NO_LISTEN !== '1') {
+      server.listen(Number(PORT), '0.0.0.0', async () => {
+        console.log('[License] Free Edition active');
+
+        const validCpuModels = Object.keys(CPU_MODELS);
+        db.all(
+          `SELECT vm_id, cpu_model FROM vms WHERE cpu_model NOT IN (${validCpuModels.map(() => '?').join(',')})`,
+          validCpuModels,
+          (err, vms) => {
+            if (!err && vms && vms.length > 0) {
+              vms.forEach((vm) => {
+                db.run(`UPDATE vms SET cpu_model = 'host' WHERE vm_id = ?`, [vm.vm_id]);
+              });
+            }
+          }
+        );
+
+        console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║           HOPINGBOYZ VM MANAGEMENT PANEL V1.0              ║
-║          Advanced VM Management & Control Panel            ║
+║         HKVM UNIFIED VIRTUALIZATION PANEL V3.0             ║
+║       QEMU/KVM Virtual Machines + LXC Containers           ║
 ╚════════════════════════════════════════════════════════════╝
 
-✓ Server: http://localhost:${PORT}
+✓ Server:   http://0.0.0.0:${PORT}
 ✓ Database: ${dbPath}
-✓ VM Directory: ${VM_DIR}
+✓ VM Dir:   ${VM_DIR}
+        `);
+      });
+    }
+  })
+  .catch((err) => {
+    console.error('[HKVM V3 Bootstrap Fatal Error]:', err);
+    process.exit(1);
+  });
 
-Open http://localhost:${PORT} to begin
-  `);
-});
+app.server = server;
+app.getHkvmV3Context = () => hkvmV3Context;
+app.hkvmReadyPromise = hkvmReadyPromise;
 
 module.exports = app;

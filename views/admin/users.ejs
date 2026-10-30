@@ -231,10 +231,13 @@ function renderUsers() {
               ${u.created_at ? new Date(u.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'}
             </td>
             <td>
-              <div style="display: flex; gap: 6px;">
+              <div style="display: flex; gap: 6px; flex-wrap: wrap;">
                 <a href="/admin/users/${u.id}/edit" class="btn btn-primary btn-sm" style="text-decoration: none; display: inline-flex; align-items: center; gap: 4px;">
                   <i class="fas fa-edit"></i> Edit
                 </a>
+                <button class="btn btn-secondary btn-sm" onclick="impersonateUser(${u.id}, '${escHtml(u.username)}')" title="Impersonate user session (audited)">
+                  <i class="fas fa-user-secret"></i> Impersonate
+                </button>
                 ${u.id === 1 ? '' : `<button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${escHtml(u.username)}')"><i class="fas fa-trash"></i> Delete</button>`}
               </div>
             </td>
@@ -249,6 +252,16 @@ function renderUsers() {
       loadUserAvatar(u.id);
     });
   }, 200);
+}
+
+async function impersonateUser(id, username) {
+  if (!confirm(`Impersonate user "${username}"? This action is recorded in the Admin Audit Log.`)) return;
+  try {
+    const d = await hkvmApi(`/api/v1/auth/impersonate/${id}`, { method: 'POST', body: '{}' });
+    window.location.href = d.redirectTo || '/instances';
+  } catch (e) {
+    hkvmToast(e.message, 'error');
+  }
 }
 
 async function deleteUser(id, username) {

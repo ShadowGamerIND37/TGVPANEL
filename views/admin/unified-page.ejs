@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title || 'HKVM Unified Admin' %></title>
+  <link rel="icon" href="<%= siteLogo %>" type="image/png">
+  <link rel="stylesheet" href="/css/admin.css">
+  <% if (section === 'node-console') { %>
+  <link rel="stylesheet" href="/vendor/xterm/xterm.css">
+  <script src="/vendor/xterm/xterm.js"></script>
+  <script src="/vendor/xterm/addon-fit.js"></script>
+  <% } %>
+  <style>
+    .v3-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .v3-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+    .v3-card h3 { margin: 0 0 12px 0; font-size: 16px; font-weight: 700; color: var(--text-primary); }
+    .v3-toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .v3-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+    .v3-field label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 5px; font-weight: 600; }
+    .v3-field input, .v3-field select, .v3-field textarea {
+      width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border-color);
+      background: var(--bg-secondary, rgba(255,255,255,0.03)); color: var(--text-primary); font-size: 13px;
+    }
+    .v3-table-wrap { overflow-x: auto; }
+    .v3-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .v3-table th, .v3-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border-subtle); color: var(--text-primary); }
+    .v3-table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+    .v3-pill { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+    .v3-pill.kvm { background: rgba(99,102,241,0.16); color: #818cf8; }
+    .v3-pill.lxc { background: rgba(6,182,212,0.16); color: #22d3ee; }
+    .v3-pill.running, .v3-pill.online, .v3-pill.completed { background: rgba(16,185,129,0.16); color: #10b981; }
+    .v3-pill.stopped, .v3-pill.offline { background: rgba(107,114,128,0.2); color: #9ca3af; }
+    .v3-pill.frozen, .v3-pill.suspended, .v3-pill.warning { background: rgba(245,158,11,0.18); color: #f59e0b; }
+    .v3-btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+    .v3-code { font-family: monospace; font-size: 12px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; white-space: pre-wrap; max-height: 360px; overflow-y: auto; color: var(--text-primary); }
+  </style>
+</head>
+<body>
+<div class="admin-wrapper">
+  <%- include('../partials/admin/sidebar') %>
+  <div class="admin-main">
+    <%- include('../partials/admin/header') %>
+    <div class="admin-content">
+
+      <!-- SECTION: UNIFIED INSTANCES -->
+      <% if (section === 'instances') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Unified Compute Instances</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Manage QEMU/KVM Virtual Machines and Native LXC Containers across all nodes.</p>
+        </div>
+        <div class="v3-btn-row">
+          <select id="instEngineFilter" onchange="loadUnifiedInstances()" style="padding:8px 12px;border-radius:8px;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-card);">
+            <option value="">All Engines (KVM + LXC)</option>
+            <option value="kvm">KVM Virtual Machines</option>
+            <option value="lxc">LXC Containers</option>
+          </select>
+          <input id="instSearch" oninput="loadUnifiedInstances()" placeholder="Filter name, IP, owner..." style="padding:8px 12px;border-radius:8px;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-card);">
+          <button class="btn btn-outline" onclick="bulkSelected('start')">Bulk Start</button>
+          <button class="btn btn-outline" onclick="bulkSelected('stop')">Bulk Stop</button>
+          <a href="/admin/instances/create" class="btn btn-primary">+ Create Instance</a>
+        </div>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="chkAll" onclick="document.querySelectorAll('.inst-chk').forEach(c=>c.checked=this.checked)"></th>
+              <th>Engine</th><th>Name</th><th>Owner</th><th>Node</th><th>Specs</th><th>IP</th><th>Status</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="instTableBody"><tr><td colspan="9">Loading instances...</td></tr></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: LXC CONTAINERS -->
+      <% if (section === 'lxc') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Native LXC Containers</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Create, resize, freeze, snapshot, and manage LXC VPS instances.</p>
+        </div>
+        <a href="/admin/instances/create?engine=lxc" class="btn btn-primary">+ Provision LXC Container</a>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead>
+            <tr><th>ID</th><th>Container</th><th>Template</th><th>Owner</th><th>Node</th><th>CPU / RAM / Disk</th><th>IP</th><th>Status</th><th>Capabilities &amp; Actions</th></tr>
+          </thead>
+          <tbody id="lxcTableBody"><tr><td colspan="9">Loading LXC containers...</td></tr></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: CREATE UNIFIED INSTANCE -->
+      <% if (section === 'instances-create') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Create Compute Instance</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Select native LXC Container provisioning here or switch to QEMU/KVM Virtual Machine wizard.</p>
+        </div>
+        <a href="/admin/vm-create" class="btn btn-outline">Open Dedicated QEMU/KVM Wizard &rarr;</a>
+      </div>
+      <% if (capabilities && !capabilities.lxcAvailable) { %>
+      <div class="v3-card" style="border-color:rgba(245,158,11,0.45);">
+        <strong style="color:#f59e0b;">Host Capability Notice:</strong>
+        <span style="font-size:13px;color:var(--text-secondary);">Native <code>lxc-create</code> / <code>lxc-start</code> binaries were not detected on localhost. Select a remote LXC-capable node, or uncheck "Provision immediately on host" to register metadata in controller mode.</span>
+      </div>
+      <% } %>
+      <div class="v3-card">
+        <h3>Provision Native LXC Container</h3>
+        <form onsubmit="submitCreateLxc(event)">
+          <div class="v3-form-grid">
+            <div class="v3-field"><label>Container Name</label><input id="cName" required placeholder="vps-prod-01"></div>
+            <div class="v3-field"><label>Hostname</label><input id="cHost" placeholder="vps-prod-01.local"></div>
+            <div class="v3-field"><label>Owner Account</label>
+              <select id="cUser"><% (users||[]).forEach(u => { %><option value="<%= u.id %>"><%= u.username %> (#<%= u.id %>)</option><% }) %></select>
+            </div>
+            <div class="v3-field"><label>Target Node</label>
+              <select id="cNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %> (<%= n.ip_address %>)</option><% }) %></select>
+            </div>
+            <div class="v3-field"><label>LXC OS Template</label>
+              <select id="cTpl"><% (templates||[]).forEach(t => { %><option value="<%= t.slug %>"><%= t.name %> (<%= t.slug %>)</option><% }) %></select>
+            </div>
+            <div class="v3-field"><label>vCPU Cores</label><input id="cCpu" type="number" min="1" max="128" value="2"></div>
+            <div class="v3-field"><label>Memory (MB)</label><input id="cRam" type="number" min="128" step="128" value="2048"></div>
+            <div class="v3-field"><label>Swap (MB)</label><input id="cSwap" type="number" min="0" step="128" value="512"></div>
+            <div class="v3-field"><label>Root Disk (GB)</label><input id="cDisk" type="number" min="2" value="20"></div>
+            <div class="v3-field"><label>Linux Bridge</label><input id="cBridge" value="lxcbr0"></div>
+            <div class="v3-field"><label>Static IPv4 (Optional)</label><input id="cIp" placeholder="10.0.3.50"></div>
+            <div class="v3-field"><label>Expiration Days (0 = Never)</label><input id="cExp" type="number" min="0" value="0"></div>
+          </div>
+          <div style="margin-top:14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
+            <label style="font-size:13px;color:var(--text-secondary);"><input type="checkbox" id="cNest" checked> Enable Container Nesting (Docker-ready)</label>
+            <label style="font-size:13px;color:var(--text-secondary);"><input type="checkbox" id="cProv" <%= (capabilities && !capabilities.lxcAvailable) ? '' : 'checked' %>> Provision immediately on host via LXC</label>
+            <button type="submit" class="btn btn-primary">Create LXC Instance</button>
+          </div>
+        </form>
+        <div id="createResultBox" style="display:none;margin-top:14px;" class="v3-code"></div>
+      </div>
+      <% } %>
+
+      <!-- SECTION: NODES -->
+      <% if (section === 'nodes') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Hypervisor &amp; Container Nodes</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Centralized health checks, circuit breakers, capability detection, and HMAC credential rotation.</p>
+        </div>
+      </div>
+      <div class="v3-card">
+        <h3>Register Remote Node Agent</h3>
+        <form onsubmit="submitAddNode(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Node Name</label><input id="nName" required placeholder="eu-fra-node-02"></div>
+          <div class="v3-field"><label>Hostname</label><input id="nHost" required placeholder="fra02.example.com"></div>
+          <div class="v3-field"><label>IPv4 Address</label><input id="nIp" required placeholder="203.0.113.10"></div>
+          <div class="v3-field"><label>Agent HTTPS URL</label><input id="nUrl" required placeholder="https://203.0.113.10:5055"></div>
+          <div class="v3-field"><label>Location</label><input id="nLoc" value="Frankfurt, DE"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button type="submit" class="btn btn-primary" style="width:100%;">Register Node</button></div>
+        </form>
+        <div id="nodeCredsOutput" class="v3-code" style="display:none;margin-top:12px;"></div>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Node</th><th>Endpoint</th><th>Capabilities</th><th>Circuit</th><th>Hardware</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="nodesBody"><tr><td colspan="8">Loading nodes...</td></tr></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: STORAGE -->
+      <% if (section === 'storage') { %>
+      <div class="v3-toolbar">
+        <h2 style="margin:0;color:var(--text-primary);">Storage Pools &amp; Capacity</h2>
+        <button class="btn btn-outline" onclick="loadStorage(true)">Sync Real Disk Usage (df)</button>
+      </div>
+      <div class="v3-card">
+        <h3>Add Storage Pool</h3>
+        <form onsubmit="submitAddPool(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Node</label><select id="spNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select></div>
+          <div class="v3-field"><label>Pool Name</label><input id="spName" required placeholder="nvme-pool-01"></div>
+          <div class="v3-field"><label>Backend Type</label>
+            <select id="spType"><option value="dir">Directory</option><option value="qcow2">QCOW2 Images</option><option value="raw">RAW Images</option><option value="lvm-thin">LVM Thin</option><option value="zfs">ZFS Dataset</option><option value="btrfs">Btrfs Subvolume</option></select>
+          </div>
+          <div class="v3-field"><label>Engine Scope</label><select id="spScope"><option value="both">KVM + LXC</option><option value="kvm">KVM Only</option><option value="lxc">LXC Only</option></select></div>
+          <div class="v3-field"><label>Host Path</label><input id="spPath" required placeholder="/var/lib/hkvm/nvme"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Pool</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>Pool</th><th>Node</th><th>Type</th><th>Scope</th><th>Path</th><th>Used / Total</th><th>Overcommit</th><th>Actions</th></tr></thead>
+          <tbody id="storageBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: ISOs -->
+      <% if (section === 'isos') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">KVM Bootable ISO Library</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Download or manage bootable installation ISOs for QEMU/KVM Virtual Machines.</p>
+        </div>
+        <a href="/admin/vm-create" class="btn btn-primary">Use ISO in VM Wizard</a>
+      </div>
+      <div class="v3-card">
+        <h3>Download Remote ISO URL</h3>
+        <form onsubmit="submitDownloadIso(event)" class="v3-form-grid">
+          <div class="v3-field" style="grid-column:span 2;"><label>Direct HTTPS ISO URL</label><input id="isoUrl" required placeholder="https://releases.ubuntu.com/24.04/ubuntu-24.04-live-server-amd64.iso"></div>
+          <div class="v3-field"><label>Filename</label><input id="isoName" required placeholder="ubuntu-24.04.iso"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Start Download</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>Filename</th><th>Size</th><th>Actions</th></tr></thead>
+          <tbody id="isosBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: LXC TEMPLATES -->
+      <% if (section === 'lxc-templates') { %>
+      <div class="v3-toolbar">
+        <h2 style="margin:0;color:var(--text-primary);">LXC OS Template Catalog</h2>
+      </div>
+      <div class="v3-card">
+        <h3>Register or Upload Custom LXC Template</h3>
+        <form onsubmit="submitLxcTemplate(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Slug</label><input id="ltSlug" required placeholder="ubuntu:24.04-custom"></div>
+          <div class="v3-field"><label>Display Name</label><input id="ltName" required placeholder="Ubuntu 24.04 Hardened"></div>
+          <div class="v3-field"><label>Distro</label><input id="ltDistro" required value="ubuntu"></div>
+          <div class="v3-field"><label>Release</label><input id="ltRelease" required value="noble"></div>
+          <div class="v3-field"><label>Rootfs Archive (.tar.xz/.tar.gz optional)</label><input id="ltFile" type="file"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Save Template</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>Slug</th><th>Name</th><th>Distro / Release</th><th>Arch</th><th>Min RAM / Disk</th><th>Source</th><th>Enabled</th><th>Actions</th></tr></thead>
+          <tbody id="lxcTplBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: NETWORKING -->
+      <% if (section === 'networking') { %>
+      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Linux Bridges, VLANs &amp; IP Pools</h2></div>
+      <div class="v3-card">
+        <h3>Create Network Pool</h3>
+        <form onsubmit="submitNetPool(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Node</label><select id="npNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select></div>
+          <div class="v3-field"><label>Pool Name</label><input id="npName" required placeholder="Public Bridge br0"></div>
+          <div class="v3-field"><label>Mode</label><select id="npType"><option value="bridge">Bridge</option><option value="nat">NAT</option><option value="routed">Routed</option><option value="vlan">VLAN</option></select></div>
+          <div class="v3-field"><label>Bridge Interface</label><input id="npBridge" required value="lxcbr0"></div>
+          <div class="v3-field"><label>IPv4 CIDR</label><input id="npCidr" placeholder="10.0.3.0/24"></div>
+          <div class="v3-field"><label>Gateway</label><input id="npGw" placeholder="10.0.3.1"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Network Pool</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Name</th><th>Node</th><th>Type</th><th>Bridge</th><th>IPv4 CIDR</th><th>Gateway</th><th>Add Pool IPs</th></tr></thead>
+          <tbody id="netPoolsBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: PORT FORWARDING -->
+      <% if (section === 'ports') { %>
+      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">NAT Port Forwarding &amp; User Quotas</h2></div>
+      <div class="v3-card">
+        <h3>User Port Quotas</h3>
+        <div class="v3-table-wrap">
+          <table class="v3-table">
+            <thead><tr><th>User</th><th>Used Ports</th><th>Allocated Quota</th><th>Update Quota</th></tr></thead>
+            <tbody>
+              <% (users||[]).forEach(u => { %>
+              <tr>
+                <td><%= u.username %> (#<%= u.id %>)</td>
+                <td><%= u.used_ports %></td>
+                <td><input type="number" id="pq_<%= u.id %>" value="<%= u.allocated_ports %>" min="0" style="width:90px;padding:5px;border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-color);"></td>
+                <td><button class="btn btn-outline" onclick="savePortQuota(<%= u.id %>)">Save</button></td>
+              </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <h3>Active NAT Port Forwards</h3>
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Owner</th><th>Instance</th><th>Host Port</th><th>Guest Target</th><th>Protocol</th><th>Description</th><th>Actions</th></tr></thead>
+          <tbody id="portsBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: FIREWALL -->
+      <% if (section === 'firewall') { %>
+      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Firewall Policy Rules</h2></div>
+      <div class="v3-card">
+        <h3>Add Firewall Rule</h3>
+        <form onsubmit="submitFwRule(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Node</label><select id="fwNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select></div>
+          <div class="v3-field"><label>Direction</label><select id="fwDir"><option value="in">Ingress (IN)</option><option value="out">Egress (OUT)</option></select></div>
+          <div class="v3-field"><label>Action</label><select id="fwAct"><option value="ACCEPT">ACCEPT</option><option value="DROP">DROP</option><option value="REJECT">REJECT</option></select></div>
+          <div class="v3-field"><label>Protocol</label><select id="fwProto"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option><option value="all">ALL</option></select></div>
+          <div class="v3-field"><label>Source CIDR (Optional)</label><input id="fwSrc" placeholder="0.0.0.0/0"></div>
+          <div class="v3-field"><label>Dest Port</label><input id="fwPort" placeholder="443 or 8000:8010"></div>
+          <div class="v3-field"><label>Comment</label><input id="fwComment" placeholder="Allow HTTPS"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Add Rule</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Node</th><th>Direction</th><th>Action</th><th>Proto</th><th>Source</th><th>Port</th><th>Comment</th><th>Delete</th></tr></thead>
+          <tbody id="fwBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: SNAPSHOTS -->
+      <% if (section === 'snapshots') { %>
+      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Unified Instance Snapshots (QCOW2 &amp; LXC)</h2></div>
+      <div class="v3-card">
+        <div class="v3-form-grid">
+          <div class="v3-field"><label>Select Instance</label><select id="snapInstSelect" onchange="loadAdminSnapshots()"></select></div>
+          <div class="v3-field"><label>Snapshot Name</label><input id="snapName" placeholder="pre_upgrade"></div>
+          <div class="v3-field"><label>Description</label><input id="snapDesc" placeholder="Before kernel update"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" onclick="createAdminSnapshot()" style="width:100%;">Create Snapshot</button></div>
+        </div>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Snapshot Name</th><th>Description</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody id="snapsBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: BACKUPS -->
+      <% if (section === 'backups') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Verified Backups &amp; Database Protection</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">SHA-256 verified archive backups for KVM &amp; LXC plus SQLite controller snapshots.</p>
+        </div>
+        <button class="btn btn-outline" onclick="triggerDbBackup()">Snapshot Controller SQLite DB</button>
+      </div>
+      <div class="v3-card">
+        <div class="v3-form-grid">
+          <div class="v3-field"><label>Select Instance</label><select id="bkpInstSelect"></select></div>
+          <div class="v3-field"><label>Backup Label</label><input id="bkpLabel" placeholder="weekly_full"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" onclick="createAdminBackup()" style="width:100%;">Create Archive Backup</button></div>
+        </div>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Type</th><th>Backup Name</th><th>Node</th><th>Size</th><th>SHA-256 Checksum</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody id="backupsBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: MIGRATIONS -->
+      <% if (section === 'migrations') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Offline Verified VPS Migration</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Safe 7-stage offline snapshot-transfer migration between LXC nodes with SHA-256 verification and automatic pre-commit rollback.</p>
+        </div>
+      </div>
+      <div class="v3-card">
+        <h3>Start Offline Snapshot-Transfer Migration</h3>
+        <form onsubmit="submitMigration(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Source LXC Container</label><select id="migLxcSelect" required></select></div>
+          <div class="v3-field"><label>Target Node</label><select id="migTargetNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %> (<%= n.ip_address %>)</option><% }) %></select></div>
+          <div class="v3-field"><label>Target Bridge</label><input id="migBridge" value="lxcbr0"></div>
+          <div class="v3-field"><label>Target IPv4 (Optional)</label><input id="migIp" placeholder="Keep existing"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Execute Verified Migration</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>Job #</th><th>Container</th><th>Mode</th><th>Source &rarr; Target</th><th>Status</th><th>Progress</th><th>SHA-256</th><th>Started</th></tr></thead>
+          <tbody id="migrationsBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: MONITORING -->
+      <% if (section === 'monitoring') { %>
+      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Live &amp; Historical Telemetry + Threshold Alerts</h2></div>
+      <div class="v3-card">
+        <h3>Node Historical Telemetry</h3>
+        <div style="margin-bottom:12px;">
+          <select id="monNodeSelect" onchange="loadMonitoring()" style="padding:8px 12px;border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-color);">
+            <% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %>
+          </select>
+          <button class="btn btn-outline" onclick="pollNodeNow()">Collect Live Sample Now</button>
+        </div>
+        <div id="monMetricsBox" class="v3-table-wrap"></div>
+      </div>
+      <div class="v3-card">
+        <h3>Resource Threshold Alert Rules</h3>
+        <form onsubmit="submitAlertRule(event)" class="v3-form-grid" style="margin-bottom:14px;">
+          <div class="v3-field"><label>Rule Name</label><input id="alName" required placeholder="High Host CPU"></div>
+          <div class="v3-field"><label>Metric</label><select id="alMetric"><option value="cpu_percent">CPU %</option><option value="ram_percent">RAM %</option><option value="disk_percent">Disk %</option></select></div>
+          <div class="v3-field"><label>Threshold (%)</label><input id="alThresh" type="number" value="90"></div>
+          <div class="v3-field"><label>Severity</label><select id="alSev"><option value="warning">Warning</option><option value="critical">Critical</option></select></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Alert Rule</button></div>
+        </form>
+        <table class="v3-table"><thead><tr><th>Name</th><th>Metric</th><th>Condition</th><th>Severity</th><th>Last Triggered</th><th>Delete</th></tr></thead><tbody id="alertsBody"></tbody></table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: API KEYS & WEBHOOKS -->
+      <% if (section === 'api-keys') { %>
+      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Scoped API Keys &amp; Signed Webhooks</h2></div>
+      <div class="v3-card">
+        <h3>Generate Scoped API Key (SHA-256 Hashed at Rest)</h3>
+        <form onsubmit="submitApiKey(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Key Name</label><input id="akName" required placeholder="CI/CD Automation"></div>
+          <div class="v3-field"><label>Scope</label><select id="akScope"><option value="read">Read-Only</option><option value="read,write">Read + Write</option><option value="read,write,admin">Full Admin</option></select></div>
+          <div class="v3-field"><label>Description</label><input id="akDesc" placeholder="Terraform / Billing integration"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Key</button></div>
+        </form>
+        <div id="akOnceBox" class="v3-code" style="display:none;margin-top:12px;"></div>
+        <div class="v3-table-wrap" style="margin-top:14px;">
+          <table class="v3-table"><thead><tr><th>Prefix</th><th>Name</th><th>Scopes</th><th>Last Used</th><th>Created</th><th>Revoke</th></tr></thead><tbody id="akBody"></tbody></table>
+        </div>
+      </div>
+      <div class="v3-card">
+        <h3>Outbound HMAC-SHA256 Webhooks</h3>
+        <form onsubmit="submitWebhook(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Name</label><input id="whName" required placeholder="Ops Pager"></div>
+          <div class="v3-field" style="grid-column:span 2;"><label>Endpoint URL</label><input id="whUrl" required placeholder="https://hooks.example.com/hkvm"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Register Webhook</button></div>
+        </form>
+        <div class="v3-table-wrap" style="margin-top:14px;">
+          <table class="v3-table"><thead><tr><th>Name</th><th>URL</th><th>Events</th><th>Last HTTP Status</th><th>Delete</th></tr></thead><tbody id="whBody"></tbody></table>
+        </div>
+      </div>
+      <% } %>
+
+      <!-- SECTION: AUDIT LOGS -->
+      <% if (section === 'audit-logs') { %>
+      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Security &amp; Activity Audit Trail</h2></div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Timestamp</th><th>Actor</th><th>Action</th><th>Resource</th><th>Details</th></tr></thead>
+          <tbody id="auditBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: NODE CONSOLE -->
+      <% if (section === 'node-console') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Audited Node Diagnostic &amp; Host Console</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Execute allowlisted diagnostic commands safely, or open an audited PTY host shell when enabled by policy.</p>
+        </div>
+      </div>
+      <div class="v3-card">
+        <h3>Safe Allowlisted Host Diagnostics</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <select id="diagNode" style="padding:8px 12px;border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-color);">
+            <% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %>
+          </select>
+          <% ['uptime','uname','memory','disk','network_links','bridges','lxc_list','lxc_checkconfig','qemu_version'].forEach(p => { %>
+          <button class="btn btn-outline" onclick="runDiag('<%= p %>')"><%= p %></button>
+          <% }) %>
+        </div>
+        <div id="diagOutput" class="v3-code">Select a diagnostic preset above to inspect real host state.</div>
+      </div>
+      <div class="v3-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <h3 style="margin:0;">Interactive Host PTY Shell (<%= interactiveEnabled ? 'ENABLED' : 'DISABLED BY POLICY' %>)</h3>
+          <% if (interactiveEnabled) { %>
+          <button class="btn btn-primary" onclick="connectNodeShell()">Connect Audited xterm.js Shell</button>
+          <% } %>
+        </div>
+        <% if (!interactiveEnabled) { %>
+        <p style="font-size:13px;color:var(--text-muted);margin:0;">Interactive root/host PTY shell is disabled by default for security (Part 12 &amp; Part 22). Set <code>HKVM_ENABLE_NODE_SHELL=true</code> in <code>.env</code> if interactive host shell access is required.</p>
+        <% } else { %>
+        <div id="nodeXtermBox" style="height:400px;background:#08080d;border-radius:8px;padding:6px;"></div>
+        <% } %>
+      </div>
+      <% } %>
+
+      <!-- SECTION: LICENSE -->
+      <% if (section === 'license') { %>
+      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">HKVM V3 Edition &amp; License</h2></div>
+      <div class="v3-card">
+        <h3>Unified Free &amp; Open Control Plane</h3>
+        <p style="font-size:14px;color:var(--text-secondary);">This HKVM V3 installation is permanently unlocked with multi-node QEMU/KVM + Native LXC support, offline verified migrations, RBAC, and REST API v1.</p>
+        <div class="v3-code"><%= JSON.stringify(licenseInfo, null, 2) %></div>
+      </div>
+      <% } %>
+
+    </div>
+    <%- include('../partials/admin/footer') %>
+  </div>
+</div>
+
+<script>
+const CURRENT_SECTION = '<%= section %>';
+
+async function instAction(engine, id, action) {
+  let reason;
+  if (action === 'suspend') {
+    reason = prompt('Enter suspension reason:', 'Administrative suspension');
+    if (reason === null) return;
+  }
+  if (action === 'delete' && !confirm('Permanently delete ' + engine.toUpperCase() + ' #' + id + '?')) return;
+  try {
+    await hkvmApi('/api/v1/instances/' + engine + '/' + id + '/action', {
+      method: 'POST',
+      body: { action, reason }
+    });
+    hkvmToast('Action "' + action + '" completed');
+    if (CURRENT_SECTION === 'instances') loadUnifiedInstances();
+    if (CURRENT_SECTION === 'lxc') loadLxcList();
+  } catch (e) {
+    hkvmToast(e.message, 'error');
+  }
+}
+
+async function loadUnifiedInstances() {
+  const engine = document.getElementById('instEngineFilter').value;
+  const search = document.getElementById('instSearch').value;
+  const q = new URLSearchParams();
+  if (engine) q.set('engine', engine);
+  if (search) q.set('search', search);
+  const data = await hkvmApi('/api/v1/instances?' + q.toString());
+  const tbody = document.getElementById('instTableBody');
+  if (!data.instances.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);">No instances match current filter.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.instances.map(i => {
+    const manageHref = i.engine === 'kvm' ? '/admin/vm/' + i.refId : '/lxc/' + i.refId;
+    const freezeBtn = i.capabilities.supportsFreeze
+      ? (i.status === 'frozen'
+          ? `<button class="btn btn-outline" onclick="instAction('lxc',${i.refId},'unfreeze')">Unfreeze</button>`
+          : `<button class="btn btn-outline" onclick="instAction('lxc',${i.refId},'freeze')">Freeze</button>`)
+      : '';
+    const suspBtn = i.suspended
+      ? `<button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'unsuspend')">Unsuspend</button>`
+      : `<button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'suspend')">Suspend</button>`;
+    return `<tr>
+      <td><input type="checkbox" class="inst-chk" value="${i.uid}"></td>
+      <td><span class="v3-pill ${i.engine}">${i.engine.toUpperCase()}</span></td>
+      <td><strong>${hkvmEsc(i.name)}</strong><div style="font-size:11px;color:var(--text-muted);">${hkvmEsc(i.osLabel)}</div></td>
+      <td>${hkvmEsc(i.ownerUsername || '#' + i.ownerId)}</td>
+      <td>${hkvmEsc(i.nodeName || '#' + i.nodeId)}</td>
+      <td>${i.cpuCores} vCPU • ${i.ramMb} MB • ${i.diskGb} GB</td>
+      <td><code>${hkvmEsc(i.primaryIp || '-')}</code></td>
+      <td><span class="v3-pill ${i.status}">${hkvmEsc(i.status)}</span></td>
+      <td class="v3-btn-row">
+        <a class="btn btn-primary" href="${manageHref}">Manage</a>
+        <button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'start')">Start</button>
+        <button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'stop')">Stop</button>
+        ${freezeBtn}
+        ${suspBtn}
+        <button class="btn btn-outline" style="color:#ef4444;" onclick="instAction('${i.engine}',${i.refId},'delete')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function bulkSelected(action) {
+  const targets = Array.from(document.querySelectorAll('.inst-chk:checked')).map(c => c.value);
+  if (!targets.length) return hkvmToast('Select at least one instance first', 'warning');
+  const res = await hkvmApi('/api/v1/instances/bulk-action', { method: 'POST', body: { action, targets } });
+  const okCount = res.results.filter(r => r.ok).length;
+  hkvmToast(`Bulk ${action}: ${okCount}/${targets.length} succeeded`);
+  loadUnifiedInstances();
+}
+
+async function loadLxcList() {
+  const data = await hkvmApi('/api/v1/instances?engine=lxc');
+  const tbody = document.getElementById('lxcTableBody');
+  if (!data.instances.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);">No LXC containers created yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.instances.map(i => `<tr>
+    <td>#${i.refId}</td>
+    <td><strong>${hkvmEsc(i.name)}</strong></td>
+    <td>${hkvmEsc(i.osLabel)}</td>
+    <td>${hkvmEsc(i.ownerUsername || '#' + i.ownerId)}</td>
+    <td>${hkvmEsc(i.nodeName || '#' + i.nodeId)}</td>
+    <td>${i.cpuCores}c / ${i.ramMb}MB / ${i.diskGb}GB</td>
+    <td><code>${hkvmEsc(i.primaryIp || 'DHCP')}</code></td>
+    <td><span class="v3-pill ${i.status}">${hkvmEsc(i.status)}</span></td>
+    <td class="v3-btn-row">
+      <a class="btn btn-primary" href="/lxc/${i.refId}">Manage</a>
+      <a class="btn btn-outline" href="/lxc/${i.refId}/console">PTY Console</a>
+      <button class="btn btn-outline" onclick="renewLxc(${i.refId})">+30d Renew</button>
+      <button class="btn btn-outline" style="color:#ef4444;" onclick="instAction('lxc',${i.refId},'delete')">Delete</button>
+    </td>
+  </tr>`).join('');
+}
+
+async function renewLxc(id) {
+  await hkvmApi('/api/v1/lxc/' + id + '/renew', { method: 'POST', body: { days: 30 } });
+  hkvmToast('Renewed expiration by +30 days');
+  loadLxcList();
+}
+
+async function submitCreateLxc(e) {
+  e.preventDefault();
+  try {
+    const out = await hkvmApi('/api/v1/lxc', {
+      method: 'POST',
+      body: {
+        containerName: document.getElementById('cName').value,
+        hostname: document.getElementById('cHost').value || undefined,
+        userId: Number(document.getElementById('cUser').value),
+        nodeId: Number(document.getElementById('cNode').value),
+        templateSlug: document.getElementById('cTpl').value,
+        cpuCores: Number(document.getElementById('cCpu').value),
+        ramMb: Number(document.getElementById('cRam').value),
+        swapMb: Number(document.getElementById('cSwap').value),
+        diskGb: Number(document.getElementById('cDisk').value),
+        bridge: document.getElementById('cBridge').value,
+        ipv4Address: document.getElementById('cIp').value || null,
+        expirationDays: Number(document.getElementById('cExp').value || 0),
+        nesting: document.getElementById('cNest').checked,
+        provisionOnHost: document.getElementById('cProv').checked
+      }
+    });
+    const box = document.getElementById('createResultBox');
+    box.style.display = 'block';
+    box.textContent =
+      'LXC Container Created: ' + out.instance.name + ' (#' + out.instance.refId + ')\n' +
+      'Generated Root Password (encrypted at rest, copy now): ' + out.generatedRootPassword + '\n' +
+      (out.warning ? 'Note: ' + out.warning : '');
+    hkvmToast('LXC instance created');
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  }
+}
+
+async function loadNodes() {
+  const data = await hkvmApi('/api/v1/nodes');
+  document.getElementById('nodesBody').innerHTML = data.nodes.map(n => `<tr>
+    <td>#${n.id}</td>
+    <td><strong>${hkvmEsc(n.name)}</strong> ${n.is_local ? '<span class="v3-pill lxc">LOCAL</span>' : ''}</td>
+    <td><code>${hkvmEsc(n.url)}</code></td>
+    <td>KVM:${n.kvm_available ? 'Yes' : 'No'} / LXC:${n.lxc_available ? 'Yes' : 'No'}</td>
+    <td>${hkvmEsc(n.circuit_state)}</td>
+    <td>${n.cpu_cores}c • ${n.ram_total_mb}MB • ${n.disk_total_gb}GB</td>
+    <td><span class="v3-pill ${n.status}">${hkvmEsc(n.status)}</span></td>
+    <td class="v3-btn-row">
+      <button class="btn btn-outline" onclick="checkNode(${n.id})">Check Health</button>
+      <button class="btn btn-outline" onclick="rotateNode(${n.id})">Rotate Keys</button>
+      ${!n.is_local ? `<button class="btn btn-outline" style="color:#ef4444;" onclick="delNode(${n.id})">Remove</button>` : ''}
+    </td>
+  </tr>`).join('');
+}
+
+async function submitAddNode(e) {
+  e.preventDefault();
+  try {
+    const out = await hkvmApi('/api/v1/nodes', {
+      method: 'POST',
+      body: {
+        name: document.getElementById('nName').value,
+        hostname: document.getElementById('nHost').value,
+        ipAddress: document.getElementById('nIp').value,
+        url: document.getElementById('nUrl').value,
+        location: document.getElementById('nLoc').value
+      }
+    });
+    const box = document.getElementById('nodeCredsOutput');
+    box.style.display = 'block';
+    box.textContent =
+      'Remote Node Bootstrap Credentials (save in remote node .env):\n' +
+      'HKVM_NODE_ID=' + out.node.id + '\n' +
+      'HKVM_NODE_API_KEY=' + out.bootstrapCredentials.apiKey + '\n' +
+      'HKVM_NODE_HMAC_SECRET=' + out.bootstrapCredentials.hmacSecret;
+    loadNodes();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function checkNode(id) {
+  try {
+    await hkvmApi('/api/v1/nodes/' + id + '/check', { method: 'POST' });
+    hkvmToast('Node health & telemetry updated');
+    loadNodes();
+  } catch (err) { hkvmToast(err.message, 'error'); loadNodes(); }
+}
+
+async function rotateNode(id) {
+  const out = await hkvmApi('/api/v1/nodes/' + id + '/rotate-credentials', { method: 'POST' });
+  const box = document.getElementById('nodeCredsOutput');
+  box.style.display = 'block';
+  box.textContent = 'Rotated Node #' + id + ' Credentials:\nAPI Key: ' + out.apiKey + '\nHMAC Secret: ' + out.hmacSecret;
+  hkvmToast('Node credentials rotated');
+}
+
+async function delNode(id) {
+  if (!confirm('Remove remote node #' + id + '?')) return;
+  try { await hkvmApi('/api/v1/nodes/' + id, { method: 'DELETE' }); loadNodes(); }
+  catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function loadStorage(sync) {
+  const data = await hkvmApi('/api/v1/storage/pools' + (sync ? '?sync=1' : ''));
+  document.getElementById('storageBody').innerHTML = data.pools.map(p => `<tr>
+    <td><strong>${hkvmEsc(p.name)}</strong></td>
+    <td>${hkvmEsc(p.node_name || '#' + p.node_id)}</td>
+    <td><span class="v3-pill kvm">${hkvmEsc(p.pool_type)}</span></td>
+    <td>${hkvmEsc(p.engine_scope)}</td>
+    <td><code>${hkvmEsc(p.path)}</code></td>
+    <td>${(p.used_bytes / 1073741824).toFixed(2)} / ${(p.total_bytes / 1073741824).toFixed(2)} GB</td>
+    <td>${p.overcommit_ratio}x</td>
+    <td><button class="btn btn-outline" style="color:#ef4444;" onclick="delPool(${p.id})">Delete</button></td>
+  </tr>`).join('');
+}
+
+async function submitAddPool(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi('/api/v1/storage/pools', {
+      method: 'POST',
+      body: {
+        nodeId: Number(document.getElementById('spNode').value),
+        name: document.getElementById('spName').value,
+        poolType: document.getElementById('spType').value,
+        engineScope: document.getElementById('spScope').value,
+        poolPath: document.getElementById('spPath').value
+      }
+    });
+    hkvmToast('Storage pool created');
+    loadStorage(true);
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function delPool(id) {
+  try { await hkvmApi('/api/v1/storage/pools/' + id, { method: 'DELETE' }); loadStorage(false); }
+  catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function loadIsos() {
+  const data = await hkvmApi('/api/isos');
+  const list = Array.isArray(data) ? data : (data.isos || []);
+  document.getElementById('isosBody').innerHTML = list.length
+    ? list.map(i => `<tr><td>${hkvmEsc(i.name || i)}</td><td>${i.size ? (i.size / 1048576).toFixed(1) + ' MB' : '-'}</td><td><button class="btn btn-outline" onclick="delIso('${hkvmEsc(i.name || i)}')">Delete</button></td></tr>`).join('')
+    : '<tr><td colspan="3" style="color:var(--text-muted);">No ISOs stored yet.</td></tr>';
+}
+
+async function submitDownloadIso(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi('/api/download-iso', {
+      method: 'POST',
+      body: { url: document.getElementById('isoUrl').value, filename: document.getElementById('isoName').value }
+    });
+    hkvmToast('ISO download initiated');
+    setTimeout(loadIsos, 1500);
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function delIso(name) {
+  if (!confirm('Delete ISO ' + name + '?')) return;
+  await hkvmApi('/api/isos/' + encodeURIComponent(name), { method: 'DELETE' });
+  loadIsos();
+}
+
+async function loadLxcTemplates() {
+  const data = await hkvmApi('/api/v1/lxc/templates?all=1');
+  document.getElementById('lxcTplBody').innerHTML = data.templates.map(t => `<tr>
+    <td><code>${hkvmEsc(t.slug)}</code></td>
+    <td><strong>${hkvmEsc(t.name)}</strong></td>
+    <td>${hkvmEsc(t.distro)} / ${hkvmEsc(t.release)}</td>
+    <td>${hkvmEsc(t.arch)}</td>
+    <td>${t.min_ram_mb} MB / ${t.min_disk_gb} GB</td>
+    <td>${t.is_custom ? '<span class="v3-pill kvm">Custom</span>' : 'Built-in'}</td>
+    <td>${t.enabled ? 'Enabled' : 'Disabled'}</td>
+    <td class="v3-btn-row">
+      <button class="btn btn-outline" onclick="toggleTpl(${t.id}, ${!t.enabled})">${t.enabled ? 'Disable' : 'Enable'}</button>
+    </td>
+  </tr>`).join('');
+}
+
+async function submitLxcTemplate(e) {
+  e.preventDefault();
+  const fd = new FormData();
+  fd.append('slug', document.getElementById('ltSlug').value);
+  fd.append('name', document.getElementById('ltName').value);
+  fd.append('distro', document.getElementById('ltDistro').value);
+  fd.append('release', document.getElementById('ltRelease').value);
+  const f = document.getElementById('ltFile').files[0];
+  if (f) fd.append('archive', f);
+  try {
+    await hkvmApi('/api/v1/lxc/templates', { method: 'POST', body: fd });
+    hkvmToast('LXC template saved');
+    loadLxcTemplates();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function toggleTpl(id, enabled) {
+  await hkvmApi('/api/v1/lxc/templates/' + id, { method: 'PATCH', body: { enabled } });
+  loadLxcTemplates();
+}
+
+async function loadNetworking() {
+  const data = await hkvmApi('/api/v1/network/pools');
+  document.getElementById('netPoolsBody').innerHTML = data.pools.length
+    ? data.pools.map(p => `<tr>
+        <td>#${p.id}</td><td><strong>${hkvmEsc(p.name)}</strong></td><td>${hkvmEsc(p.node_name || '#' + p.node_id)}</td>
+        <td>${hkvmEsc(p.network_type)}</td><td><code>${hkvmEsc(p.bridge_name)}</code></td>
+        <td>${hkvmEsc(p.cidr || '-')}</td><td>${hkvmEsc(p.gateway || '-')}</td>
+        <td><button class="btn btn-outline" onclick="promptAddIps(${p.id})">+ Add IPs</button></td>
+      </tr>`).join('')
+    : '<tr><td colspan="8" style="color:var(--text-muted);">No custom network pools created yet.</td></tr>';
+}
+
+async function submitNetPool(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi('/api/v1/network/pools', {
+      method: 'POST',
+      body: {
+        nodeId: Number(document.getElementById('npNode').value),
+        name: document.getElementById('npName').value,
+        networkType: document.getElementById('npType').value,
+        bridgeName: document.getElementById('npBridge').value,
+        cidr: document.getElementById('npCidr').value,
+        gateway: document.getElementById('npGw').value
+      }
+    });
+    hkvmToast('Network pool created');
+    loadNetworking();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function promptAddIps(poolId) {
+  const raw = prompt('Enter comma-separated IPv4 or IPv6 addresses to add:');
+  if (!raw) return;
+  const out = await hkvmApi('/api/v1/network/pools/' + poolId + '/ips', { method: 'POST', body: { ips: raw } });
+  hkvmToast('Added ' + out.added + ' IP address(es)');
+}
+
+async function loadPorts() {
+  const data = await hkvmApi('/api/v1/network/ports?all=1');
+  document.getElementById('portsBody').innerHTML = data.forwards.length
+    ? data.forwards.map(f => `<tr>
+        <td>#${f.id}</td><td>${hkvmEsc(f.username || '#' + f.user_id)}</td><td>${hkvmEsc(f.container_name)}</td>
+        <td><code>:${f.host_port}</code></td><td><code>${hkvmEsc(f.guest_ip || '')}:${f.guest_port}</code></td>
+        <td>${hkvmEsc(f.protocol)}</td><td>${hkvmEsc(f.description)}</td>
+        <td><button class="btn btn-outline" style="color:#ef4444;" onclick="delPort(${f.id})">Remove</button></td>
+      </tr>`).join('')
+    : '<tr><td colspan="8" style="color:var(--text-muted);">No NAT port forwards active.</td></tr>';
+}
+
+async function savePortQuota(uid) {
+  const val = Number(document.getElementById('pq_' + uid).value);
+  await hkvmApi('/api/v1/network/port-quota/' + uid, { method: 'PUT', body: { allocatedPorts: val } });
+  hkvmToast('Port quota updated');
+}
+
+async function delPort(id) {
+  await hkvmApi('/api/v1/network/ports/' + id, { method: 'DELETE' });
+  loadPorts();
+}
+
+async function loadFirewall() {
+  const data = await hkvmApi('/api/v1/network/firewall');
+  document.getElementById('fwBody').innerHTML = data.rules.length
+    ? data.rules.map(r => `<tr>
+        <td>#${r.id}</td><td>${hkvmEsc(r.node_name || '#' + r.node_id)}</td><td>${hkvmEsc(r.direction.toUpperCase())}</td>
+        <td><span class="v3-pill ${r.action === 'ACCEPT' ? 'running' : 'warning'}">${hkvmEsc(r.action)}</span></td>
+        <td>${hkvmEsc(r.protocol)}</td><td><code>${hkvmEsc(r.source_cidr || 'any')}</code></td>
+        <td><code>${hkvmEsc(r.dest_port || 'any')}</code></td><td>${hkvmEsc(r.comment || '')}</td>
+        <td><button class="btn btn-outline" onclick="delFw(${r.id})">Delete</button></td>
+      </tr>`).join('')
+    : '<tr><td colspan="9" style="color:var(--text-muted);">No firewall rules configured.</td></tr>';
+}
+
+async function submitFwRule(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi('/api/v1/network/firewall', {
+      method: 'POST',
+      body: {
+        nodeId: Number(document.getElementById('fwNode').value),
+        direction: document.getElementById('fwDir').value,
+        action: document.getElementById('fwAct').value,
+        protocol: document.getElementById('fwProto').value,
+        sourceCidr: document.getElementById('fwSrc').value || null,
+        destPort: document.getElementById('fwPort').value || null,
+        comment: document.getElementById('fwComment').value
+      }
+    });
+    loadFirewall();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function delFw(id) {
+  await hkvmApi('/api/v1/network/firewall/' + id, { method: 'DELETE' });
+  loadFirewall();
+}
+
+async function populateInstanceDropdown(selectId, engineFilter) {
+  const data = await hkvmApi('/api/v1/instances' + (engineFilter ? '?engine=' + engineFilter : ''));
+  const sel = document.getElementById(selectId);
+  if (!sel) return data.instances;
+  sel.innerHTML = data.instances.map(i => `<option value="${i.engine}:${i.refId}">[${i.engine.toUpperCase()}] ${hkvmEsc(i.name)} (#${i.refId})</option>`).join('');
+  return data.instances;
+}
+
+async function loadAdminSnapshots() {
+  const val = document.getElementById('snapInstSelect').value;
+  if (!val) { document.getElementById('snapsBody').innerHTML = '<tr><td colspan="5">Create an instance first.</td></tr>'; return; }
+  const [engine, id] = val.split(':');
+  const data = await hkvmApi('/api/v1/snapshots/' + engine + '/' + id);
+  document.getElementById('snapsBody').innerHTML = data.snapshots.length
+    ? data.snapshots.map(s => `<tr>
+        <td>#${s.id}</td><td><strong>${hkvmEsc(s.snapshot_name)}</strong></td><td>${hkvmEsc(s.description || '')}</td><td>${hkvmEsc(s.created_at)}</td>
+        <td class="v3-btn-row">
+          <button class="btn btn-outline" onclick="restoreSnap('${engine}',${id},${s.id})">Restore</button>
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="delSnap('${engine}',${id},${s.id})">Delete</button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" style="color:var(--text-muted);">No snapshots for this instance.</td></tr>';
+}
+
+async function createAdminSnapshot() {
+  const val = document.getElementById('snapInstSelect').value;
+  if (!val) return;
+  const [engine, id] = val.split(':');
+  try {
+    await hkvmApi('/api/v1/snapshots/' + engine + '/' + id, {
+      method: 'POST',
+      body: { name: document.getElementById('snapName').value, description: document.getElementById('snapDesc').value }
+    });
+    hkvmToast('Snapshot created');
+    loadAdminSnapshots();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function restoreSnap(engine, id, snapId) {
+  if (!confirm('Revert instance to snapshot #' + snapId + '?')) return;
+  try { await hkvmApi(`/api/v1/snapshots/${engine}/${id}/${snapId}/restore`, { method: 'POST' }); hkvmToast('Snapshot restored'); }
+  catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function delSnap(engine, id, snapId) {
+  await hkvmApi(`/api/v1/snapshots/${engine}/${id}/${snapId}`, { method: 'DELETE' });
+  loadAdminSnapshots();
+}
+
+async function loadBackups() {
+  const data = await hkvmApi('/api/v1/backups');
+  document.getElementById('backupsBody').innerHTML = data.backups.length
+    ? data.backups.map(b => `<tr>
+        <td>#${b.id}</td><td><span class="v3-pill ${b.instance_type}">${b.instance_type.toUpperCase()} #${b.instance_ref_id}</span></td>
+        <td>${hkvmEsc(b.backup_name)}</td><td>${hkvmEsc(b.node_name || '#' + b.node_id)}</td>
+        <td>${(b.size_bytes / 1048576).toFixed(2)} MB</td><td><code style="font-size:11px;">${hkvmEsc((b.checksum_sha256 || '').slice(0, 16))}...</code></td>
+        <td>${hkvmEsc(b.created_at)}</td>
+        <td class="v3-btn-row">
+          <button class="btn btn-outline" onclick="verifyBackup(${b.id})">Verify SHA-256</button>
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="delBackup(${b.id})">Delete</button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="8" style="color:var(--text-muted);">No archive backups yet.</td></tr>';
+}
+
+async function createAdminBackup() {
+  const val = document.getElementById('bkpInstSelect').value;
+  if (!val) return;
+  const [engine, refId] = val.split(':');
+  try {
+    await hkvmApi('/api/v1/backups', {
+      method: 'POST',
+      body: { engine, refId: Number(refId), label: document.getElementById('bkpLabel').value || undefined }
+    });
+    hkvmToast('Archive backup created with SHA-256 checksum');
+    loadBackups();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function verifyBackup(id) {
+  const out = await hkvmApi('/api/v1/backups/' + id + '/verify', { method: 'POST' });
+  hkvmToast(out.valid ? 'SHA-256 integrity verified OK!' : 'Integrity mismatch!', out.valid ? 'success' : 'error');
+}
+
+async function delBackup(id) {
+  await hkvmApi('/api/v1/backups/' + id, { method: 'DELETE' });
+  loadBackups();
+}
+
+async function triggerDbBackup() {
+  const out = await hkvmApi('/api/v1/database/backup', { method: 'POST' });
+  hkvmToast('SQLite DB backed up: ' + out.backupPath);
+}
+
+async function loadMigrations() {
+  const data = await hkvmApi('/api/v1/migrations');
+  document.getElementById('migrationsBody').innerHTML = data.migrations.length
+    ? data.migrations.map(m => `<tr>
+        <td>#${m.id}</td><td><strong>${hkvmEsc(m.container_name)}</strong></td>
+        <td><code>${hkvmEsc(m.migration_mode)}</code></td>
+        <td>${hkvmEsc(m.source_node_name || '#' + m.source_node_id)} &rarr; ${hkvmEsc(m.target_node_name || '#' + m.target_node_id)}</td>
+        <td><span class="v3-pill ${m.status}">${hkvmEsc(m.status)}</span></td>
+        <td>${m.progress}%</td>
+        <td><code style="font-size:11px;">${hkvmEsc((m.checksum_sha256 || '-').slice(0, 14))}</code></td>
+        <td>${hkvmEsc(m.started_at)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="8" style="color:var(--text-muted);">No migration jobs recorded yet.</td></tr>';
+}
+
+async function submitMigration(e) {
+  e.preventDefault();
+  const val = document.getElementById('migLxcSelect').value;
+  if (!val) return hkvmToast('Select a source LXC container', 'warning');
+  const [, lxcId] = val.split(':');
+  try {
+    await hkvmApi('/api/v1/migrations', {
+      method: 'POST',
+      body: {
+        lxcId: Number(lxcId),
+        targetNodeId: Number(document.getElementById('migTargetNode').value),
+        targetBridge: document.getElementById('migBridge').value,
+        targetIpv4: document.getElementById('migIp').value || undefined
+      }
+    });
+    hkvmToast('Offline migration completed & verified');
+    loadMigrations();
+  } catch (err) { hkvmToast(err.message, 'error'); loadMigrations(); }
+}
+
+async function loadMonitoring() {
+  const nodeId = document.getElementById('monNodeSelect').value;
+  const [mData, aData] = await Promise.all([
+    hkvmApi('/api/v1/nodes/' + nodeId + '/metrics?hours=24'),
+    hkvmApi('/api/v1/monitoring/alerts')
+  ]);
+  const rows = mData.history.slice(-15).reverse();
+  document.getElementById('monMetricsBox').innerHTML = rows.length
+    ? `<table class="v3-table"><thead><tr><th>Recorded At</th><th>CPU %</th><th>Load (1m)</th><th>RAM Used</th><th>Disk Used</th></tr></thead><tbody>` +
+      rows.map(r => `<tr><td>${hkvmEsc(r.recorded_at)}</td><td>${r.cpu_percent}%</td><td>${r.load_avg_1}</td><td>${r.ram_used_mb} / ${r.ram_total_mb} MB</td><td>${r.disk_used_gb} / ${r.disk_total_gb} GB</td></tr>`).join('') +
+      `</tbody></table>`
+    : '<p style="color:var(--text-muted);font-size:13px;">Click "Collect Live Sample Now" to record an immediate telemetry sample.</p>';
+
+  document.getElementById('alertsBody').innerHTML = aData.rules.map(a => `<tr>
+    <td><strong>${hkvmEsc(a.name)}</strong></td><td>${hkvmEsc(a.metric)}</td>
+    <td>${hkvmEsc(a.operator)} ${a.threshold}%</td><td><span class="v3-pill warning">${hkvmEsc(a.severity)}</span></td>
+    <td>${hkvmEsc(a.last_triggered_at || 'Never')}</td>
+    <td><button class="btn btn-outline" onclick="delAlert(${a.id})">Delete</button></td>
+  </tr>`).join('');
+}
+
+async function pollNodeNow() {
+  const nodeId = document.getElementById('monNodeSelect').value;
+  await hkvmApi('/api/v1/nodes/' + nodeId + '/check', { method: 'POST' });
+  hkvmToast('Live sample collected');
+  loadMonitoring();
+}
+
+async function submitAlertRule(e) {
+  e.preventDefault();
+  await hkvmApi('/api/v1/monitoring/alerts', {
+    method: 'POST',
+    body: {
+      name: document.getElementById('alName').value,
+      metric: document.getElementById('alMetric').value,
+      threshold: Number(document.getElementById('alThresh').value),
+      severity: document.getElementById('alSev').value
+    }
+  });
+  loadMonitoring();
+}
+
+async function delAlert(id) {
+  await hkvmApi('/api/v1/monitoring/alerts/' + id, { method: 'DELETE' });
+  loadMonitoring();
+}
+
+async function loadApiKeysAndWebhooks() {
+  const [kData, wData] = await Promise.all([
+    hkvmApi('/api/v1/api-keys?all=1'),
+    hkvmApi('/api/v1/webhooks')
+  ]);
+  document.getElementById('akBody').innerHTML = kData.apiKeys.map(k => `<tr>
+    <td><code>${hkvmEsc(k.key_prefix)}...</code></td><td><strong>${hkvmEsc(k.name)}</strong></td>
+    <td><code>${hkvmEsc(k.permissions)}</code></td><td>${hkvmEsc(k.last_used_at || 'Never')}</td>
+    <td>${hkvmEsc(k.created_at)}</td><td><button class="btn btn-outline" onclick="delApiKey(${k.id})">Revoke</button></td>
+  </tr>`).join('');
+  document.getElementById('whBody').innerHTML = wData.webhooks.map(w => `<tr>
+    <td><strong>${hkvmEsc(w.name)}</strong></td><td><code>${hkvmEsc(w.url)}</code></td>
+    <td><code>${hkvmEsc(w.events)}</code></td><td>${w.last_status_code || '-'}</td>
+    <td><button class="btn btn-outline" onclick="delWebhook(${w.id})">Delete</button></td>
+  </tr>`).join('');
+}
+
+async function submitApiKey(e) {
+  e.preventDefault();
+  const out = await hkvmApi('/api/v1/api-keys', {
+    method: 'POST',
+    body: {
+      name: document.getElementById('akName').value,
+      permissions: document.getElementById('akScope').value.split(','),
+      description: document.getElementById('akDesc').value
+    }
+  });
+  const box = document.getElementById('akOnceBox');
+  box.style.display = 'block';
+  box.textContent = 'API Key Created (copy now — stored as SHA-256 hash only):\nBearer ' + out.rawApiKey;
+  loadApiKeysAndWebhooks();
+}
+
+async function delApiKey(id) {
+  await hkvmApi('/api/v1/api-keys/' + id, { method: 'DELETE' });
+  loadApiKeysAndWebhooks();
+}
+
+async function submitWebhook(e) {
+  e.preventDefault();
+  const out = await hkvmApi('/api/v1/webhooks', {
+    method: 'POST',
+    body: { name: document.getElementById('whName').value, url: document.getElementById('whUrl').value }
+  });
+  hkvmToast('Webhook registered (HMAC Secret: ' + out.signingSecret.slice(0, 10) + '...)');
+  loadApiKeysAndWebhooks();
+}
+
+async function delWebhook(id) {
+  await hkvmApi('/api/v1/webhooks/' + id, { method: 'DELETE' });
+  loadApiKeysAndWebhooks();
+}
+
+async function loadAuditLogs() {
+  const data = await hkvmApi('/api/v1/audit-logs?limit=150');
+  document.getElementById('auditBody').innerHTML = data.logs.map(l => `<tr>
+    <td>#${l.id}</td><td>${hkvmEsc(l.created_at)}</td><td>${hkvmEsc(l.username || 'System')}</td>
+    <td><code>${hkvmEsc(l.action)}</code></td><td>${hkvmEsc((l.resource_type || '') + ' ' + (l.resource_id || ''))}</td>
+    <td><code style="font-size:11px;">${hkvmEsc((l.details || '').slice(0, 120))}</code></td>
+  </tr>`).join('');
+}
+
+async function runDiag(preset) {
+  const nodeId = document.getElementById('diagNode').value;
+  const outEl = document.getElementById('diagOutput');
+  outEl.textContent = 'Running ' + preset + '...';
+  try {
+    const res = await hkvmApi('/api/v1/nodes/' + nodeId + '/diagnostics/' + preset, { method: 'POST' });
+    outEl.textContent = `[${res.executedAt}] ${res.description} (exit=${res.exitCode})\n\n${res.output}`;
+  } catch (err) { outEl.textContent = 'Error: ' + err.message; }
+}
+
+function connectNodeShell() {
+  const box = document.getElementById('nodeXtermBox');
+  box.innerHTML = '';
+  const term = new Terminal({ cursorBlink: true, fontSize: 13, theme: { background: '#08080d' } });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(box);
+  fitAddon.fit();
+  const nodeId = document.getElementById('diagNode').value;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/nodes/${nodeId}/shell?cols=${term.cols}&rows=${term.rows}`);
+  ws.onmessage = (ev) => {
+    try {
+      const m = JSON.parse(ev.data);
+      if (m.type === 'output') term.write(m.data);
+      if (m.type === 'error') term.writeln('\r\n\x1b[31m' + m.message + '\x1b[0m');
+    } catch { term.write(ev.data); }
+  };
+  term.onData(d => ws.readyState === 1 && ws.send(JSON.stringify({ type: 'input', data: d })));
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  if (CURRENT_SECTION === 'instances') loadUnifiedInstances();
+  if (CURRENT_SECTION === 'lxc') loadLxcList();
+  if (CURRENT_SECTION === 'nodes') loadNodes();
+  if (CURRENT_SECTION === 'storage') loadStorage(true);
+  if (CURRENT_SECTION === 'isos') loadIsos();
+  if (CURRENT_SECTION === 'lxc-templates') loadLxcTemplates();
+  if (CURRENT_SECTION === 'networking') loadNetworking();
+  if (CURRENT_SECTION === 'ports') loadPorts();
+  if (CURRENT_SECTION === 'firewall') loadFirewall();
+  if (CURRENT_SECTION === 'snapshots') { await populateInstanceDropdown('snapInstSelect'); loadAdminSnapshots(); }
+  if (CURRENT_SECTION === 'backups') { await populateInstanceDropdown('bkpInstSelect'); loadBackups(); }
+  if (CURRENT_SECTION === 'migrations') { await populateInstanceDropdown('migLxcSelect', 'lxc'); loadMigrations(); }
+  if (CURRENT_SECTION === 'monitoring') loadMonitoring();
+  if (CURRENT_SECTION === 'api-keys') loadApiKeysAndWebhooks();
+  if (CURRENT_SECTION === 'audit-logs') loadAuditLogs();
+});
+</script>
+</body>
+</html>

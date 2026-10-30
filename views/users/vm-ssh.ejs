@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/css/admin.css">
   
   <!-- xterm.js CSS -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <link rel="stylesheet" href="/vendor/xterm/xterm.css">
   
   <style>
     * { box-sizing: border-box; }
@@ -386,10 +386,9 @@
   </div>
 </div>
 
-<!-- xterm.js Library -->
-<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.7.0/lib/xterm-addon-web-links.min.js"></script>
+<!-- Local Bundled xterm.js Library -->
+<script src="/vendor/xterm/xterm.js"></script>
+<script src="/vendor/xterm/addon-fit.js"></script>
 
 <script>
 // ============= GLOBAL STATE =============
@@ -441,7 +440,9 @@ function initTerminal() {
   
   // Load add-ons
   term.loadAddon(fitAddon);
-  term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  if (typeof WebLinksAddon !== 'undefined') {
+    term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  }
   
   // Open terminal in container
   term.open(container);

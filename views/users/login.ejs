@@ -410,12 +410,17 @@ async function handleLogin(e) {
     const data = await res.json();
     
     if (res.ok && data.success) {
+      if (data.requires2FA && data.redirectTo) {
+        btn.innerHTML = '🔐 2FA Required — Redirecting...';
+        window.location.href = data.redirectTo;
+        return;
+      }
       btn.innerHTML = '✅ Success! Redirecting...';
       btn.style.background = 'var(--gradient-green)';
       
       setTimeout(() => {
-        window.location.href = '/dashboard';
-      }, 600);
+        window.location.href = data.user && data.user.role === 'admin' ? '/admin/dashboard' : '/dashboard';
+      }, 450);
     } else {
       card.classList.add('shake');
       setTimeout(() => card.classList.remove('shake'), 400);
