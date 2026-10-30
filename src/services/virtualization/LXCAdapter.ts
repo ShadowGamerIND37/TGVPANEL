@@ -55,6 +55,7 @@ export class LXCAdapter implements VirtualizationAdapter {
   private db: UnifiedDatabase;
   private nodeManager: NodeManager;
   private prevContainerCpu = new Map<number, { cpuSec: number; tsMs: number }>();
+  private inFlightPanelCreations = new Set<string>();
 
   constructor(db: UnifiedDatabase, nodeManager: NodeManager) {
     this.db = db;
@@ -226,6 +227,13 @@ export class LXCAdapter implements VirtualizationAdapter {
     warning?: string;
   }> {
     const safeName = SafeValidators.containerName(input.containerName);
+    const lockKey = safeName.toLowerCase();
+    if (this.inFlightPanelCreations.has(lockKey)) {
+      throw new Error(
+        `LXC container "${safeName}" is currently being provisioned (downloading OS template). Please wait for it to finish.`
+      );
+    }
+
     const existing = await this.db.get<{ id: number }>(
       `SELECT id FROM lxc_instances WHERE LOWER(container_name) = LOWER(?)`,
       [safeName]
@@ -242,163 +250,207 @@ export class LXCAdapter implements VirtualizationAdapter {
       throw new Error(`Node "${node.name}" is currently in maintenance mode.`);
     }
 
-    // Resolve template metadata from lxc_templates catalog
-    let distro = input.distro || 'ubuntu';
-    let release = input.release || '24.04';
-    let fallbackRelease: string | null = null;
-    let templateArchivePath: string | null = null;
-    let arch = input.arch || 'amd64';
-    let osTemplateLabel = input.templateSlug || `${distro}:${release}`;
-    let osFamily = 'debian';
+    this.inFlightPanelCreations.add(lockKey);
+    try {
+      // Resolve template metadata from lxc_templates catalog
+      let distro = input.distro || 'ubuntu';
+      let release = input.release || '24.04';
+      let fallbackRelease: string | null = null;
+      let templateArchivePath: string | null = null;
+      let arch = input.arch || 'amd64';
+      let osTemplateLabel = input.templateSlug || `${distro}:${release}`;
+      let osFamily = 'debian';
 
-    if (input.templateSlug) {
-      const tpl = await this.db.get<any>(
-        `SELECT * FROM lxc_templates WHERE slug = ? AND enabled = 1`,
-        [input.templateSlug]
-      );
-      if (tpl) {
-        distro = tpl.distro;
-        release = tpl.release;
-        fallbackRelease = tpl.fallback_alias || null;
-        templateArchivePath = tpl.file_path || tpl.local_path || null;
-        arch = tpl.arch || 'amd64';
-        osTemplateLabel = tpl.slug;
-        osFamily = tpl.family || 'debian';
-      }
-    }
-
-    const plainPassword = input.rootPassword?.trim() || generateStrongPassword(18);
-    const encryptedPass = encryptSecret(plainPassword);
-    const mac =
-      input.macAddress ||
-      `00:16:3e:${[0, 1, 2]
-        .map(() => Math.floor(Math.random() * 256).toString(16).padStart(2, '0'))
-        .join(':')}`;
-
-    const expDays = Math.max(0, Number(input.expirationDays || 0));
-    const expiresAt =
-      expDays > 0
-        ? new Date(Date.now() + expDays * 86_400_000).toISOString()
-        : null;
-
-    const spec: LxcCreateSpec = {
-      containerName: safeName,
-      hostname: input.hostname || safeName,
-      distro,
-      release,
-      fallbackRelease,
-      templateArchivePath,
-      arch,
-      cpuCores: Math.max(1, Number(input.cpuCores || 1)),
-      cpuShares: Number(input.cpuShares || 1024),
-      cpuLimitPercent: Number(input.cpuLimitPercent || 100),
-      cpuPinning: input.cpuPinning || null,
-      ramMb: Math.max(128, Number(input.ramMb || 1024)),
-      swapMb: Math.max(0, Number(input.swapMb ?? 512)),
-      diskGb: Math.max(2, Number(input.diskGb || 20)),
-      backingStore: input.backingStore || 'dir',
-      privileged: input.privileged !== false,
-      nesting: input.nesting !== false,
-      bridge: input.bridge || 'lxcbr0',
-      ipv4Address: input.ipv4Address || null,
-      ipv4Gateway: input.ipv4Gateway || null,
-      ipv6Address: input.ipv6Address || null,
-      macAddress: mac,
-      vlanId: input.vlanId || null,
-      rootPassword: plainPassword,
-      sshPublicKeys: input.sshPublicKeys || [],
-      autostart: Boolean(input.autostart),
-    };
-
-    let runtimeState = 'stopped';
-    let detectedIp = input.ipv4Address || null;
-    let hostProvisioned = false;
-    let warning: string | undefined;
-
-    if (input.provisionOnHost !== false) {
-      if (node.is_local) {
-        const info = await this.nodeManager.localRuntime.containerManager.createContainer(spec);
-        runtimeState = info.state === 'running' ? 'running' : 'stopped';
-        if (!detectedIp && info.ips.length > 0) detectedIp = info.ips[0];
-        if (info.startupWarning) warning = info.startupWarning;
-        hostProvisioned = true;
-      } else {
-        const info = await this.nodeManager.requestRemoteNode<LxcContainerRuntimeInfo>(
-          node.id,
-          'POST',
-          '/api/v1/containers',
-          spec,
-          600_000
+      if (input.templateSlug) {
+        const tpl = await this.db.get<any>(
+          `SELECT * FROM lxc_templates WHERE slug = ? AND enabled = 1`,
+          [input.templateSlug]
         );
-        runtimeState = info.state === 'running' ? 'running' : 'stopped';
-        if (!detectedIp && info.ips?.length > 0) detectedIp = info.ips[0];
-        if (info.startupWarning) warning = info.startupWarning;
-        hostProvisioned = true;
+        if (tpl) {
+          distro = tpl.distro;
+          release = tpl.release;
+          fallbackRelease = tpl.fallback_alias || null;
+          templateArchivePath = tpl.file_path || tpl.local_path || null;
+          arch = tpl.arch || 'amd64';
+          osTemplateLabel = tpl.slug;
+          osFamily = tpl.family || 'debian';
+        }
       }
-    } else {
-      warning = 'Registered in database without immediate host provisioning.';
-    }
 
-    const ins = await this.db.run(
-      `INSERT INTO lxc_instances (
-        user_id, node_id, container_name, hostname, os_template, os_family, arch,
-        cpu_cores, cpu_shares, cpu_limit_pct, cpu_pinning, ram_mb, swap_mb, disk_gb,
-        rootfs_storage_type, privileged, nesting, autostart, root_password_enc,
-        bridge, ip_address, gateway, ipv6_address, mac_address, vlan_id,
-        status, bandwidth_quota_gb, notes, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
-      [
-        input.userId,
-        node.id,
-        safeName,
-        spec.hostname,
-        osTemplateLabel,
-        osFamily,
+      const plainPassword = input.rootPassword?.trim() || generateStrongPassword(18);
+      const encryptedPass = encryptSecret(plainPassword);
+      const mac =
+        input.macAddress ||
+        `00:16:3e:${[0, 1, 2]
+          .map(() => Math.floor(Math.random() * 256).toString(16).padStart(2, '0'))
+          .join(':')}`;
+
+      const expDays = Math.max(0, Number(input.expirationDays || 0));
+      const expiresAt =
+        expDays > 0
+          ? new Date(Date.now() + expDays * 86_400_000).toISOString()
+          : null;
+
+      const spec: LxcCreateSpec = {
+        containerName: safeName,
+        hostname: input.hostname || safeName,
+        distro,
+        release,
+        fallbackRelease,
+        templateArchivePath,
         arch,
-        spec.cpuCores,
-        spec.cpuShares,
-        spec.cpuLimitPercent,
-        spec.cpuPinning,
-        spec.ramMb,
-        spec.swapMb,
-        spec.diskGb,
-        spec.backingStore,
-        spec.privileged ? 1 : 0,
-        spec.nesting ? 1 : 0,
-        spec.autostart ? 1 : 0,
-        encryptedPass,
-        spec.bridge,
-        detectedIp,
-        spec.ipv4Gateway,
-        spec.ipv6Address,
-        mac,
-        spec.vlanId,
-        runtimeState,
-        Number(input.bandwidthQuotaGb || 0),
-        input.notes || null,
-        expiresAt,
-        expDays,
-        input.autoSuspendEnabled !== false ? 1 : 0,
-      ]
-    );
+        cpuCores: Math.max(1, Number(input.cpuCores || 1)),
+        cpuShares: Number(input.cpuShares || 1024),
+        cpuLimitPercent: Number(input.cpuLimitPercent || 100),
+        cpuPinning: input.cpuPinning || null,
+        ramMb: Math.max(128, Number(input.ramMb || 1024)),
+        swapMb: Math.max(0, Number(input.swapMb ?? 512)),
+        diskGb: Math.max(2, Number(input.diskGb || 20)),
+        backingStore: input.backingStore || 'dir',
+        privileged: input.privileged !== false,
+        nesting: input.nesting !== false,
+        bridge: input.bridge || 'lxcbr0',
+        ipv4Address: input.ipv4Address || null,
+        ipv4Gateway: input.ipv4Gateway || null,
+        ipv6Address: input.ipv6Address || null,
+        macAddress: mac,
+        vlanId: input.vlanId || null,
+        rootPassword: plainPassword,
+        sshPublicKeys: input.sshPublicKeys || [],
+        autostart: Boolean(input.autostart),
+        replaceOrphanOnHost: true,
+      };
 
-    if (expiresAt || expDays > 0) {
-      await this.db.run(
-        `INSERT OR REPLACE INTO vps_expiration (lxc_id, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at)
-         VALUES (?, ?, ?, ?, datetime('now'))`,
-        [ins.lastID, expiresAt, expDays, input.autoSuspendEnabled !== false ? 1 : 0]
+      let runtimeState = 'stopped';
+      let detectedIp = input.ipv4Address || null;
+      let hostProvisioned = false;
+      let warning: string | undefined;
+
+      if (input.provisionOnHost !== false) {
+        if (node.is_local) {
+          const info = await this.nodeManager.localRuntime.containerManager.createContainer(spec);
+          runtimeState = info.state === 'running' ? 'running' : 'stopped';
+          if (!detectedIp && info.ips.length > 0) detectedIp = info.ips[0];
+          if (info.startupWarning) warning = info.startupWarning;
+          hostProvisioned = true;
+        } else {
+          const info = await this.nodeManager.requestRemoteNode<LxcContainerRuntimeInfo>(
+            node.id,
+            'POST',
+            '/api/v1/containers',
+            spec,
+            600_000
+          );
+          runtimeState = info.state === 'running' ? 'running' : 'stopped';
+          if (!detectedIp && info.ips?.length > 0) detectedIp = info.ips[0];
+          if (info.startupWarning) warning = info.startupWarning;
+          hostProvisioned = true;
+        }
+      } else {
+        warning = 'Registered in database without immediate host provisioning.';
+      }
+
+      const ins = await this.db.run(
+        `INSERT INTO lxc_instances (
+          user_id, node_id, container_name, hostname, os_template, os_family, arch,
+          cpu_cores, cpu_shares, cpu_limit_pct, cpu_pinning, ram_mb, swap_mb, disk_gb,
+          rootfs_storage_type, privileged, nesting, autostart, root_password_enc,
+          bridge, ip_address, gateway, ipv6_address, mac_address, vlan_id,
+          status, bandwidth_quota_gb, notes, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          input.userId,
+          node.id,
+          safeName,
+          spec.hostname,
+          osTemplateLabel,
+          osFamily,
+          arch,
+          spec.cpuCores,
+          spec.cpuShares,
+          spec.cpuLimitPercent,
+          spec.cpuPinning,
+          spec.ramMb,
+          spec.swapMb,
+          spec.diskGb,
+          spec.backingStore,
+          spec.privileged ? 1 : 0,
+          spec.nesting ? 1 : 0,
+          spec.autostart ? 1 : 0,
+          encryptedPass,
+          spec.bridge,
+          detectedIp,
+          spec.ipv4Gateway,
+          spec.ipv6Address,
+          mac,
+          spec.vlanId,
+          runtimeState,
+          Number(input.bandwidthQuotaGb || 0),
+          input.notes || null,
+          expiresAt,
+          expDays,
+          input.autoSuspendEnabled !== false ? 1 : 0,
+        ]
       );
+
+      if (expiresAt || expDays > 0) {
+        await this.db.run(
+          `INSERT OR REPLACE INTO vps_expiration (lxc_id, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at)
+           VALUES (?, ?, ?, ?, datetime('now'))`,
+          [ins.lastID, expiresAt, expDays, input.autoSuspendEnabled !== false ? 1 : 0]
+        );
+      }
+
+      await this.syncRegistryRow(ins.lastID);
+      const created = (await this.getInstance(ins.lastID))!;
+
+      return {
+        instance: created,
+        generatedRootPassword: plainPassword,
+        hostProvisioned,
+        warning,
+      };
+    } finally {
+      this.inFlightPanelCreations.delete(lockKey);
+    }
+  }
+
+  /**
+   * Discovers any existing native LXC containers in `/var/lib/lxc` on the local node
+   * that are not yet tracked in `lxc_instances` (excluding in-flight creations) and imports them.
+   */
+  public async syncHostContainers(defaultUserId = 1): Promise<{ imported: string[]; count: number }> {
+    const localNode = await this.nodeManager.getDefaultNodeForEngine('lxc');
+    const nodeId = localNode ? localNode.id : 1;
+    const cm = this.nodeManager.localRuntime.containerManager;
+    const hostList = await cm.listContainers();
+    const imported: string[] = [];
+
+    for (const ct of hostList) {
+      const lockKey = ct.name.toLowerCase();
+      if (this.inFlightPanelCreations.has(lockKey) || cm.isCreationInFlight(ct.name)) {
+        continue;
+      }
+      const existing = await this.db.get<{ id: number }>(
+        `SELECT id FROM lxc_instances WHERE LOWER(container_name) = LOWER(?)`,
+        [ct.name]
+      );
+      if (existing) continue;
+
+      const status = ct.state === 'running' ? 'running' : ct.state === 'frozen' ? 'frozen' : 'stopped';
+      const detectedIp = ct.ips && ct.ips.length > 0 ? ct.ips[0] : null;
+      const ins = await this.db.run(
+        `INSERT INTO lxc_instances (
+          user_id, node_id, container_name, hostname, os_template, os_family, arch,
+          cpu_cores, ram_mb, swap_mb, disk_gb, privileged, nesting, bridge, ip_address, status, notes
+        ) VALUES (?, ?, ?, ?, 'imported', 'linux', 'amd64', 2, 1024, 512, 20, 1, 1, 'lxcbr0', ?, ?, 'Imported from host /var/lib/lxc')`,
+        [defaultUserId, nodeId, ct.name, ct.name, detectedIp, status]
+      );
+      await this.syncRegistryRow(ins.lastID);
+      imported.push(ct.name);
     }
 
-    await this.syncRegistryRow(ins.lastID);
-    const created = (await this.getInstance(ins.lastID))!;
-
-    return {
-      instance: created,
-      generatedRootPassword: plainPassword,
-      hostProvisioned,
-      warning,
-    };
+    return { imported, count: imported.length };
   }
 
   private async dispatchNodeContainerAction(

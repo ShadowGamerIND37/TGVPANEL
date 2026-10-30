@@ -37,6 +37,12 @@ export interface LxcCreateSpec {
   sshPublicKeys?: string[];
   autostart?: boolean;
   mounts?: Array<{ hostSource: string; guestTarget: string; readOnly?: boolean }>;
+  /**
+   * When true (set by LXCAdapter when the panel database has no record for this container),
+   * any stale/orphaned `/var/lib/lxc/<name>` directory from an earlier interrupted run is
+   * cleanly destroyed and replaced instead of failing with "already exists on host".
+   */
+  replaceOrphanOnHost?: boolean;
 }
 
 export interface LxcResourceUpdateSpec {
@@ -204,7 +210,15 @@ function readActiveCgroupV2Controllers(): Set<string> | null {
       return null;
     }
     const raw = fs.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8').trim();
-    return new Set(raw.split(/\s+/).filter(Boolean));
+    const rootControllers = new Set(raw.split(/\s+/).filter(Boolean));
+    if (fs.existsSync('/sys/fs/cgroup/cgroup.subtree_control')) {
+      const subRaw = fs.readFileSync('/sys/fs/cgroup/cgroup.subtree_control', 'utf8').trim();
+      const delegated = new Set(subRaw.split(/\s+/).filter(Boolean));
+      // On WSL2 / nested container hosts where root subtree_control has not delegated controllers,
+      // writing lxc.cgroup2.<ctrl>.* causes lxc-start to fail with ENOENT on child cgroup files.
+      return new Set([...rootControllers].filter((c) => delegated.has(c)));
+    }
+    return rootControllers;
   } catch {
     return null;
   }
@@ -220,9 +234,15 @@ function isCgroupV2SwapSupported(): boolean {
 
 export class LxcContainerManager {
   private lxcBaseDir: string;
+  private inFlightCreations = new Set<string>();
 
   constructor(lxcBaseDir = DEFAULT_LXC_BASE) {
     this.lxcBaseDir = path.resolve(lxcBaseDir);
+  }
+
+  public isCreationInFlight(containerName: string): boolean {
+    const safeName = SafeValidators.containerName(containerName);
+    return this.inFlightCreations.has(safeName.toLowerCase());
   }
 
   public getBaseDir(): string {
@@ -544,168 +564,180 @@ export class LxcContainerManager {
   public async createContainer(spec: LxcCreateSpec): Promise<LxcContainerRuntimeInfo> {
     this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(spec.containerName);
-    const backing = spec.backingStore || 'dir';
-
-    this.ensureHostLxcDirectories();
-
-    // Clean up any leftover empty/corrupt directory if no valid container config exists
-    const existingInfo = await this.inspectContainer(safeName);
-    const ctDir = this.getContainerDir(safeName);
-    if (existingInfo.state !== 'missing') {
-      throw new Error(`LXC container "${safeName}" already exists on host (${existingInfo.state}).`);
-    }
-    if (privilegedFs.existsSync(ctDir)) {
-      privilegedFs.rmRecursiveSync(ctDir);
-    }
-
-    if (spec.templateArchivePath && fs.existsSync(path.resolve(spec.templateArchivePath))) {
-      await this.createFromLocalArchive(safeName, spec.templateArchivePath);
-    } else {
-      const { distro, releases, archMapper } = resolveDownloadReleaseCandidates(
-        spec.distro,
-        spec.release,
-        spec.fallbackRelease
+    const lockKey = safeName.toLowerCase();
+    if (this.inFlightCreations.has(lockKey)) {
+      throw new Error(
+        `LXC container "${safeName}" is currently being provisioned (downloading OS template). Please wait for it to finish.`
       );
-      const arch = archMapper(spec.arch || 'amd64');
-      const downloadEnv = {
-        DOWNLOAD_KEYSERVER:
-          process.env.LXC_DOWNLOAD_KEYSERVER || 'hkp://keyserver.ubuntu.com:80',
-      };
+    }
 
-      let created = false;
-      let lastFailure = '';
+    this.inFlightCreations.add(lockKey);
+    try {
+      const backing = spec.backingStore || 'dir';
+      this.ensureHostLxcDirectories();
 
-      for (const relCandidate of releases) {
-        const baseArgs = [
-          ...this.lxcPathArgs(),
-          '-n',
-          safeName,
-          '-B',
-          backing,
-          '-t',
-          'download',
-          '--',
-          '-d',
-          distro,
-          '-r',
-          relCandidate,
-          '-a',
-          arch,
-        ];
-
-        let createRes = await runAllowlistedCommand('lxc-create', baseArgs, {
-          timeoutMs: 600_000,
-          env: downloadEnv,
-          asRoot: this.needsRootForStore() || undefined,
-        });
-
-        const combinedOut = `${createRes.stderr}\n${createRes.stdout}`;
-        if (
-          createRes.exitCode !== 0 &&
-          process.env.HKVM_LXC_STRICT_GPG !== 'true' &&
-          /unable to fetch gpg key|gpg.*keyserver|gnupg/i.test(combinedOut)
-        ) {
+      // Clean up any leftover empty/corrupt/orphan directory if not registered in panel DB
+      const existingInfo = await this.inspectContainer(safeName);
+      const ctDir = this.getContainerDir(safeName);
+      if (existingInfo.state !== 'missing') {
+        if (spec.replaceOrphanOnHost) {
+          await this.destroyContainer(safeName).catch(() => undefined);
           if (privilegedFs.existsSync(ctDir)) {
             privilegedFs.rmRecursiveSync(ctDir);
           }
-          createRes = await runAllowlistedCommand(
-            'lxc-create',
-            [...baseArgs, '--no-validate'],
-            {
-              timeoutMs: 600_000,
-              env: downloadEnv,
-              asRoot: this.needsRootForStore() || undefined,
-            }
+        } else {
+          throw new Error(
+            `LXC container "${safeName}" already exists on host (${existingInfo.state}).`
           );
         }
-
-        if (createRes.exitCode === 0) {
-          created = true;
-          break;
-        }
-
-        lastFailure = `lxc-create failed (${createRes.exitCode}): ${(
-          createRes.stderr || createRes.stdout
-        ).trim()}`;
-        if (privilegedFs.existsSync(ctDir)) {
-          privilegedFs.rmRecursiveSync(ctDir);
-        }
-
-        const retryNextRelease = /couldn't find a matching image|no matching image/i.test(
-          `${createRes.stderr}\n${createRes.stdout}`
-        );
-        if (!retryNextRelease) {
-          break;
-        }
+      } else if (privilegedFs.existsSync(ctDir)) {
+        privilegedFs.rmRecursiveSync(ctDir);
       }
 
-      if (!created) {
-        throw new Error(lastFailure || `lxc-create failed for ${distro}:${spec.release} (${arch})`);
-      }
-    }
-
-    try {
-      await this.writeManagedConfigSection(safeName, {
-        hostname: spec.hostname || safeName,
-        cpuCores: spec.cpuCores,
-        cpuShares: spec.cpuShares ?? 1024,
-        cpuLimitPercent: spec.cpuLimitPercent ?? 100,
-        cpuPinning: spec.cpuPinning || null,
-        ramMb: spec.ramMb,
-        swapMb: spec.swapMb ?? 512,
-        nesting: spec.nesting !== false,
-        privileged: spec.privileged !== false,
-        apparmorProfile: spec.apparmorProfile || 'generated',
-        autostart: Boolean(spec.autostart),
-        bridge: spec.bridge || 'lxcbr0',
-        ipv4Address: spec.ipv4Address || null,
-        ipv4Gateway: spec.ipv4Gateway || null,
-        ipv6Address: spec.ipv6Address || null,
-        macAddress: spec.macAddress || null,
-        mounts: spec.mounts || [],
-      });
-
-      if (spec.rootPassword) {
-        await this.applyOfflineRootPasswordHash(safeName, spec.rootPassword);
-      }
-
-      if (spec.sshPublicKeys && spec.sshPublicKeys.length > 0) {
-        for (const pubKey of spec.sshPublicKeys) {
-          await this.injectSshPublicKey(safeName, pubKey);
-        }
-      }
-    } catch (cfgErr) {
-      await this.destroyContainer(safeName).catch(() => {
-        if (privilegedFs.existsSync(ctDir)) privilegedFs.rmRecursiveSync(ctDir);
-      });
-      throw cfgErr;
-    }
-
-    let startupWarning: string | undefined;
-    try {
-      await this.startContainer(safeName);
-      if (spec.rootPassword) {
-        await this.setRootPassword(safeName, spec.rootPassword).catch(() => undefined);
-      }
-    } catch (startErr: any) {
-      const msg = String(startErr?.message || startErr);
-      // If running inside an unprivileged outer container (e.g. unprivileged Docker/Codespace lacking CAP_SYS_ADMIN),
-      // keep the provisioned container in stopped state and report the exact kernel restriction honestly.
-      if (/operation not permitted|permission denied|failed to mount|unshare|namespace/i.test(msg)) {
-        startupWarning = `Container rootfs and configuration created on disk, but automatic boot was blocked by outer host container capabilities: ${msg}`;
+      if (spec.templateArchivePath && fs.existsSync(path.resolve(spec.templateArchivePath))) {
+        await this.createFromLocalArchive(safeName, spec.templateArchivePath);
       } else {
+        const { distro, releases, archMapper } = resolveDownloadReleaseCandidates(
+          spec.distro,
+          spec.release,
+          spec.fallbackRelease
+        );
+        const arch = archMapper(spec.arch || 'amd64');
+        const downloadEnv = {
+          DOWNLOAD_KEYSERVER:
+            process.env.LXC_DOWNLOAD_KEYSERVER || 'hkp://keyserver.ubuntu.com:80',
+        };
+
+        let created = false;
+        let lastFailure = '';
+
+        for (const relCandidate of releases) {
+          const baseArgs = [
+            ...this.lxcPathArgs(),
+            '-n',
+            safeName,
+            '-B',
+            backing,
+            '-t',
+            'download',
+            '--',
+            '-d',
+            distro,
+            '-r',
+            relCandidate,
+            '-a',
+            arch,
+          ];
+
+          let createRes = await runAllowlistedCommand('lxc-create', baseArgs, {
+            timeoutMs: 600_000,
+            env: downloadEnv,
+            asRoot: this.needsRootForStore() || undefined,
+          });
+
+          const combinedOut = `${createRes.stderr}\n${createRes.stdout}`;
+          if (
+            createRes.exitCode !== 0 &&
+            process.env.HKVM_LXC_STRICT_GPG !== 'true' &&
+            /unable to fetch gpg key|gpg.*keyserver|gnupg/i.test(combinedOut)
+          ) {
+            if (privilegedFs.existsSync(ctDir)) {
+              privilegedFs.rmRecursiveSync(ctDir);
+            }
+            createRes = await runAllowlistedCommand(
+              'lxc-create',
+              [...baseArgs, '--no-validate'],
+              {
+                timeoutMs: 600_000,
+                env: downloadEnv,
+                asRoot: this.needsRootForStore() || undefined,
+              }
+            );
+          }
+
+          if (createRes.exitCode === 0) {
+            created = true;
+            break;
+          }
+
+          lastFailure = `lxc-create failed (${createRes.exitCode}): ${(
+            createRes.stderr || createRes.stdout
+          ).trim()}`;
+          if (privilegedFs.existsSync(ctDir)) {
+            privilegedFs.rmRecursiveSync(ctDir);
+          }
+
+          const retryNextRelease = /couldn't find a matching image|no matching image/i.test(
+            `${createRes.stderr}\n${createRes.stdout}`
+          );
+          if (!retryNextRelease) {
+            break;
+          }
+        }
+
+        if (!created) {
+          throw new Error(lastFailure || `lxc-create failed for ${distro}:${spec.release} (${arch})`);
+        }
+      }
+
+      try {
+        await this.writeManagedConfigSection(safeName, {
+          hostname: spec.hostname || safeName,
+          cpuCores: spec.cpuCores,
+          cpuShares: spec.cpuShares ?? 1024,
+          cpuLimitPercent: spec.cpuLimitPercent ?? 100,
+          cpuPinning: spec.cpuPinning || null,
+          ramMb: spec.ramMb,
+          swapMb: spec.swapMb ?? 512,
+          nesting: spec.nesting !== false,
+          privileged: spec.privileged !== false,
+          apparmorProfile: spec.apparmorProfile || 'generated',
+          autostart: Boolean(spec.autostart),
+          bridge: spec.bridge || 'lxcbr0',
+          ipv4Address: spec.ipv4Address || null,
+          ipv4Gateway: spec.ipv4Gateway || null,
+          ipv6Address: spec.ipv6Address || null,
+          macAddress: spec.macAddress || null,
+          mounts: spec.mounts || [],
+        });
+
+        if (spec.rootPassword) {
+          await this.applyOfflineRootPasswordHash(safeName, spec.rootPassword);
+        }
+
+        if (spec.sshPublicKeys && spec.sshPublicKeys.length > 0) {
+          for (const pubKey of spec.sshPublicKeys) {
+            await this.injectSshPublicKey(safeName, pubKey);
+          }
+        }
+      } catch (cfgErr) {
         await this.destroyContainer(safeName).catch(() => {
           if (privilegedFs.existsSync(ctDir)) privilegedFs.rmRecursiveSync(ctDir);
         });
-        throw startErr;
+        throw cfgErr;
       }
-    }
 
-    const info = await this.inspectContainer(safeName);
-    if (startupWarning) {
-      info.startupWarning = startupWarning;
+      let startupWarning: string | undefined;
+      try {
+        await this.startContainer(safeName);
+        if (spec.rootPassword) {
+          await this.setRootPassword(safeName, spec.rootPassword).catch(() => undefined);
+        }
+      } catch (startErr: any) {
+        const msg = String(startErr?.message || startErr);
+        // Never discard a validly provisioned container if only initial auto-start failed:
+        // keep it registered in 'stopped' state so the admin can inspect logs/config and start it.
+        startupWarning = `Container rootfs and configuration were created on disk (status: stopped), but automatic startup encountered a host issue: ${msg}`;
+      }
+
+      const info = await this.inspectContainer(safeName);
+      if (startupWarning) {
+        info.startupWarning = startupWarning;
+      }
+      return info;
+    } finally {
+      this.inFlightCreations.delete(lockKey);
     }
-    return info;
   }
 
   public async writeManagedConfigSection(
@@ -770,6 +802,7 @@ export class LxcContainerManager {
       if (apparmorAvailable && fs.existsSync('/usr/share/lxc/config/nesting.conf')) {
         lines.push('lxc.include = /usr/share/lxc/config/nesting.conf');
       } else {
+        lines.push('lxc.mount.auto =');
         lines.push('lxc.mount.auto = proc:mixed sys:rw cgroup:mixed');
       }
     }
@@ -886,25 +919,56 @@ export class LxcContainerManager {
       ? `/var/log/lxc/${safeName}.log`
       : path.join(this.getContainerDir(safeName), `${safeName}.log`);
 
-    const res = await runAllowlistedCommand(
-      'lxc-start',
-      [...this.lxcPathArgs(), '-n', safeName, '-d', '-l', 'ERROR', '-o', logFile],
-      {
-        timeoutMs: 30_000,
-        asRoot: this.needsRootForStore() || undefined,
-      }
-    );
+    const runStart = () =>
+      runAllowlistedCommand(
+        'lxc-start',
+        [...this.lxcPathArgs(), '-n', safeName, '-d', '-l', 'ERROR', '-o', logFile],
+        {
+          timeoutMs: 30_000,
+          asRoot: this.needsRootForStore() || undefined,
+        }
+      );
+
+    let res = await runStart();
     if (res.exitCode !== 0) {
-      let logDetails = '';
+      let logTail = '';
       if (privilegedFs.existsSync(logFile)) {
         try {
-          const tail = privilegedFs.readTextSync(logFile).trim().split('\n').slice(-12).join('\n');
-          if (tail) logDetails = ` | Log: ${tail}`;
+          logTail = privilegedFs.readTextSync(logFile).trim().split('\n').slice(-15).join('\n');
         } catch {
           // ignore
         }
       }
-      throw new Error(`lxc-start failed: ${(res.stderr || res.stdout).trim()}${logDetails}`);
+
+      // On WSL2 / nested container hosts where cgroup limits cannot be written into child cgroups,
+      // automatically strip lxc.cgroup* lines and retry startup once.
+      const combinedDiag = `${res.stderr}\n${res.stdout}\n${logTail}`;
+      const configFile = path.join(this.getContainerDir(safeName), 'config');
+      if (/cgroup|limits/i.test(combinedDiag) && privilegedFs.existsSync(configFile)) {
+        try {
+          const curCfg = privilegedFs.readTextSync(configFile);
+          const nextCfg = curCfg.replace(/^\s*lxc\.cgroup2?\.[a-zA-Z0-9_.-]+\s*=.*$/gm, '');
+          if (nextCfg !== curCfg) {
+            privilegedFs.writeFileSync(configFile, nextCfg, 0o640);
+            res = await runStart();
+          }
+        } catch {
+          // ignore config rewrite error and surface original failure
+        }
+      }
+
+      if (res.exitCode !== 0) {
+        let logDetails = '';
+        if (privilegedFs.existsSync(logFile)) {
+          try {
+            const tail = privilegedFs.readTextSync(logFile).trim().split('\n').slice(-12).join('\n');
+            if (tail) logDetails = ` | Log: ${tail}`;
+          } catch {
+            // ignore
+          }
+        }
+        throw new Error(`lxc-start failed: ${(res.stderr || res.stdout).trim()}${logDetails}`);
+      }
     }
   }
 

@@ -82,7 +82,10 @@
           <h2 style="margin:0;color:var(--text-primary);">Native LXC Containers</h2>
           <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Create, resize, freeze, snapshot, and manage LXC VPS instances.</p>
         </div>
-        <a href="/admin/instances/create?engine=lxc" class="btn btn-primary">+ Provision LXC Container</a>
+        <div class="v3-btn-row">
+          <button type="button" class="btn btn-outline" id="syncHostLxcBtn" onclick="syncHostLxc()">Sync Host Containers</button>
+          <a href="/admin/instances/create?engine=lxc" class="btn btn-primary">+ Provision LXC Container</a>
+        </div>
       </div>
       <div class="v3-card v3-table-wrap">
         <table class="v3-table">
@@ -135,7 +138,7 @@
           <div style="margin-top:14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
             <label style="font-size:13px;color:var(--text-secondary);"><input type="checkbox" id="cNest" checked> Enable Container Nesting (Docker-ready)</label>
             <label style="font-size:13px;color:var(--text-secondary);"><input type="checkbox" id="cProv" <%= (capabilities && !capabilities.lxcAvailable) ? '' : 'checked' %>> Provision immediately on host via LXC</label>
-            <button type="submit" class="btn btn-primary">Create LXC Instance</button>
+            <button type="submit" id="cSubmitBtn" class="btn btn-primary">Create LXC Instance</button>
           </div>
         </form>
         <div id="createResultBox" style="display:none;margin-top:14px;" class="v3-code"></div>
@@ -614,17 +617,72 @@ async function renewLxc(id) {
   loadLxcList();
 }
 
+async function syncHostLxc() {
+  const btn = document.getElementById('syncHostLxcBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing...'; }
+  try {
+    const out = await hkvmApi('/api/v1/lxc/sync-host', { method: 'POST' });
+    if (out.count > 0) {
+      hkvmToast('Imported ' + out.count + ' host container(s): ' + out.imported.join(', '));
+    } else {
+      hkvmToast('All host LXC containers are already synced.');
+    }
+    loadLxcList();
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sync Host Containers'; }
+  }
+}
+
+let __lxcCreating = false;
 async function submitCreateLxc(e) {
   e.preventDefault();
+  if (__lxcCreating) {
+    hkvmToast('Provisioning is already in progress — please wait for the OS image download to finish.', 'warning');
+    return;
+  }
+
+  const ctName = document.getElementById('cName').value.trim();
+  const tplSlug = document.getElementById('cTpl').value;
+  const provOnHost = document.getElementById('cProv').checked;
+  const btn = document.getElementById('cSubmitBtn');
+  const box = document.getElementById('createResultBox');
+
+  __lxcCreating = true;
+  let elapsedSec = 0;
+  let timerId = null;
+
+  if (btn) {
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    btn.textContent = provOnHost ? 'Provisioning LXC... (0s)' : 'Creating...';
+  }
+
+  box.style.display = 'block';
+  box.innerHTML = provOnHost
+    ? '<strong>Provisioning container "' + hkvmEsc(ctName) + '" (' + hkvmEsc(tplSlug) + ')...</strong>\n' +
+      'Downloading &amp; extracting OS rootfs from images.linuxcontainers.org (first download takes ~20–90s; cached templates take ~3s).\n' +
+      'Please keep this tab open until completion.'
+    : 'Registering LXC container "' + hkvmEsc(ctName) + '" in database...';
+
+  if (provOnHost) {
+    hkvmToast('Provisioning "' + ctName + '" — downloading OS image, please wait...', 'warning');
+    timerId = setInterval(() => {
+      elapsedSec += 1;
+      if (btn) btn.textContent = 'Provisioning LXC... (' + elapsedSec + 's)';
+    }, 1000);
+  }
+
   try {
     const out = await hkvmApi('/api/v1/lxc', {
       method: 'POST',
       body: {
-        containerName: document.getElementById('cName').value,
+        containerName: ctName,
         hostname: document.getElementById('cHost').value || undefined,
         userId: Number(document.getElementById('cUser').value),
         nodeId: Number(document.getElementById('cNode').value),
-        templateSlug: document.getElementById('cTpl').value,
+        templateSlug: tplSlug,
         cpuCores: Number(document.getElementById('cCpu').value),
         ramMb: Number(document.getElementById('cRam').value),
         swapMb: Number(document.getElementById('cSwap').value),
@@ -633,18 +691,31 @@ async function submitCreateLxc(e) {
         ipv4Address: document.getElementById('cIp').value || null,
         expirationDays: Number(document.getElementById('cExp').value || 0),
         nesting: document.getElementById('cNest').checked,
-        provisionOnHost: document.getElementById('cProv').checked
+        provisionOnHost: provOnHost
       }
     });
-    const box = document.getElementById('createResultBox');
     box.style.display = 'block';
-    box.textContent =
-      'LXC Container Created: ' + out.instance.name + ' (#' + out.instance.refId + ')\n' +
-      'Generated Root Password (encrypted at rest, copy now): ' + out.generatedRootPassword + '\n' +
-      (out.warning ? 'Note: ' + out.warning : '');
-    hkvmToast('LXC instance created');
+    box.innerHTML =
+      '<strong>✓ LXC Container Created:</strong> ' + hkvmEsc(out.instance.name) + ' (#' + out.instance.refId + ') — Status: <strong>' + hkvmEsc(out.instance.status) + '</strong>\n' +
+      '<strong>Generated Root Password (copy now):</strong> <code>' + hkvmEsc(out.generatedRootPassword) + '</code>\n' +
+      (out.warning ? '\n<span style="color:#f59e0b;">Note: ' + hkvmEsc(out.warning) + '</span>\n' : '') +
+      '\n<div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">' +
+      '<a class="btn btn-primary" href="/lxc/' + out.instance.refId + '">Manage Container &rarr;</a>' +
+      '<a class="btn btn-outline" href="/admin/lxc">View All LXC Containers &rarr;</a>' +
+      '</div>';
+    hkvmToast('LXC instance "' + out.instance.name + '" created!');
   } catch (err) {
+    box.style.display = 'block';
+    box.innerHTML = '<span style="color:#ef4444;"><strong>Provisioning Error:</strong> ' + hkvmEsc(err.message) + '</span>';
     hkvmToast(err.message, 'error');
+  } finally {
+    if (timerId) clearInterval(timerId);
+    __lxcCreating = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.textContent = 'Create LXC Instance';
+    }
   }
 }
 
