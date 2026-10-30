@@ -3,7 +3,9 @@ export interface LxcCreateSpec {
     hostname?: string;
     distro: string;
     release: string;
+    fallbackRelease?: string | null;
     arch?: string;
+    templateArchivePath?: string | null;
     cpuCores: number;
     cpuShares?: number;
     cpuLimitPercent?: number;
@@ -58,18 +60,41 @@ export interface LxcContainerRuntimeInfo {
     rxBytes: number;
     txBytes: number;
     diskUsedBytes: number;
+    startupWarning?: string;
 }
+/**
+ * Translates human/LXD version identifiers (e.g. `ubuntu` + `24.04` or `debian` + `12`)
+ * into canonical `images.linuxcontainers.org` release names expected by `lxc-create -t download`
+ * (`noble`, `bookworm`, `current`, etc.), while retaining fallbacks.
+ */
+export declare function resolveDownloadReleaseCandidates(rawDistro: string, rawRelease: string, fallbackRelease?: string | null): {
+    distro: string;
+    releases: string[];
+    archMapper: (arch: string) => string;
+};
+export declare function isAppArmorProfileLoadable(): boolean;
 export declare class LxcContainerManager {
     private lxcBaseDir;
     constructor(lxcBaseDir?: string);
+    getBaseDir(): string;
     getContainerDir(containerName: string): string;
     getRootfsDir(containerName: string): string;
+    /**
+     * Determines whether operations against `this.lxcBaseDir` require root (`sudo -n`).
+     * System `/var/lib/lxc` requires root, whereas unprivileged temporary directories in tests do not.
+     */
+    needsRootForStore(): boolean;
+    private lxcPathArgs;
     private assertLxcInstalled;
+    private ensureHostLxcDirectories;
+    private ensureBridgeAvailable;
     listContainers(): Promise<LxcContainerRuntimeInfo[]>;
     inspectContainer(containerName: string): Promise<LxcContainerRuntimeInfo>;
     private parseHumanSizeToBytes;
     private measureDirBytesFast;
     private getRootfsUsedBytes;
+    private createFromLocalArchive;
+    private applyOfflineRootPasswordHash;
     createContainer(spec: LxcCreateSpec): Promise<LxcContainerRuntimeInfo>;
     writeManagedConfigSection(containerName: string, cfg: {
         hostname?: string;
@@ -103,7 +128,8 @@ export declare class LxcContainerManager {
     reinstallContainer(spec: LxcCreateSpec): Promise<LxcContainerRuntimeInfo>;
     updateContainerResources(containerName: string, update: LxcResourceUpdateSpec): Promise<void>;
     /**
-     * Resets root password inside container using `chpasswd` over stdin (`shell: false`).
+     * Resets root password inside container using `chpasswd` over stdin (`shell: false`),
+     * with offline `/etc/shadow` SHA-512 hash fallback when container is stopped.
      * Zero shell interpolation of password characters.
      */
     setRootPassword(containerName: string, newPassword: string): Promise<void>;
@@ -117,7 +143,7 @@ export declare class LxcContainerManager {
     }>>;
     getContainerLogs(containerName: string, maxLines?: number): Promise<string>;
     /**
-     * Resolves a user-supplied path strictly within `/var/lib/lxc/<container>/rootfs`,
+     * Resolves a user-supplied path strictly within `<lxcBaseDir>/<container>/rootfs`,
      * blocking both `..` traversal and symlink escapes outside `rootfs`.
      */
     resolveConfinedRootfsPath(containerName: string, subPath: string): string;

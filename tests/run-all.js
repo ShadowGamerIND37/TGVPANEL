@@ -46,8 +46,8 @@ const { UnifiedDatabase } = require('../lib/db/database');
 const { runMigrations } = require('../lib/db/migrations');
 const { importHvmDatabase } = require('../lib/db/hvm-importer');
 const { createNodeAgentServer } = require('../lib/node-agent/agent');
-const { runAllowlistedCommand } = require('../lib/node-agent/command-runner');
-const { LxcContainerManager } = require('../lib/node-agent/container-manager');
+const { runAllowlistedCommand, buildSafeSpawnEnv } = require('../lib/node-agent/command-runner');
+const { LxcContainerManager, resolveDownloadReleaseCandidates } = require('../lib/node-agent/container-manager');
 
 const results = [];
 async function runStep(name, fn) {
@@ -444,16 +444,61 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         /not in the allowlist/i
       );
       await assert.rejects(
+        () => runAllowlistedCommand('sudo', ['-n', 'id']),
+        /not in the allowlist/i
+      );
+      await assert.rejects(
+        () => runAllowlistedCommand('rm', ['-rf', '/tmp/x']),
+        /not in the allowlist/i
+      );
+      await assert.rejects(
         () => runAllowlistedCommand('uname', ['-a\0evil']),
         /Null byte|invalid/i
       );
 
+      // Regression guard for liblxc "//.local/" permission denied bug when HOME was missing or "/"
+      const rootEnv = buildSafeSpawnEnv(true, { HOME: '/' });
+      assert.strictEqual(rootEnv.HOME, '/root');
+      assert.strictEqual(rootEnv.USER, 'root');
+      const userEnv = buildSafeSpawnEnv(false, { HOME: '/' });
+      assert.notStrictEqual(userEnv.HOME, '/');
+      assert.ok(userEnv.HOME && userEnv.HOME.startsWith('/'));
+
+      // Verify images.linuxcontainers.org release codename normalization
+      assert.strictEqual(resolveDownloadReleaseCandidates('ubuntu', '24.04').releases[0], 'noble');
+      assert.strictEqual(resolveDownloadReleaseCandidates('ubuntu', '22.04').releases[0], 'jammy');
+      assert.strictEqual(resolveDownloadReleaseCandidates('debian', '12').releases[0], 'bookworm');
+      assert.strictEqual(resolveDownloadReleaseCandidates('kali', 'rolling').releases[0], 'current');
+      assert.strictEqual(resolveDownloadReleaseCandidates('centos', '9').releases[0], '9-Stream');
+
       const fakeLxcBase = path.join(tmpRoot, 'lxc-jail');
-      const ctRoot = path.join(fakeLxcBase, 'ct-jail-test', 'rootfs');
+      const ctDir = path.join(fakeLxcBase, 'ct-jail-test');
+      const ctRoot = path.join(ctDir, 'rootfs');
       fs.mkdirSync(path.join(ctRoot, 'etc'), { recursive: true });
       fs.writeFileSync(path.join(ctRoot, 'etc', 'hostname'), 'ct-jail-test\n');
+      fs.writeFileSync(
+        path.join(ctDir, 'config'),
+        'lxc.rootfs.path = dir:' + ctRoot + '\nlxc.net.0.type = veth\nlxc.net.0.link = oldbr0\nlxc.apparmor.profile = generated\n'
+      );
 
       const cm = new LxcContainerManager(fakeLxcBase);
+      await cm.writeManagedConfigSection('ct-jail-test', {
+        hostname: 'ct-jail-test',
+        cpuCores: 2,
+        ramMb: 1024,
+        swapMb: 512,
+        nesting: true,
+        bridge: 'lxcbr0',
+      });
+      const updatedCfg = fs.readFileSync(path.join(ctDir, 'config'), 'utf8');
+      assert.ok(!updatedCfg.includes('oldbr0'), 'Stale template lxc.net.0.link should be stripped');
+      assert.ok(updatedCfg.includes('lxc.net.0.link = lxcbr0'));
+      assert.strictEqual(
+        (updatedCfg.match(/lxc\.apparmor\.profile\s*=/g) || []).length,
+        1,
+        'Should contain exactly one authoritative lxc.apparmor.profile directive'
+      );
+
       const listing = cm.listRootfsDirectory('ct-jail-test', '/etc');
       assert.ok(listing.some((e) => e.name === 'hostname'));
 

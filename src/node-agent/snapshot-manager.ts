@@ -1,7 +1,12 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { isBinaryAvailable, runAllowlistedCommand } from './command-runner';
+import {
+  isBinaryAvailable,
+  isRunningAsRoot,
+  privilegedFs,
+  runAllowlistedCommand,
+} from './command-runner';
 import { SafeValidators } from '../security/middleware';
 
 export interface SnapshotInfo {
@@ -28,18 +33,43 @@ export class LxcSnapshotAndBackupManager {
   private lxcBaseDir: string;
 
   constructor(backupDir = DEFAULT_BACKUP_DIR, lxcBaseDir = DEFAULT_LXC_BASE) {
-    this.backupDir = backupDir;
-    this.lxcBaseDir = lxcBaseDir;
+    this.backupDir = path.resolve(backupDir);
+    this.lxcBaseDir = path.resolve(lxcBaseDir);
     fs.mkdirSync(this.backupDir, { recursive: true });
+  }
+
+  private needsRootForStore(): boolean {
+    if (isRunningAsRoot()) return false;
+    if (this.lxcBaseDir === '/var/lib/lxc' || this.lxcBaseDir.startsWith('/var/lib/lxc/')) {
+      return true;
+    }
+    try {
+      if (fs.existsSync(this.lxcBaseDir)) {
+        fs.accessSync(this.lxcBaseDir, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+        return false;
+      }
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
+  private lxcPathArgs(): string[] {
+    return ['-P', this.lxcBaseDir];
   }
 
   public async listSnapshots(containerName: string): Promise<SnapshotInfo[]> {
     const safeName = SafeValidators.containerName(containerName);
     if (!isBinaryAvailable('lxc-snapshot')) return [];
 
-    const res = await runAllowlistedCommand('lxc-snapshot', ['-n', safeName, '-L', '-C'], {
-      timeoutMs: 15_000,
-    });
+    const res = await runAllowlistedCommand(
+      'lxc-snapshot',
+      [...this.lxcPathArgs(), '-n', safeName, '-L', '-C'],
+      {
+        timeoutMs: 15_000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
+    );
     if (res.exitCode !== 0) return [];
 
     const snaps: SnapshotInfo[] = [];
@@ -67,14 +97,17 @@ export class LxcSnapshotAndBackupManager {
 
     let commentFile: string | null = null;
     try {
-      const args = ['-n', safeName];
+      const args = [...this.lxcPathArgs(), '-n', safeName];
       if (comment) {
         commentFile = path.join(this.backupDir, `.snap_comment_${Date.now()}.txt`);
-        fs.writeFileSync(commentFile, comment.slice(0, 500), 'utf8');
+        fs.writeFileSync(commentFile, comment.slice(0, 500), { mode: 0o644 });
         args.push('-c', commentFile);
       }
 
-      const res = await runAllowlistedCommand('lxc-snapshot', args, { timeoutMs: 120_000 });
+      const res = await runAllowlistedCommand('lxc-snapshot', args, {
+        timeoutMs: 120_000,
+        asRoot: this.needsRootForStore() || undefined,
+      });
       if (res.exitCode !== 0) {
         throw new Error(`lxc-snapshot create failed: ${res.stderr || res.stdout}`);
       }
@@ -100,9 +133,14 @@ export class LxcSnapshotAndBackupManager {
     }
     const safeName = SafeValidators.containerName(containerName);
     const safeSnap = SafeValidators.snapshotName(snapshotName);
-    const res = await runAllowlistedCommand('lxc-snapshot', ['-n', safeName, '-r', safeSnap], {
-      timeoutMs: 180_000,
-    });
+    const res = await runAllowlistedCommand(
+      'lxc-snapshot',
+      [...this.lxcPathArgs(), '-n', safeName, '-r', safeSnap],
+      {
+        timeoutMs: 180_000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
+    );
     if (res.exitCode !== 0) {
       throw new Error(`lxc-snapshot restore failed: ${res.stderr || res.stdout}`);
     }
@@ -114,9 +152,14 @@ export class LxcSnapshotAndBackupManager {
     }
     const safeName = SafeValidators.containerName(containerName);
     const safeSnap = SafeValidators.snapshotName(snapshotName);
-    const res = await runAllowlistedCommand('lxc-snapshot', ['-n', safeName, '-d', safeSnap], {
-      timeoutMs: 60_000,
-    });
+    const res = await runAllowlistedCommand(
+      'lxc-snapshot',
+      [...this.lxcPathArgs(), '-n', safeName, '-d', safeSnap],
+      {
+        timeoutMs: 60_000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
+    );
     if (res.exitCode !== 0) {
       throw new Error(`lxc-snapshot delete failed: ${res.stderr || res.stdout}`);
     }
@@ -128,7 +171,7 @@ export class LxcSnapshotAndBackupManager {
   ): Promise<BackupArtifact> {
     const safeName = SafeValidators.containerName(containerName);
     const containerDir = path.join(this.lxcBaseDir, safeName);
-    if (!fs.existsSync(containerDir)) {
+    if (!privilegedFs.existsSync(containerDir)) {
       throw new Error(`Container directory not found: ${containerDir}`);
     }
 
@@ -138,13 +181,21 @@ export class LxcSnapshotAndBackupManager {
     const fileName = `${safeName}_${safeLabel}.tar.gz`;
     const archivePath = path.join(this.backupDir, fileName);
 
+    const needsRoot = this.needsRootForStore();
     const tarRes = await runAllowlistedCommand(
       'tar',
       ['--numeric-owner', '-czpf', archivePath, '-C', this.lxcBaseDir, safeName],
-      { timeoutMs: 900_000 }
+      {
+        timeoutMs: 900_000,
+        asRoot: needsRoot || undefined,
+      }
     );
     if (tarRes.exitCode !== 0) {
       throw new Error(`tar backup failed: ${tarRes.stderr || tarRes.stdout}`);
+    }
+
+    if (needsRoot) {
+      privilegedFs.chownToCurrentUserSync(archivePath);
     }
 
     const checksumSha256 = await this.computeFileSha256(archivePath);
@@ -177,11 +228,14 @@ export class LxcSnapshotAndBackupManager {
       }
     }
 
-    fs.mkdirSync(this.lxcBaseDir, { recursive: true });
+    privilegedFs.mkdirpSync(this.lxcBaseDir, 0o755);
     const untarRes = await runAllowlistedCommand(
       'tar',
       ['--numeric-owner', '-xzpf', resolved, '-C', this.lxcBaseDir],
-      { timeoutMs: 900_000 }
+      {
+        timeoutMs: 900_000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
     );
     if (untarRes.exitCode !== 0) {
       throw new Error(`tar restore failed: ${untarRes.stderr || untarRes.stdout}`);
