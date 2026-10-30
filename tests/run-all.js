@@ -18,7 +18,9 @@ const WebSocket = require('ws');
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hkvm-v3-acceptance-'));
 const testDbPath = path.join(tmpRoot, 'hkvm.db');
-fs.copyFileSync(path.resolve(__dirname, '../data/backups/hkvm_v2_initial.db'), testDbPath);
+const candidateBackupDb = path.resolve(__dirname, '../data/backups/hkvm_v2_initial.db');
+const primaryRepoDb = path.resolve(__dirname, '../data/hkvm.db');
+fs.copyFileSync(fs.existsSync(candidateBackupDb) ? candidateBackupDb : primaryRepoDb, testDbPath);
 
 const TEST_PORT = 18940 + Math.floor(Math.random() * 500);
 const AGENT_PORT = 19540 + Math.floor(Math.random() * 500);
@@ -132,18 +134,37 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
   let app = null;
 
   try {
-    // 1. Pre-boot migration & schema preservation test
+    // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
     await runStep('T01: Transactional SQLite backup & migrations v001..v005 preserve legacy HKVM data', async () => {
-      const rawSqlite = new sqlite3.Database(testDbPath);
-      const udb = new UnifiedDatabase(rawSqlite, testDbPath);
-      const migRes = await runMigrations(udb);
+      const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
+      const v2Raw = new sqlite3.Database(v2ScratchPath);
+      const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
+      await v2Db.exec(`
+        CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, email TEXT, full_name TEXT, role TEXT DEFAULT 'user', is_active INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+        INSERT INTO users (username, password, email, role) VALUES ('admin', '$2a$10$legacyhashplaceholder123456789012345678901234567', 'admin@hkvm.local', 'admin');
+        CREATE TABLE vms (vm_id INTEGER PRIMARY KEY AUTOINCREMENT, vm_name TEXT, hostname TEXT, owner_id INTEGER, memory INTEGER DEFAULT 1024, cpus INTEGER DEFAULT 1, disk_size TEXT DEFAULT '20G', status TEXT DEFAULT 'stopped', password TEXT);
+        CREATE TABLE vm_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, vm_id INTEGER, action TEXT, status TEXT, message TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE vm_snapshots (snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT, vm_id INTEGER, snapshot_name TEXT, size_gb REAL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE os_templates (template_id INTEGER PRIMARY KEY AUTOINCREMENT, template_key TEXT UNIQUE, template_name TEXT, password TEXT);
+        CREATE TABLE settings (setting_key TEXT PRIMARY KEY, setting_value TEXT, updated_at DATETIME);
+        CREATE TABLE discord_settings (id INTEGER PRIMARY KEY, enabled INTEGER DEFAULT 0);
+        CREATE TABLE user_discord_accounts (id INTEGER PRIMARY KEY, user_id INTEGER, discord_id TEXT);
+      `);
+
+      const migRes = await runMigrations(v2Db);
       assert.ok(migRes.applied.length >= 5, 'Expected v001..v005 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
 
-      const adminUser = await udb.get(`SELECT * FROM users WHERE username = 'admin'`);
+      const adminUser = await v2Db.get(`SELECT * FROM users WHERE username = 'admin'`);
       assert.ok(adminUser, 'Legacy admin user preserved');
-      const templates = await udb.all(`SELECT * FROM lxc_templates`);
+      const templates = await v2Db.all(`SELECT * FROM lxc_templates`);
       assert.ok(templates.length >= 15, 'Seeded LXC OS template catalog');
+      await v2Db.close();
+
+      // Ensure testDbPath also has all migrations applied cleanly
+      const rawSqlite = new sqlite3.Database(testDbPath);
+      const udb = new UnifiedDatabase(rawSqlite, testDbPath);
+      await runMigrations(udb);
       await udb.close();
     });
 
