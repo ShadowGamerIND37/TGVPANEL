@@ -31,6 +31,12 @@ export interface LxcCreateSpec {
         guestTarget: string;
         readOnly?: boolean;
     }>;
+    /**
+     * When true (set by LXCAdapter when the panel database has no record for this container),
+     * any stale/orphaned `/var/lib/lxc/<name>` directory from an earlier interrupted run is
+     * cleanly destroyed and replaced instead of failing with "already exists on host".
+     */
+    replaceOrphanOnHost?: boolean;
 }
 export interface LxcResourceUpdateSpec {
     cpuCores?: number;
@@ -75,7 +81,9 @@ export declare function resolveDownloadReleaseCandidates(rawDistro: string, rawR
 export declare function isAppArmorProfileLoadable(): boolean;
 export declare class LxcContainerManager {
     private lxcBaseDir;
+    private inFlightCreations;
     constructor(lxcBaseDir?: string);
+    isCreationInFlight(containerName: string): boolean;
     getBaseDir(): string;
     getContainerDir(containerName: string): string;
     getRootfsDir(containerName: string): string;

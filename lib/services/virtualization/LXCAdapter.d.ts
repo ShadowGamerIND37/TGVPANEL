@@ -40,6 +40,7 @@ export declare class LXCAdapter implements VirtualizationAdapter {
     private db;
     private nodeManager;
     private prevContainerCpu;
+    private inFlightPanelCreations;
     constructor(db: UnifiedDatabase, nodeManager: NodeManager);
     getCapabilityProfile(): InstanceCapabilityProfile;
     private mapRowToUnified;
@@ -55,6 +56,14 @@ export declare class LXCAdapter implements VirtualizationAdapter {
         generatedRootPassword: string;
         hostProvisioned: boolean;
         warning?: string;
+    }>;
+    /**
+     * Discovers any existing native LXC containers in `/var/lib/lxc` on the local node
+     * that are not yet tracked in `lxc_instances` (excluding in-flight creations) and imports them.
+     */
+    syncHostContainers(defaultUserId?: number): Promise<{
+        imported: string[];
+        count: number;
     }>;
     private dispatchNodeContainerAction;
     performLifecycleAction(refId: number, action: LifecycleAction, options?: {

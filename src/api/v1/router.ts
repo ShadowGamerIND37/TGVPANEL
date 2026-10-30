@@ -479,9 +479,24 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   );
 
   router.post(
+    '/lxc/sync-host',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      try {
+        const result = await ctx.lxcAdapter.syncHostContainers(req.principal!.userId);
+        res.json({ success: true, ...result });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
     '/lxc',
     requireRole(['admin', 'subadmin', 'operator']),
     async (req: Request, res: Response) => {
+      req.setTimeout(660_000);
+      res.setTimeout(660_000);
       try {
         const b = req.body || {};
         const created = await ctx.lxcAdapter.createLxcInstance({
@@ -515,21 +530,25 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
           provisionOnHost: b.provisionOnHost !== false,
         });
 
-        await ctx.db.logActivity({
-          userId: req.principal!.userId,
-          action: 'lxc_created',
-          resourceType: 'lxc',
-          resourceId: String(created.instance.refId),
-          details: {
-            containerName: created.instance.name,
-            nodeId: created.instance.nodeId,
-            template: created.instance.osLabel,
-          },
-        });
+        await ctx.db
+          .logActivity({
+            userId: req.principal!.userId,
+            action: 'lxc_created',
+            resourceType: 'lxc',
+            resourceId: String(created.instance.refId),
+            details: {
+              containerName: created.instance.name,
+              nodeId: created.instance.nodeId,
+              template: created.instance.osLabel,
+            },
+          })
+          .catch(() => undefined);
 
         res.status(201).json(created);
       } catch (err: any) {
-        res.status(500).json({ error: err.message });
+        const msg = String(err?.message || 'Failed to create LXC container');
+        const status = /currently being provisioned|already exists/i.test(msg) ? 409 : 500;
+        res.status(status).json({ error: msg });
       }
     }
   );
