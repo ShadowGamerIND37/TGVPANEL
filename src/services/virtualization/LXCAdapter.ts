@@ -245,6 +245,8 @@ export class LXCAdapter implements VirtualizationAdapter {
     // Resolve template metadata from lxc_templates catalog
     let distro = input.distro || 'ubuntu';
     let release = input.release || '24.04';
+    let fallbackRelease: string | null = null;
+    let templateArchivePath: string | null = null;
     let arch = input.arch || 'amd64';
     let osTemplateLabel = input.templateSlug || `${distro}:${release}`;
     let osFamily = 'debian';
@@ -257,6 +259,8 @@ export class LXCAdapter implements VirtualizationAdapter {
       if (tpl) {
         distro = tpl.distro;
         release = tpl.release;
+        fallbackRelease = tpl.fallback_alias || null;
+        templateArchivePath = tpl.file_path || tpl.local_path || null;
         arch = tpl.arch || 'amd64';
         osTemplateLabel = tpl.slug;
         osFamily = tpl.family || 'debian';
@@ -282,6 +286,8 @@ export class LXCAdapter implements VirtualizationAdapter {
       hostname: input.hostname || safeName,
       distro,
       release,
+      fallbackRelease,
+      templateArchivePath,
       arch,
       cpuCores: Math.max(1, Number(input.cpuCores || 1)),
       cpuShares: Number(input.cpuShares || 1024),
@@ -314,6 +320,7 @@ export class LXCAdapter implements VirtualizationAdapter {
         const info = await this.nodeManager.localRuntime.containerManager.createContainer(spec);
         runtimeState = info.state === 'running' ? 'running' : 'stopped';
         if (!detectedIp && info.ips.length > 0) detectedIp = info.ips[0];
+        if (info.startupWarning) warning = info.startupWarning;
         hostProvisioned = true;
       } else {
         const info = await this.nodeManager.requestRemoteNode<LxcContainerRuntimeInfo>(
@@ -325,6 +332,7 @@ export class LXCAdapter implements VirtualizationAdapter {
         );
         runtimeState = info.state === 'running' ? 'running' : 'stopped';
         if (!detectedIp && info.ips?.length > 0) detectedIp = info.ips[0];
+        if (info.startupWarning) warning = info.startupWarning;
         hostProvisioned = true;
       }
     } else {
@@ -677,6 +685,8 @@ export class LXCAdapter implements VirtualizationAdapter {
       hostname: row.hostname || row.container_name,
       distro: tpl.distro,
       release: tpl.release,
+      fallbackRelease: tpl.fallback_alias || null,
+      templateArchivePath: tpl.file_path || tpl.local_path || null,
       arch: tpl.arch || 'amd64',
       cpuCores: row.cpu_cores,
       cpuShares: row.cpu_shares,
@@ -693,23 +703,26 @@ export class LXCAdapter implements VirtualizationAdapter {
       rootPassword: plainPassword,
     };
 
+    let reinstallState = 'running';
     if (row.is_local) {
-      await this.nodeManager.localRuntime.containerManager.reinstallContainer(reinstallSpec);
+      const info = await this.nodeManager.localRuntime.containerManager.reinstallContainer(reinstallSpec);
+      reinstallState = info.state === 'running' ? 'running' : 'stopped';
     } else {
-      await this.nodeManager.requestRemoteNode(
+      const info = await this.nodeManager.requestRemoteNode<LxcContainerRuntimeInfo>(
         row.node_id,
         'POST',
         `/api/v1/containers/${encodeURIComponent(row.container_name)}/reinstall`,
         reinstallSpec,
         600_000
       );
+      reinstallState = info?.state === 'running' ? 'running' : 'stopped';
     }
 
     await this.db.run(
       `UPDATE lxc_instances
-       SET os_template = ?, os_family = ?, root_password_enc = ?, status = 'running', updated_at = datetime('now')
+       SET os_template = ?, os_family = ?, root_password_enc = ?, status = ?, updated_at = datetime('now')
        WHERE id = ?`,
-      [tpl.slug, tpl.family || 'debian', encryptSecret(plainPassword), refId]
+      [tpl.slug, tpl.family || 'debian', encryptSecret(plainPassword), reinstallState, refId]
     );
 
     await this.syncRegistryRow(refId);

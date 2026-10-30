@@ -1,6 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { isBinaryAvailable, runAllowlistedCommand } from './command-runner';
+import {
+  isBinaryAvailable,
+  isRunningAsRoot,
+  privilegedFs,
+  runAllowlistedCommand,
+} from './command-runner';
 import { SafeValidators } from '../security/middleware';
 
 export interface LxcCreateSpec {
@@ -8,7 +13,9 @@ export interface LxcCreateSpec {
   hostname?: string;
   distro: string;
   release: string;
+  fallbackRelease?: string | null;
   arch?: string;
+  templateArchivePath?: string | null;
   cpuCores: number;
   cpuShares?: number;
   cpuLimitPercent?: number;
@@ -61,15 +68,165 @@ export interface LxcContainerRuntimeInfo {
   rxBytes: number;
   txBytes: number;
   diskUsedBytes: number;
+  startupWarning?: string;
 }
 
 const DEFAULT_LXC_BASE = process.env.HKVM_LXC_PATH || '/var/lib/lxc';
+
+const UBUNTU_RELEASE_MAP: Record<string, string> = {
+  '18.04': 'bionic',
+  '20.04': 'focal',
+  '22.04': 'jammy',
+  '24.04': 'noble',
+  '24.10': 'oracular',
+  '25.04': 'plucky',
+  '25.10': 'questing',
+  '26.04': 'resolute',
+};
+
+const DEBIAN_RELEASE_MAP: Record<string, string> = {
+  '10': 'buster',
+  '11': 'bullseye',
+  '12': 'bookworm',
+  '13': 'trixie',
+  '14': 'forky',
+};
+
+const DEVUAN_RELEASE_MAP: Record<string, string> = {
+  '4': 'chimaera',
+  '5': 'daedalus',
+};
+
+/**
+ * Translates human/LXD version identifiers (e.g. `ubuntu` + `24.04` or `debian` + `12`)
+ * into canonical `images.linuxcontainers.org` release names expected by `lxc-create -t download`
+ * (`noble`, `bookworm`, `current`, etc.), while retaining fallbacks.
+ */
+export function resolveDownloadReleaseCandidates(
+  rawDistro: string,
+  rawRelease: string,
+  fallbackRelease?: string | null
+): { distro: string; releases: string[]; archMapper: (arch: string) => string } {
+  const distro = rawDistro.toLowerCase().replace(/[^a-z0-9_.-]/g, '') || 'ubuntu';
+  const cleanRel = rawRelease.replace(/[^a-zA-Z0-9_.-]/g, '');
+  const candidates: string[] = [];
+
+  const pushUnique = (val?: string | null) => {
+    if (!val) return;
+    const cleaned = val.replace(/[^a-zA-Z0-9_.-]/g, '');
+    if (cleaned && !candidates.includes(cleaned)) {
+      candidates.push(cleaned);
+    }
+  };
+
+  if (distro === 'ubuntu') {
+    if (UBUNTU_RELEASE_MAP[cleanRel]) {
+      pushUnique(UBUNTU_RELEASE_MAP[cleanRel]);
+    }
+    pushUnique(cleanRel);
+    for (const [ver, codename] of Object.entries(UBUNTU_RELEASE_MAP)) {
+      if (codename === cleanRel.toLowerCase()) pushUnique(ver);
+    }
+  } else if (distro === 'debian') {
+    if (DEBIAN_RELEASE_MAP[cleanRel]) {
+      pushUnique(DEBIAN_RELEASE_MAP[cleanRel]);
+    }
+    pushUnique(cleanRel);
+    for (const [ver, codename] of Object.entries(DEBIAN_RELEASE_MAP)) {
+      if (codename === cleanRel.toLowerCase()) pushUnique(ver);
+    }
+  } else if (distro === 'devuan') {
+    if (DEVUAN_RELEASE_MAP[cleanRel]) {
+      pushUnique(DEVUAN_RELEASE_MAP[cleanRel]);
+    }
+    pushUnique(cleanRel);
+  } else if (
+    distro === 'kali' ||
+    distro === 'archlinux' ||
+    distro === 'voidlinux' ||
+    distro === 'gentoo'
+  ) {
+    if (!cleanRel || cleanRel.toLowerCase() === 'rolling' || cleanRel.toLowerCase() === 'latest') {
+      pushUnique('current');
+    }
+    pushUnique(cleanRel);
+    pushUnique('current');
+  } else if (distro === 'centos') {
+    if (/^\d+$/.test(cleanRel)) {
+      pushUnique(`${cleanRel}-Stream`);
+    }
+    pushUnique(cleanRel);
+  } else {
+    pushUnique(cleanRel);
+  }
+
+  if (fallbackRelease) {
+    const fb = fallbackRelease.replace(/^images:[^/:]+[:/]/i, '');
+    if (distro === 'ubuntu' && UBUNTU_RELEASE_MAP[fb]) pushUnique(UBUNTU_RELEASE_MAP[fb]);
+    if (distro === 'debian' && DEBIAN_RELEASE_MAP[fb]) pushUnique(DEBIAN_RELEASE_MAP[fb]);
+    pushUnique(fb);
+  }
+
+  if (candidates.length === 0) {
+    candidates.push(distro === 'ubuntu' ? 'noble' : distro === 'debian' ? 'bookworm' : 'current');
+  }
+
+  return {
+    distro,
+    releases: candidates,
+    archMapper: (rawArch: string) => {
+      const a = (rawArch || 'amd64').toLowerCase().replace(/[^a-z0-9_.-]/g, '');
+      if (a === 'x86_64' || a === 'x64') return 'amd64';
+      if (a === 'aarch64') return 'arm64';
+      return a || 'amd64';
+    },
+  };
+}
+
+export function isAppArmorProfileLoadable(): boolean {
+  try {
+    if (!fs.existsSync('/sys/module/apparmor/parameters/enabled')) {
+      return false;
+    }
+    const enabled = fs.readFileSync('/sys/module/apparmor/parameters/enabled', 'utf8').trim();
+    if (enabled !== 'Y' && enabled !== '1') {
+      return false;
+    }
+    return privilegedFs.existsSync('/sys/kernel/security/apparmor/.load');
+  } catch {
+    return false;
+  }
+}
+
+function readActiveCgroupV2Controllers(): Set<string> | null {
+  try {
+    if (!fs.existsSync('/sys/fs/cgroup/cgroup.controllers')) {
+      return null;
+    }
+    const raw = fs.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8').trim();
+    return new Set(raw.split(/\s+/).filter(Boolean));
+  } catch {
+    return null;
+  }
+}
+
+function isCgroupV2SwapSupported(): boolean {
+  return (
+    fs.existsSync('/sys/fs/cgroup/memory.swap.max') ||
+    fs.existsSync('/sys/fs/cgroup/init.scope/memory.swap.max') ||
+    fs.existsSync('/sys/fs/cgroup/system.slice/memory.swap.max')
+  );
+}
 
 export class LxcContainerManager {
   private lxcBaseDir: string;
 
   constructor(lxcBaseDir = DEFAULT_LXC_BASE) {
-    this.lxcBaseDir = lxcBaseDir;
+    this.lxcBaseDir = path.resolve(lxcBaseDir);
+  }
+
+  public getBaseDir(): string {
+    return this.lxcBaseDir;
   }
 
   public getContainerDir(containerName: string): string {
@@ -81,6 +238,32 @@ export class LxcContainerManager {
     return path.join(this.getContainerDir(containerName), 'rootfs');
   }
 
+  /**
+   * Determines whether operations against `this.lxcBaseDir` require root (`sudo -n`).
+   * System `/var/lib/lxc` requires root, whereas unprivileged temporary directories in tests do not.
+   */
+  public needsRootForStore(): boolean {
+    if (isRunningAsRoot()) return false;
+    if (this.lxcBaseDir === '/var/lib/lxc' || this.lxcBaseDir.startsWith('/var/lib/lxc/')) {
+      return true;
+    }
+    try {
+      if (fs.existsSync(this.lxcBaseDir)) {
+        fs.accessSync(this.lxcBaseDir, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+        return false;
+      }
+      const parent = path.dirname(this.lxcBaseDir);
+      fs.accessSync(parent, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
+  private lxcPathArgs(): string[] {
+    return ['-P', this.lxcBaseDir];
+  }
+
   private assertLxcInstalled(): void {
     if (!isBinaryAvailable('lxc-info') || !isBinaryAvailable('lxc-create')) {
       throw new Error(
@@ -89,11 +272,49 @@ export class LxcContainerManager {
     }
   }
 
+  private ensureHostLxcDirectories(): void {
+    privilegedFs.mkdirpSync(this.lxcBaseDir, 0o755);
+    if (this.lxcBaseDir === '/var/lib/lxc') {
+      try {
+        privilegedFs.mkdirpSync('/var/cache/lxc', 0o755);
+        privilegedFs.mkdirpSync('/var/log/lxc', 0o755);
+      } catch {
+        // non-fatal if /var/log/lxc cannot be created
+      }
+    }
+  }
+
+  private async ensureBridgeAvailable(bridgeName: string): Promise<boolean> {
+    const safeBridge = SafeValidators.bridgeOrIface(bridgeName);
+    if (fs.existsSync(`/sys/class/net/${safeBridge}`)) {
+      return true;
+    }
+    if (!isBinaryAvailable('ip')) {
+      return false;
+    }
+    // Attempt to create and bring up the requested Linux bridge (e.g. lxcbr0 on fresh hosts/Codespaces)
+    await runAllowlistedCommand('ip', ['link', 'add', 'name', safeBridge, 'type', 'bridge'], {
+      timeoutMs: 5000,
+      asRoot: true,
+    });
+    await runAllowlistedCommand('ip', ['link', 'set', safeBridge, 'up'], {
+      timeoutMs: 5000,
+      asRoot: true,
+    });
+    return fs.existsSync(`/sys/class/net/${safeBridge}`);
+  }
+
   public async listContainers(): Promise<LxcContainerRuntimeInfo[]> {
     if (!isBinaryAvailable('lxc-ls')) {
       return [];
     }
-    const lsRes = await runAllowlistedCommand('lxc-ls', ['-1'], { timeoutMs: 10_000 });
+    if (!privilegedFs.existsSync(this.lxcBaseDir)) {
+      return [];
+    }
+    const lsRes = await runAllowlistedCommand('lxc-ls', [...this.lxcPathArgs(), '-1'], {
+      timeoutMs: 10_000,
+      asRoot: this.needsRootForStore() || undefined,
+    });
     if (lsRes.exitCode !== 0) return [];
     const names = lsRes.stdout
       .split('\n')
@@ -113,8 +334,10 @@ export class LxcContainerManager {
 
   public async inspectContainer(containerName: string): Promise<LxcContainerRuntimeInfo> {
     const safeName = SafeValidators.containerName(containerName);
+    const configPath = path.join(this.lxcBaseDir, safeName, 'config');
+
     if (!isBinaryAvailable('lxc-info')) {
-      const existsOnDisk = fs.existsSync(path.join(this.lxcBaseDir, safeName, 'config'));
+      const existsOnDisk = privilegedFs.existsSync(configPath);
       return {
         name: safeName,
         state: existsOnDisk ? 'stopped' : 'missing',
@@ -129,11 +352,15 @@ export class LxcContainerManager {
       };
     }
 
-    const res = await runAllowlistedCommand('lxc-info', ['-n', safeName], { timeoutMs: 10_000 });
+    const res = await runAllowlistedCommand('lxc-info', [...this.lxcPathArgs(), '-n', safeName], {
+      timeoutMs: 10_000,
+      asRoot: this.needsRootForStore() || undefined,
+    });
     if (res.exitCode !== 0) {
+      const existsOnDisk = privilegedFs.existsSync(configPath);
       return {
         name: safeName,
-        state: 'missing',
+        state: existsOnDisk ? 'stopped' : 'missing',
         pid: null,
         ips: [],
         cpuUseSeconds: 0,
@@ -210,8 +437,7 @@ export class LxcContainerManager {
 
   private measureDirBytesFast(dirPath: string): number {
     try {
-      const st = fs.statSync(dirPath);
-      return st.size;
+      return privilegedFs.lstatMetaSync(dirPath).size;
     } catch {
       return 0;
     }
@@ -219,9 +445,12 @@ export class LxcContainerManager {
 
   private async getRootfsUsedBytes(containerName: string): Promise<number> {
     const rootfs = this.getRootfsDir(containerName);
-    if (!fs.existsSync(rootfs)) return 0;
+    if (!privilegedFs.existsSync(rootfs)) return 0;
     if (isBinaryAvailable('du')) {
-      const res = await runAllowlistedCommand('du', ['-sb', rootfs], { timeoutMs: 8000 });
+      const res = await runAllowlistedCommand('du', ['-sb', rootfs], {
+        timeoutMs: 8000,
+        asRoot: this.needsRootForStore() || undefined,
+      });
       if (res.exitCode === 0) {
         const bytes = parseInt(res.stdout.trim().split(/\s+/)[0] || '0', 10);
         if (!Number.isNaN(bytes)) return bytes;
@@ -230,53 +459,253 @@ export class LxcContainerManager {
     return 0;
   }
 
+  private async createFromLocalArchive(safeName: string, archivePath: string): Promise<void> {
+    const resolvedArchive = path.resolve(archivePath);
+    if (!fs.existsSync(resolvedArchive)) {
+      throw new Error(`Custom LXC template archive not found at ${resolvedArchive}`);
+    }
+    const ctDir = this.getContainerDir(safeName);
+    const rootfsDir = this.getRootfsDir(safeName);
+    privilegedFs.mkdirpSync(rootfsDir, 0o755);
+
+    const tarRes = await runAllowlistedCommand(
+      'tar',
+      ['--numeric-owner', '-xpf', resolvedArchive, '-C', rootfsDir],
+      {
+        timeoutMs: 600_000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
+    );
+    if (tarRes.exitCode !== 0) {
+      privilegedFs.rmRecursiveSync(ctDir);
+      throw new Error(
+        `Failed to unpack custom LXC rootfs archive: ${tarRes.stderr || tarRes.stdout}`
+      );
+    }
+
+    const baseConfigLines = [
+      '# Distribution configuration',
+      ...(fs.existsSync('/usr/share/lxc/config/common.conf')
+        ? ['lxc.include = /usr/share/lxc/config/common.conf']
+        : []),
+      `lxc.arch = ${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}`,
+      '',
+      '# Container specific configuration',
+      `lxc.rootfs.path = dir:${rootfsDir}`,
+      `lxc.uts.name = ${safeName}`,
+      '',
+    ];
+    privilegedFs.writeFileSync(path.join(ctDir, 'config'), baseConfigLines.join('\n'), 0o640);
+  }
+
+  private async applyOfflineRootPasswordHash(
+    safeName: string,
+    plainPassword: string
+  ): Promise<boolean> {
+    if (!plainPassword || plainPassword.includes('\n') || plainPassword.includes('\0')) {
+      return false;
+    }
+    if (!isBinaryAvailable('openssl')) return false;
+
+    const shadowPath = path.join(this.getRootfsDir(safeName), 'etc', 'shadow');
+    if (!privilegedFs.existsSync(shadowPath)) return false;
+
+    const hashRes = await runAllowlistedCommand('openssl', ['passwd', '-6', '-stdin'], {
+      stdinData: `${plainPassword}\n`,
+      timeoutMs: 5000,
+      asRoot: false,
+    });
+    const passwordHash = hashRes.stdout.trim();
+    if (hashRes.exitCode !== 0 || !passwordHash.startsWith('$6$')) {
+      return false;
+    }
+
+    try {
+      const shadowContent = privilegedFs.readTextSync(shadowPath);
+      const lines = shadowContent.split('\n');
+      let replaced = false;
+      const updated = lines.map((line) => {
+        if (line.startsWith('root:')) {
+          const parts = line.split(':');
+          parts[1] = passwordHash;
+          replaced = true;
+          return parts.join(':');
+        }
+        return line;
+      });
+      if (!replaced) return false;
+      privilegedFs.writeFileSync(shadowPath, updated.join('\n'), 0o640);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   public async createContainer(spec: LxcCreateSpec): Promise<LxcContainerRuntimeInfo> {
     this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(spec.containerName);
-    const distro = spec.distro.replace(/[^a-zA-Z0-9_.-]/g, '');
-    const release = spec.release.replace(/[^a-zA-Z0-9_.-]/g, '');
-    const arch = (spec.arch || 'amd64').replace(/[^a-zA-Z0-9_.-]/g, '');
     const backing = spec.backingStore || 'dir';
 
-    const args = ['-n', safeName, '-B', backing, '-t', 'download', '--', '-d', distro, '-r', release, '-a', arch];
-    const createRes = await runAllowlistedCommand('lxc-create', args, { timeoutMs: 600_000 });
-    if (createRes.exitCode !== 0) {
-      throw new Error(`lxc-create failed (${createRes.exitCode}): ${createRes.stderr || createRes.stdout}`);
+    this.ensureHostLxcDirectories();
+
+    // Clean up any leftover empty/corrupt directory if no valid container config exists
+    const existingInfo = await this.inspectContainer(safeName);
+    const ctDir = this.getContainerDir(safeName);
+    if (existingInfo.state !== 'missing') {
+      throw new Error(`LXC container "${safeName}" already exists on host (${existingInfo.state}).`);
+    }
+    if (privilegedFs.existsSync(ctDir)) {
+      privilegedFs.rmRecursiveSync(ctDir);
     }
 
-    await this.writeManagedConfigSection(safeName, {
-      hostname: spec.hostname || safeName,
-      cpuCores: spec.cpuCores,
-      cpuShares: spec.cpuShares ?? 1024,
-      cpuLimitPercent: spec.cpuLimitPercent ?? 100,
-      cpuPinning: spec.cpuPinning || null,
-      ramMb: spec.ramMb,
-      swapMb: spec.swapMb ?? 512,
-      nesting: spec.nesting !== false,
-      privileged: spec.privileged !== false,
-      apparmorProfile: spec.apparmorProfile || 'generated',
-      autostart: Boolean(spec.autostart),
-      bridge: spec.bridge || 'lxcbr0',
-      ipv4Address: spec.ipv4Address || null,
-      ipv4Gateway: spec.ipv4Gateway || null,
-      ipv6Address: spec.ipv6Address || null,
-      macAddress: spec.macAddress || null,
-      mounts: spec.mounts || [],
-    });
+    if (spec.templateArchivePath && fs.existsSync(path.resolve(spec.templateArchivePath))) {
+      await this.createFromLocalArchive(safeName, spec.templateArchivePath);
+    } else {
+      const { distro, releases, archMapper } = resolveDownloadReleaseCandidates(
+        spec.distro,
+        spec.release,
+        spec.fallbackRelease
+      );
+      const arch = archMapper(spec.arch || 'amd64');
+      const downloadEnv = {
+        DOWNLOAD_KEYSERVER:
+          process.env.LXC_DOWNLOAD_KEYSERVER || 'hkp://keyserver.ubuntu.com:80',
+      };
 
-    await this.startContainer(safeName);
+      let created = false;
+      let lastFailure = '';
 
-    if (spec.rootPassword) {
-      await this.setRootPassword(safeName, spec.rootPassword);
-    }
+      for (const relCandidate of releases) {
+        const baseArgs = [
+          ...this.lxcPathArgs(),
+          '-n',
+          safeName,
+          '-B',
+          backing,
+          '-t',
+          'download',
+          '--',
+          '-d',
+          distro,
+          '-r',
+          relCandidate,
+          '-a',
+          arch,
+        ];
 
-    if (spec.sshPublicKeys && spec.sshPublicKeys.length > 0) {
-      for (const pubKey of spec.sshPublicKeys) {
-        await this.injectSshPublicKey(safeName, pubKey);
+        let createRes = await runAllowlistedCommand('lxc-create', baseArgs, {
+          timeoutMs: 600_000,
+          env: downloadEnv,
+          asRoot: this.needsRootForStore() || undefined,
+        });
+
+        const combinedOut = `${createRes.stderr}\n${createRes.stdout}`;
+        if (
+          createRes.exitCode !== 0 &&
+          process.env.HKVM_LXC_STRICT_GPG !== 'true' &&
+          /unable to fetch gpg key|gpg.*keyserver|gnupg/i.test(combinedOut)
+        ) {
+          if (privilegedFs.existsSync(ctDir)) {
+            privilegedFs.rmRecursiveSync(ctDir);
+          }
+          createRes = await runAllowlistedCommand(
+            'lxc-create',
+            [...baseArgs, '--no-validate'],
+            {
+              timeoutMs: 600_000,
+              env: downloadEnv,
+              asRoot: this.needsRootForStore() || undefined,
+            }
+          );
+        }
+
+        if (createRes.exitCode === 0) {
+          created = true;
+          break;
+        }
+
+        lastFailure = `lxc-create failed (${createRes.exitCode}): ${(
+          createRes.stderr || createRes.stdout
+        ).trim()}`;
+        if (privilegedFs.existsSync(ctDir)) {
+          privilegedFs.rmRecursiveSync(ctDir);
+        }
+
+        const retryNextRelease = /couldn't find a matching image|no matching image/i.test(
+          `${createRes.stderr}\n${createRes.stdout}`
+        );
+        if (!retryNextRelease) {
+          break;
+        }
+      }
+
+      if (!created) {
+        throw new Error(lastFailure || `lxc-create failed for ${distro}:${spec.release} (${arch})`);
       }
     }
 
-    return this.inspectContainer(safeName);
+    try {
+      await this.writeManagedConfigSection(safeName, {
+        hostname: spec.hostname || safeName,
+        cpuCores: spec.cpuCores,
+        cpuShares: spec.cpuShares ?? 1024,
+        cpuLimitPercent: spec.cpuLimitPercent ?? 100,
+        cpuPinning: spec.cpuPinning || null,
+        ramMb: spec.ramMb,
+        swapMb: spec.swapMb ?? 512,
+        nesting: spec.nesting !== false,
+        privileged: spec.privileged !== false,
+        apparmorProfile: spec.apparmorProfile || 'generated',
+        autostart: Boolean(spec.autostart),
+        bridge: spec.bridge || 'lxcbr0',
+        ipv4Address: spec.ipv4Address || null,
+        ipv4Gateway: spec.ipv4Gateway || null,
+        ipv6Address: spec.ipv6Address || null,
+        macAddress: spec.macAddress || null,
+        mounts: spec.mounts || [],
+      });
+
+      if (spec.rootPassword) {
+        await this.applyOfflineRootPasswordHash(safeName, spec.rootPassword);
+      }
+
+      if (spec.sshPublicKeys && spec.sshPublicKeys.length > 0) {
+        for (const pubKey of spec.sshPublicKeys) {
+          await this.injectSshPublicKey(safeName, pubKey);
+        }
+      }
+    } catch (cfgErr) {
+      await this.destroyContainer(safeName).catch(() => {
+        if (privilegedFs.existsSync(ctDir)) privilegedFs.rmRecursiveSync(ctDir);
+      });
+      throw cfgErr;
+    }
+
+    let startupWarning: string | undefined;
+    try {
+      await this.startContainer(safeName);
+      if (spec.rootPassword) {
+        await this.setRootPassword(safeName, spec.rootPassword).catch(() => undefined);
+      }
+    } catch (startErr: any) {
+      const msg = String(startErr?.message || startErr);
+      // If running inside an unprivileged outer container (e.g. unprivileged Docker/Codespace lacking CAP_SYS_ADMIN),
+      // keep the provisioned container in stopped state and report the exact kernel restriction honestly.
+      if (/operation not permitted|permission denied|failed to mount|unshare|namespace/i.test(msg)) {
+        startupWarning = `Container rootfs and configuration created on disk, but automatic boot was blocked by outer host container capabilities: ${msg}`;
+      } else {
+        await this.destroyContainer(safeName).catch(() => {
+          if (privilegedFs.existsSync(ctDir)) privilegedFs.rmRecursiveSync(ctDir);
+        });
+        throw startErr;
+      }
+    }
+
+    const info = await this.inspectContainer(safeName);
+    if (startupWarning) {
+      info.startupWarning = startupWarning;
+    }
+    return info;
   }
 
   public async writeManagedConfigSection(
@@ -303,20 +732,29 @@ export class LxcContainerManager {
   ): Promise<void> {
     const safeName = SafeValidators.containerName(containerName);
     const configFile = path.join(this.getContainerDir(safeName), 'config');
-    if (!fs.existsSync(configFile)) {
+    if (!privilegedFs.existsSync(configFile)) {
       throw new Error(`Container config not found at ${configFile}`);
     }
 
-    const existing = fs.readFileSync(configFile, 'utf8');
+    const existing = privilegedFs.readTextSync(configFile);
     const markerStart = '# --- BEGIN HKVM MANAGED CONFIG ---';
     const markerEnd = '# --- END HKVM MANAGED CONFIG ---';
 
-    const stripped = existing.replace(
+    let stripped = existing.replace(
       new RegExp(`${markerStart}[\\s\\S]*?${markerEnd}\\n?`, 'g'),
       ''
     );
 
-    const isCgroupV2 = fs.existsSync('/sys/fs/cgroup/cgroup.controllers');
+    // Strip template-copied default lxc.net.0.* and lxc.apparmor.* directives so HKVM's managed block is authoritative
+    if (cfg.bridge !== undefined) {
+      stripped = stripped.replace(/^\s*lxc\.net\.0(?:\.[a-zA-Z0-9_.-]+)?\s*=.*$/gm, '');
+    }
+    stripped = stripped.replace(/^\s*lxc\.apparmor\.(?:profile|allow_nesting)\s*=.*$/gm, '');
+    stripped = stripped.replace(/\n{3,}/g, '\n\n');
+
+    const cgroupV2Controllers = readActiveCgroupV2Controllers();
+    const isCgroupV2 = cgroupV2Controllers !== null;
+    const apparmorAvailable = isAppArmorProfileLoadable();
     const lines: string[] = [markerStart];
 
     if (cfg.hostname) {
@@ -329,34 +767,45 @@ export class LxcContainerManager {
     }
 
     if (cfg.nesting) {
-      lines.push('lxc.include = /usr/share/lxc/config/nesting.conf');
+      if (apparmorAvailable && fs.existsSync('/usr/share/lxc/config/nesting.conf')) {
+        lines.push('lxc.include = /usr/share/lxc/config/nesting.conf');
+      } else {
+        lines.push('lxc.mount.auto = proc:mixed sys:rw cgroup:mixed');
+      }
     }
 
-    if (cfg.apparmorProfile) {
-      const cleanProfile = cfg.apparmorProfile.replace(/[^a-zA-Z0-9_.-]/g, '');
-      if (cleanProfile) lines.push(`lxc.apparmor.profile = ${cleanProfile}`);
-    }
+    const requestedProfile = (cfg.apparmorProfile || 'generated').replace(/[^a-zA-Z0-9_.-]/g, '');
+    const effectiveAppArmor = apparmorAvailable ? requestedProfile || 'generated' : 'unconfined';
+    lines.push(`lxc.apparmor.profile = ${effectiveAppArmor}`);
 
     const cores = Math.max(1, Number(cfg.cpuCores || 1));
     const pct = Math.min(100, Math.max(5, Number(cfg.cpuLimitPercent || 100)));
     const quotaUs = Math.round(cores * 100_000 * (pct / 100));
 
-    if (isCgroupV2) {
-      lines.push(`lxc.cgroup2.cpu.max = ${quotaUs} 100000`);
-      if (cfg.cpuShares) {
-        const weight = Math.min(10000, Math.max(1, Math.round((cfg.cpuShares / 1024) * 100)));
-        lines.push(`lxc.cgroup2.cpu.weight = ${weight}`);
+    if (isCgroupV2 && cgroupV2Controllers) {
+      if (cgroupV2Controllers.has('cpu')) {
+        lines.push(`lxc.cgroup2.cpu.max = ${quotaUs} 100000`);
+        if (cfg.cpuShares) {
+          const weight = Math.min(10000, Math.max(1, Math.round((cfg.cpuShares / 1024) * 100)));
+          lines.push(`lxc.cgroup2.cpu.weight = ${weight}`);
+        }
       }
-      if (cfg.cpuPinning && /^[0-9,-]+$/.test(cfg.cpuPinning)) {
+      if (
+        cgroupV2Controllers.has('cpuset') &&
+        cfg.cpuPinning &&
+        /^[0-9,-]+$/.test(cfg.cpuPinning)
+      ) {
         lines.push(`lxc.cgroup2.cpuset.cpus = ${cfg.cpuPinning}`);
       }
-      if (cfg.ramMb) {
-        lines.push(`lxc.cgroup2.memory.max = ${Math.max(64, cfg.ramMb)}M`);
+      if (cgroupV2Controllers.has('memory')) {
+        if (cfg.ramMb) {
+          lines.push(`lxc.cgroup2.memory.max = ${Math.max(64, cfg.ramMb)}M`);
+        }
+        if (cfg.swapMb !== undefined && isCgroupV2SwapSupported()) {
+          lines.push(`lxc.cgroup2.memory.swap.max = ${Math.max(0, cfg.swapMb)}M`);
+        }
       }
-      if (cfg.swapMb !== undefined) {
-        lines.push(`lxc.cgroup2.memory.swap.max = ${Math.max(0, cfg.swapMb)}M`);
-      }
-    } else {
+    } else if (!isCgroupV2) {
       lines.push(`lxc.cgroup.cpu.cfs_period_us = 100000`);
       lines.push(`lxc.cgroup.cpu.cfs_quota_us = ${quotaUs}`);
       if (cfg.cpuShares) {
@@ -372,21 +821,36 @@ export class LxcContainerManager {
 
     if (cfg.bridge) {
       const safeBridge = SafeValidators.bridgeOrIface(cfg.bridge);
-      lines.push(`lxc.net.0.type = veth`);
-      lines.push(`lxc.net.0.link = ${safeBridge}`);
-      lines.push(`lxc.net.0.flags = up`);
-      if (cfg.macAddress && /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(cfg.macAddress)) {
-        lines.push(`lxc.net.0.hwaddr = ${cfg.macAddress}`);
-      }
-      if (cfg.ipv4Address) {
-        const addrPart = cfg.ipv4Address.includes('/') ? cfg.ipv4Address : `${SafeValidators.ipv4(cfg.ipv4Address)}/24`;
-        lines.push(`lxc.net.0.ipv4.address = ${addrPart}`);
-      }
-      if (cfg.ipv4Gateway) {
-        lines.push(`lxc.net.0.ipv4.gateway = ${cfg.ipv4Gateway === 'auto' ? 'auto' : SafeValidators.ipv4(cfg.ipv4Gateway)}`);
-      }
-      if (cfg.ipv6Address) {
-        lines.push(`lxc.net.0.ipv6.address = ${SafeValidators.ipv6OrCidr(cfg.ipv6Address)}`);
+      const isSystemStore =
+        this.lxcBaseDir === '/var/lib/lxc' || this.lxcBaseDir.startsWith('/var/lib/lxc/');
+      const bridgeReady = isSystemStore ? await this.ensureBridgeAvailable(safeBridge) : true;
+
+      if (bridgeReady) {
+        lines.push(`lxc.net.0.type = veth`);
+        lines.push(`lxc.net.0.link = ${safeBridge}`);
+        lines.push(`lxc.net.0.flags = up`);
+        if (cfg.macAddress && /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(cfg.macAddress)) {
+          lines.push(`lxc.net.0.hwaddr = ${cfg.macAddress}`);
+        }
+        if (cfg.ipv4Address) {
+          const addrPart = cfg.ipv4Address.includes('/')
+            ? cfg.ipv4Address
+            : `${SafeValidators.ipv4(cfg.ipv4Address)}/24`;
+          lines.push(`lxc.net.0.ipv4.address = ${addrPart}`);
+        }
+        if (cfg.ipv4Gateway) {
+          lines.push(
+            `lxc.net.0.ipv4.gateway = ${
+              cfg.ipv4Gateway === 'auto' ? 'auto' : SafeValidators.ipv4(cfg.ipv4Gateway)
+            }`
+          );
+        }
+        if (cfg.ipv6Address) {
+          lines.push(`lxc.net.0.ipv6.address = ${SafeValidators.ipv6OrCidr(cfg.ipv6Address)}`);
+        }
+      } else {
+        // Host does not have bridge interface and kernel denied creating one (e.g. nested container host)
+        lines.push(`lxc.net.0.type = none`);
       }
     }
 
@@ -401,7 +865,11 @@ export class LxcContainerManager {
     }
 
     lines.push(markerEnd);
-    fs.writeFileSync(configFile, `${stripped.trimEnd()}\n\n${lines.join('\n')}\n`, 'utf8');
+    privilegedFs.writeFileSync(
+      configFile,
+      `${stripped.trimEnd()}\n\n${lines.join('\n')}\n`,
+      0o640
+    );
   }
 
   public async startContainer(containerName: string): Promise<void> {
@@ -413,9 +881,30 @@ export class LxcContainerManager {
       await this.unfreezeContainer(safeName);
       return;
     }
-    const res = await runAllowlistedCommand('lxc-start', ['-n', safeName, '-d'], { timeoutMs: 30_000 });
+
+    const logFile = privilegedFs.existsSync('/var/log/lxc')
+      ? `/var/log/lxc/${safeName}.log`
+      : path.join(this.getContainerDir(safeName), `${safeName}.log`);
+
+    const res = await runAllowlistedCommand(
+      'lxc-start',
+      [...this.lxcPathArgs(), '-n', safeName, '-d', '-l', 'ERROR', '-o', logFile],
+      {
+        timeoutMs: 30_000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
+    );
     if (res.exitCode !== 0) {
-      throw new Error(`lxc-start failed: ${res.stderr || res.stdout}`);
+      let logDetails = '';
+      if (privilegedFs.existsSync(logFile)) {
+        try {
+          const tail = privilegedFs.readTextSync(logFile).trim().split('\n').slice(-12).join('\n');
+          if (tail) logDetails = ` | Log: ${tail}`;
+        } catch {
+          // ignore
+        }
+      }
+      throw new Error(`lxc-start failed: ${(res.stderr || res.stdout).trim()}${logDetails}`);
     }
   }
 
@@ -424,10 +913,22 @@ export class LxcContainerManager {
     const safeName = SafeValidators.containerName(containerName);
     const info = await this.inspectContainer(safeName);
     if (info.state === 'stopped' || info.state === 'missing') return;
-    const args = force ? ['-n', safeName, '-k'] : ['-n', safeName, '-t', '15'];
-    const res = await runAllowlistedCommand('lxc-stop', args, { timeoutMs: 25_000 });
+    const args = force
+      ? [...this.lxcPathArgs(), '-n', safeName, '-k']
+      : [...this.lxcPathArgs(), '-n', safeName, '-t', '15'];
+    const res = await runAllowlistedCommand('lxc-stop', args, {
+      timeoutMs: 25_000,
+      asRoot: this.needsRootForStore() || undefined,
+    });
     if (res.exitCode !== 0) {
-      const killRes = await runAllowlistedCommand('lxc-stop', ['-n', safeName, '-k'], { timeoutMs: 10_000 });
+      const killRes = await runAllowlistedCommand(
+        'lxc-stop',
+        [...this.lxcPathArgs(), '-n', safeName, '-k'],
+        {
+          timeoutMs: 10_000,
+          asRoot: this.needsRootForStore() || undefined,
+        }
+      );
       if (killRes.exitCode !== 0) {
         throw new Error(`lxc-stop failed: ${killRes.stderr || res.stderr}`);
       }
@@ -443,7 +944,14 @@ export class LxcContainerManager {
   public async freezeContainer(containerName: string): Promise<void> {
     this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(containerName);
-    const res = await runAllowlistedCommand('lxc-freeze', ['-n', safeName], { timeoutMs: 15_000 });
+    const res = await runAllowlistedCommand(
+      'lxc-freeze',
+      [...this.lxcPathArgs(), '-n', safeName],
+      {
+        timeoutMs: 15_000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
+    );
     if (res.exitCode !== 0) {
       throw new Error(`lxc-freeze failed: ${res.stderr || res.stdout}`);
     }
@@ -452,7 +960,14 @@ export class LxcContainerManager {
   public async unfreezeContainer(containerName: string): Promise<void> {
     this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(containerName);
-    const res = await runAllowlistedCommand('lxc-unfreeze', ['-n', safeName], { timeoutMs: 15_000 });
+    const res = await runAllowlistedCommand(
+      'lxc-unfreeze',
+      [...this.lxcPathArgs(), '-n', safeName],
+      {
+        timeoutMs: 15_000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
+    );
     if (res.exitCode !== 0) {
       throw new Error(`lxc-unfreeze failed: ${res.stderr || res.stdout}`);
     }
@@ -462,8 +977,17 @@ export class LxcContainerManager {
     this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(containerName);
     await this.stopContainer(safeName, true).catch(() => undefined);
-    const res = await runAllowlistedCommand('lxc-destroy', ['-n', safeName, '-f'], { timeoutMs: 60_000 });
+    const res = await runAllowlistedCommand(
+      'lxc-destroy',
+      [...this.lxcPathArgs(), '-n', safeName, '-f'],
+      {
+        timeoutMs: 60_000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
+    );
     if (res.exitCode !== 0) {
+      const ctDir = this.getContainerDir(safeName);
+      if (!privilegedFs.existsSync(ctDir)) return;
       throw new Error(`lxc-destroy failed: ${res.stderr || res.stdout}`);
     }
   }
@@ -488,30 +1012,38 @@ export class LxcContainerManager {
     const info = await this.inspectContainer(safeName);
     if (info.state === 'running' && isBinaryAvailable('lxc-cgroup')) {
       const isV2 = fs.existsSync('/sys/fs/cgroup/cgroup.controllers');
+      const rootOpt = { timeoutMs: 5000, asRoot: this.needsRootForStore() || undefined };
       if (update.ramMb) {
         const key = isV2 ? 'memory.max' : 'memory.limit_in_bytes';
-        await runAllowlistedCommand('lxc-cgroup', ['-n', safeName, key, `${Math.max(64, update.ramMb)}M`], {
-          timeoutMs: 5000,
-        });
+        await runAllowlistedCommand(
+          'lxc-cgroup',
+          [...this.lxcPathArgs(), '-n', safeName, key, `${Math.max(64, update.ramMb)}M`],
+          rootOpt
+        );
       }
       if (update.cpuCores) {
         const pct = Math.min(100, Math.max(5, Number(update.cpuLimitPercent || 100)));
         const quotaUs = Math.round(Math.max(1, update.cpuCores) * 100_000 * (pct / 100));
         if (isV2) {
-          await runAllowlistedCommand('lxc-cgroup', ['-n', safeName, 'cpu.max', `${quotaUs} 100000`], {
-            timeoutMs: 5000,
-          });
+          await runAllowlistedCommand(
+            'lxc-cgroup',
+            [...this.lxcPathArgs(), '-n', safeName, 'cpu.max', `${quotaUs} 100000`],
+            rootOpt
+          );
         } else {
-          await runAllowlistedCommand('lxc-cgroup', ['-n', safeName, 'cpu.cfs_quota_us', `${quotaUs}`], {
-            timeoutMs: 5000,
-          });
+          await runAllowlistedCommand(
+            'lxc-cgroup',
+            [...this.lxcPathArgs(), '-n', safeName, 'cpu.cfs_quota_us', `${quotaUs}`],
+            rootOpt
+          );
         }
       }
     }
   }
 
   /**
-   * Resets root password inside container using `chpasswd` over stdin (`shell: false`).
+   * Resets root password inside container using `chpasswd` over stdin (`shell: false`),
+   * with offline `/etc/shadow` SHA-512 hash fallback when container is stopped.
    * Zero shell interpolation of password characters.
    */
   public async setRootPassword(containerName: string, newPassword: string): Promise<void> {
@@ -520,16 +1052,28 @@ export class LxcContainerManager {
     if (!newPassword || newPassword.includes('\n') || newPassword.includes('\0')) {
       throw new Error('Password contains invalid control characters.');
     }
+
+    const info = await this.inspectContainer(safeName);
+    if (info.state !== 'running') {
+      const updatedOffline = await this.applyOfflineRootPasswordHash(safeName, newPassword);
+      if (updatedOffline) return;
+      throw new Error(`Container "${safeName}" is not running and /etc/shadow could not be updated.`);
+    }
+
     const res = await runAllowlistedCommand(
       'lxc-attach',
-      ['-n', safeName, '--', '/usr/sbin/chpasswd'],
+      [...this.lxcPathArgs(), '-n', safeName, '--', 'chpasswd'],
       {
         stdinData: `root:${newPassword}\n`,
         timeoutMs: 10_000,
+        asRoot: this.needsRootForStore() || undefined,
       }
     );
     if (res.exitCode !== 0) {
-      throw new Error(`Failed to update container root password: ${res.stderr || res.stdout}`);
+      const fallback = await this.applyOfflineRootPasswordHash(safeName, newPassword);
+      if (!fallback) {
+        throw new Error(`Failed to update container root password: ${res.stderr || res.stdout}`);
+      }
     }
   }
 
@@ -540,15 +1084,20 @@ export class LxcContainerManager {
       throw new Error('Invalid OpenSSH public key format.');
     }
     const rootfs = this.getRootfsDir(safeName);
-    if (!fs.existsSync(rootfs)) {
+    if (!privilegedFs.existsSync(rootfs)) {
       throw new Error(`Container rootfs does not exist at ${rootfs}`);
     }
     const sshDir = this.resolveConfinedRootfsPath(safeName, '/root/.ssh');
-    fs.mkdirSync(sshDir, { recursive: true, mode: 0o700 });
+    privilegedFs.mkdirpSync(sshDir, 0o700);
     const authKeysPath = path.join(sshDir, 'authorized_keys');
-    const existing = fs.existsSync(authKeysPath) ? fs.readFileSync(authKeysPath, 'utf8') : '';
+    const existing = privilegedFs.existsSync(authKeysPath)
+      ? privilegedFs.readTextSync(authKeysPath)
+      : '';
     if (!existing.includes(trimmed)) {
-      fs.appendFileSync(authKeysPath, `${trimmed}\n`, { mode: 0o600 });
+      const nextContent = existing
+        ? `${existing.replace(/\n*$/, '\n')}${trimmed}\n`
+        : `${trimmed}\n`;
+      privilegedFs.writeFileSync(authKeysPath, nextContent, 0o600);
     }
   }
 
@@ -559,8 +1108,20 @@ export class LxcContainerManager {
     const safeName = SafeValidators.containerName(containerName);
     const res = await runAllowlistedCommand(
       'lxc-attach',
-      ['-n', safeName, '--', 'ps', '-eo', 'pid,user,pcpu,pmem,comm', '--no-headers'],
-      { timeoutMs: 8000 }
+      [
+        ...this.lxcPathArgs(),
+        '-n',
+        safeName,
+        '--',
+        'ps',
+        '-eo',
+        'pid,user,pcpu,pmem,comm',
+        '--no-headers',
+      ],
+      {
+        timeoutMs: 8000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
     );
     if (res.exitCode !== 0) return [];
     return res.stdout
@@ -586,25 +1147,29 @@ export class LxcContainerManager {
       path.join(this.getContainerDir(safeName), `${safeName}.log`),
     ];
     for (const file of candidates) {
-      if (fs.existsSync(file)) {
-        const content = fs.readFileSync(file, 'utf8');
-        return content.split('\n').slice(-maxLines).join('\n');
+      if (privilegedFs.existsSync(file)) {
+        try {
+          const content = privilegedFs.readTextSync(file);
+          return content.split('\n').slice(-maxLines).join('\n');
+        } catch {
+          // ignore unreadable log candidate
+        }
       }
     }
     return '';
   }
 
   /**
-   * Resolves a user-supplied path strictly within `/var/lib/lxc/<container>/rootfs`,
+   * Resolves a user-supplied path strictly within `<lxcBaseDir>/<container>/rootfs`,
    * blocking both `..` traversal and symlink escapes outside `rootfs`.
    */
   public resolveConfinedRootfsPath(containerName: string, subPath: string): string {
     const safeName = SafeValidators.containerName(containerName);
     const rootfs = path.resolve(this.getRootfsDir(safeName));
-    if (!fs.existsSync(rootfs)) {
+    if (!privilegedFs.existsSync(rootfs)) {
       throw new Error(`Container rootfs does not exist for "${safeName}".`);
     }
-    const realRootfs = fs.realpathSync(rootfs);
+    const realRootfs = privilegedFs.realpathSync(rootfs);
     const safeRel = SafeValidators.safeContainerSubpath(subPath).replace(/^\//, '');
     const joined = path.resolve(realRootfs, safeRel);
 
@@ -613,9 +1178,9 @@ export class LxcContainerManager {
     }
 
     // Check existing parent/target realpath to prevent symlink escape
-    const checkTarget = fs.existsSync(joined) ? joined : path.dirname(joined);
-    if (fs.existsSync(checkTarget)) {
-      const realTarget = fs.realpathSync(checkTarget);
+    const checkTarget = privilegedFs.existsSync(joined) ? joined : path.dirname(joined);
+    if (privilegedFs.existsSync(checkTarget)) {
+      const realTarget = privilegedFs.realpathSync(checkTarget);
       if (realTarget !== realRootfs && !realTarget.startsWith(realRootfs + path.sep)) {
         throw new Error('Symlink escape outside container rootfs denied.');
       }
@@ -630,47 +1195,53 @@ export class LxcContainerManager {
   ): Array<{ name: string; path: string; isDirectory: boolean; size: number; modifiedAt: string }> {
     const targetDir = this.resolveConfinedRootfsPath(containerName, subPath);
     const cleanRel = SafeValidators.safeContainerSubpath(subPath);
-    const entries = fs.readdirSync(targetDir, { withFileTypes: true });
-    return entries.map((ent) => {
-      const childPath = path.join(targetDir, ent.name);
+    const names = privilegedFs.readdirNamesSync(targetDir);
+    return names.map((name) => {
+      const childPath = path.join(targetDir, name);
       let size = 0;
       let modifiedAt = new Date(0).toISOString();
+      let isDirectory = false;
       try {
-        const st = fs.lstatSync(childPath);
+        const st = privilegedFs.lstatMetaSync(childPath);
         size = st.size;
-        modifiedAt = st.mtime.toISOString();
+        modifiedAt = st.mtimeIso;
+        isDirectory = st.isDirectory;
       } catch {
         // ignore broken symlink stat
       }
       return {
-        name: ent.name,
-        path: cleanRel === '/' ? `/${ent.name}` : `${cleanRel}/${ent.name}`,
-        isDirectory: ent.isDirectory(),
+        name,
+        path: cleanRel === '/' ? `/${name}` : `${cleanRel}/${name}`,
+        isDirectory,
         size,
         modifiedAt,
       };
     });
   }
 
-  public readRootfsFile(containerName: string, subPath: string, maxBytes = 2 * 1024 * 1024): Buffer {
+  public readRootfsFile(
+    containerName: string,
+    subPath: string,
+    maxBytes = 2 * 1024 * 1024
+  ): Buffer {
     const target = this.resolveConfinedRootfsPath(containerName, subPath);
-    const st = fs.lstatSync(target);
-    if (st.isSymbolicLink() || !st.isFile()) {
+    const st = privilegedFs.lstatMetaSync(target);
+    if (st.isSymbolicLink || !st.isFile) {
       throw new Error('Target is not a regular file.');
     }
     if (st.size > maxBytes) {
       throw new Error(`File exceeds maximum inline read size (${maxBytes} bytes).`);
     }
-    return fs.readFileSync(target);
+    return privilegedFs.readFileSync(target, maxBytes);
   }
 
   public writeRootfsFile(containerName: string, subPath: string, data: Buffer | string): void {
     const target = this.resolveConfinedRootfsPath(containerName, subPath);
-    if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
+    if (privilegedFs.existsSync(target) && privilegedFs.lstatMetaSync(target).isSymbolicLink) {
       throw new Error('Refusing to overwrite symlink inside container rootfs.');
     }
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, data);
+    privilegedFs.mkdirpSync(path.dirname(target));
+    privilegedFs.writeFileSync(target, data);
   }
 
   public deleteRootfsEntry(containerName: string, subPath: string): void {
@@ -679,6 +1250,6 @@ export class LxcContainerManager {
       throw new Error('Refusing to delete container root directory.');
     }
     const target = this.resolveConfinedRootfsPath(containerName, cleanRel);
-    fs.rmSync(target, { recursive: true, force: false });
+    privilegedFs.rmRecursiveSync(target);
   }
 }

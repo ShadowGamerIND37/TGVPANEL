@@ -15,6 +15,8 @@ export declare class LxcSnapshotAndBackupManager {
     private backupDir;
     private lxcBaseDir;
     constructor(backupDir?: string, lxcBaseDir?: string);
+    private needsRootForStore;
+    private lxcPathArgs;
     listSnapshots(containerName: string): Promise<SnapshotInfo[]>;
     createSnapshot(containerName: string, comment?: string): Promise<SnapshotInfo>;
     restoreSnapshot(containerName: string, snapshotName: string): Promise<void>;

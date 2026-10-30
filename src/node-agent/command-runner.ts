@@ -1,5 +1,6 @@
-import { execFile, spawn } from 'child_process';
+import { execFile, execFileSync, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 export interface CommandResult {
@@ -16,11 +17,18 @@ export interface CommandOptions {
   stdinData?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  /**
+   * Request root execution (`sudo -n`) when the Node process is not already UID 0.
+   * Automatically enabled for system-level LXC, firewall, and volume-manager binaries
+   * unless explicitly set to `false`.
+   */
+  asRoot?: boolean;
 }
 
 /**
  * Explicit allowlist of system binaries the HKVM Node Agent and Virtualization Adapters may invoke.
  * Commands are ALWAYS executed via `spawn` / `execFile` with argument arrays (`shell: false`).
+ * Note: `sudo`, `su`, `sh`, `bash`, etc. are intentionally excluded from this allowlist.
  */
 const ALLOWED_BINARIES = new Set([
   // LXC native tools
@@ -82,6 +90,39 @@ const ALLOWED_BINARIES = new Set([
   'openssl',
 ]);
 
+/**
+ * Binaries that manage system-wide hypervisor/container/network/volume state and require UID 0
+ * when targeting host resources.
+ */
+const PRIVILEGED_SYSTEM_BINARIES = new Set([
+  'lxc-create',
+  'lxc-start',
+  'lxc-stop',
+  'lxc-destroy',
+  'lxc-info',
+  'lxc-ls',
+  'lxc-freeze',
+  'lxc-unfreeze',
+  'lxc-attach',
+  'lxc-snapshot',
+  'lxc-cgroup',
+  'lxc-autostart',
+  'iptables',
+  'iptables-save',
+  'iptables-restore',
+  'ip6tables',
+  'nft',
+  'tc',
+  'lvcreate',
+  'lvremove',
+  'lvextend',
+  'lvs',
+  'vgs',
+  'zfs',
+  'zpool',
+  'btrfs',
+]);
+
 const SEARCH_DIRS = [
   '/usr/local/sbin',
   '/usr/local/bin',
@@ -91,21 +132,127 @@ const SEARCH_DIRS = [
   '/bin',
 ];
 
+function findSystemTool(name: string): string | null {
+  for (const dir of SEARCH_DIRS) {
+    const candidate = path.join(dir, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // continue
+    }
+  }
+  return null;
+}
+
+export function isRunningAsRoot(): boolean {
+  return typeof process.getuid === 'function' && process.getuid() === 0;
+}
+
+export function currentUsername(): string {
+  try {
+    return os.userInfo().username || process.env.USER || 'non-root';
+  } catch {
+    return process.env.USER || 'non-root';
+  }
+}
+
+export function currentHomedir(): string {
+  try {
+    const h = os.homedir();
+    if (h && h !== '/') return h;
+  } catch {
+    // ignore
+  }
+  if (process.env.HOME && process.env.HOME !== '/') {
+    return process.env.HOME;
+  }
+  return isRunningAsRoot() ? '/root' : '/tmp';
+}
+
+let cachedSudoState: { checked: boolean; available: boolean; sudoPath: string | null } = {
+  checked: false,
+  available: false,
+  sudoPath: null,
+};
+
+export function resolveSudoBinary(): string | null {
+  if (!cachedSudoState.checked) {
+    canPasswordlessSudo();
+  }
+  return cachedSudoState.sudoPath;
+}
+
+/**
+ * Checks once whether non-interactive passwordless `sudo -n` is available when HKVM
+ * is started as a non-root user (e.g., `ubuntu` or `codespace` running `npm start`).
+ */
+export function canPasswordlessSudo(): boolean {
+  if (isRunningAsRoot()) return false;
+  if (cachedSudoState.checked) return cachedSudoState.available;
+
+  const sudoPath = findSystemTool('sudo');
+  if (!sudoPath) {
+    cachedSudoState = { checked: true, available: false, sudoPath: null };
+    return false;
+  }
+
+  try {
+    execFileSync(sudoPath, ['-n', 'true'], {
+      stdio: 'ignore',
+      timeout: 3000,
+    });
+    cachedSudoState = { checked: true, available: true, sudoPath };
+    return true;
+  } catch {
+    cachedSudoState = { checked: true, available: false, sudoPath };
+    return false;
+  }
+}
+
+export function buildSafeSpawnEnv(
+  effectiveRoot: boolean,
+  extraEnv?: NodeJS.ProcessEnv
+): Record<string, string> {
+  const baseHome = effectiveRoot ? '/root' : currentHomedir();
+  const baseUser = effectiveRoot ? 'root' : currentUsername();
+  const merged: Record<string, string> = {
+    PATH: SEARCH_DIRS.join(':'),
+    HOME: baseHome,
+    USER: baseUser,
+    LOGNAME: baseUser,
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+  };
+
+  if (extraEnv) {
+    for (const [k, v] of Object.entries(extraEnv)) {
+      if (
+        typeof v === 'string' &&
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) &&
+        !k.includes('\0') &&
+        !v.includes('\0') &&
+        !v.includes('\n')
+      ) {
+        merged[k] = v;
+      }
+    }
+  }
+
+  // Never allow HOME to collapse to empty or "/" (prevents liblxc mkdir("//.local/") bug)
+  if (!merged.HOME || merged.HOME === '/') {
+    merged.HOME = effectiveRoot ? '/root' : '/tmp';
+  }
+
+  return merged;
+}
+
 export function resolveBinaryPath(binaryName: string): string | null {
   const clean = path.basename(binaryName);
   if (!ALLOWED_BINARIES.has(clean)) {
     throw new Error(`Security policy violation: binary "${binaryName}" is not in the allowlist.`);
   }
-  for (const dir of SEARCH_DIRS) {
-    const candidate = path.join(dir, clean);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // continue searching
-    }
-  }
-  return null;
+  return findSystemTool(clean);
 }
 
 export function isBinaryAvailable(binaryName: string): boolean {
@@ -116,8 +263,13 @@ export function isBinaryAvailable(binaryName: string): boolean {
   }
 }
 
+function isPureVersionProbe(args: string[]): boolean {
+  return args.length === 1 && (args[0] === '--version' || args[0] === '-v' || args[0] === '-V');
+}
+
 /**
  * Safely executes an allowlisted binary with `shell: false`, optional stdin pipe,
+ * controlled `sudo -n` elevation for privileged host tools, valid `HOME` env,
  * hard timeout, and bounded stdout/stderr buffers.
  */
 export async function runAllowlistedCommand(
@@ -147,19 +299,38 @@ export async function runAllowlistedCommand(
     };
   }
 
+  const wantsRoot =
+    options.asRoot !== undefined
+      ? options.asRoot
+      : PRIVILEGED_SYSTEM_BINARIES.has(cleanName) && !isPureVersionProbe(args);
+
+  const alreadyRoot = isRunningAsRoot();
+  const escalateWithSudo = !alreadyRoot && wantsRoot && canPasswordlessSudo();
+  const effectiveRoot = alreadyRoot || escalateWithSudo;
+  const safeEnv = buildSafeSpawnEnv(effectiveRoot, options.env);
+
+  let spawnExecutable = resolved;
+  let spawnArgs = args;
+
+  if (escalateWithSudo && cachedSudoState.sudoPath) {
+    const envBin = findSystemTool('env');
+    spawnExecutable = cachedSudoState.sudoPath;
+    if (envBin) {
+      const envAssignments = Object.entries(safeEnv).map(([k, v]) => `${k}=${v}`);
+      spawnArgs = ['-n', '--', envBin, ...envAssignments, resolved, ...args];
+    } else {
+      spawnArgs = ['-n', '--', resolved, ...args];
+    }
+  }
+
   const timeoutMs = options.timeoutMs ?? 60_000;
   const maxBytes = options.maxOutputBytes ?? 4 * 1024 * 1024;
   const startedAt = Date.now();
 
   return new Promise<CommandResult>((resolve) => {
-    const child = spawn(resolved, args, {
+    const child = spawn(spawnExecutable, spawnArgs, {
       cwd: options.cwd || '/',
-      env: {
-        PATH: SEARCH_DIRS.join(':'),
-        LANG: 'C.UTF-8',
-        LC_ALL: 'C.UTF-8',
-        ...(options.env || {}),
-      },
+      env: safeEnv,
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -207,10 +378,22 @@ export async function runAllowlistedCommand(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      const finalCode = code ?? (timedOut ? 124 : 1);
+      let finalStderr = stderrBuf;
+      if (
+        finalCode !== 0 &&
+        wantsRoot &&
+        !effectiveRoot &&
+        /permission denied|operation not permitted|must be root|not permitted/i.test(
+          `${stderrBuf}\n${stdoutBuf}`
+        )
+      ) {
+        finalStderr = `${stderrBuf.trim()}\n[HKVM Privilege Hint] Process is running as non-root user "${currentUsername()}" without passwordless sudo. Run HKVM as root ("sudo npm start") or configure NOPASSWD sudo for LXC/network binaries.`.trim();
+      }
       resolve({
-        exitCode: code ?? (timedOut ? 124 : 1),
+        exitCode: finalCode,
         stdout: stdoutBuf,
-        stderr: stderrBuf,
+        stderr: finalStderr,
         timedOut,
         durationMs: Date.now() - startedAt,
       });
@@ -222,6 +405,198 @@ export async function runAllowlistedCommand(
     child.stdin.end();
   });
 }
+
+function isPermissionError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'EACCES' || code === 'EPERM';
+}
+
+function assertSafeFsPath(targetPath: string): string {
+  if (!targetPath || typeof targetPath !== 'string' || targetPath.includes('\0')) {
+    throw new Error('Invalid filesystem path.');
+  }
+  return path.resolve(targetPath);
+}
+
+function runSudoHelperSync(toolName: string, args: string[], input?: Buffer | string): Buffer {
+  const sudoPath = resolveSudoBinary();
+  const toolPath = findSystemTool(toolName);
+  if (!sudoPath || !toolPath || !canPasswordlessSudo()) {
+    throw Object.assign(
+      new Error(
+        `Permission denied accessing root-owned path (run HKVM as root or enable passwordless sudo).`
+      ),
+      { code: 'EACCES' }
+    );
+  }
+  for (const a of args) {
+    if (typeof a !== 'string' || a.includes('\0')) {
+      throw new Error('Invalid helper argument.');
+    }
+  }
+  return execFileSync(sudoPath, ['-n', '--', toolPath, ...args], {
+    input,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: 15_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+}
+
+/**
+ * Narrow, `shell: false` filesystem helpers that use native Node `fs` first and transparently
+ * fall back to `sudo -n` ONLY when accessing root-owned host paths (`/var/lib/lxc`, `/var/log/lxc`)
+ * from a non-root panel process.
+ */
+export const privilegedFs = {
+  existsSync(targetPath: string): boolean {
+    const resolved = assertSafeFsPath(targetPath);
+    try {
+      fs.accessSync(resolved, fs.constants.F_OK);
+      return true;
+    } catch (err) {
+      if (!isPermissionError(err)) return false;
+      if (!canPasswordlessSudo()) return false;
+      try {
+        runSudoHelperSync('test', ['-e', resolved]);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  },
+
+  realpathSync(targetPath: string): string {
+    const resolved = assertSafeFsPath(targetPath);
+    try {
+      return fs.realpathSync(resolved);
+    } catch (err) {
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      const out = runSudoHelperSync('realpath', ['-e', '--', resolved]);
+      return out.toString('utf8').replace(/\r?\n$/, '');
+    }
+  },
+
+  mkdirpSync(targetPath: string, mode?: number): void {
+    const resolved = assertSafeFsPath(targetPath);
+    try {
+      fs.mkdirSync(resolved, { recursive: true, ...(mode !== undefined ? { mode } : {}) });
+    } catch (err) {
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      runSudoHelperSync('mkdir', ['-p', '--', resolved]);
+      if (mode !== undefined) {
+        runSudoHelperSync('chmod', [mode.toString(8), '--', resolved]);
+      }
+    }
+  },
+
+  readFileSync(targetPath: string, maxBytes = 8 * 1024 * 1024): Buffer {
+    const resolved = assertSafeFsPath(targetPath);
+    try {
+      const st = fs.lstatSync(resolved);
+      if (st.size > maxBytes) {
+        throw new Error(`File exceeds maximum read size (${maxBytes} bytes).`);
+      }
+      return fs.readFileSync(resolved);
+    } catch (err) {
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      const buf = runSudoHelperSync('cat', ['--', resolved]);
+      if (buf.length > maxBytes) {
+        throw new Error(`File exceeds maximum read size (${maxBytes} bytes).`);
+      }
+      return buf;
+    }
+  },
+
+  readTextSync(targetPath: string): string {
+    return privilegedFs.readFileSync(targetPath).toString('utf8');
+  },
+
+  writeFileSync(targetPath: string, data: Buffer | string, mode?: number): void {
+    const resolved = assertSafeFsPath(targetPath);
+    try {
+      fs.writeFileSync(resolved, data, mode !== undefined ? { mode } : undefined);
+    } catch (err) {
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      runSudoHelperSync('tee', ['--', resolved], data);
+      if (mode !== undefined) {
+        runSudoHelperSync('chmod', [mode.toString(8), '--', resolved]);
+      }
+    }
+  },
+
+  lstatMetaSync(targetPath: string): {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink: boolean;
+    size: number;
+    mtimeIso: string;
+  } {
+    const resolved = assertSafeFsPath(targetPath);
+    try {
+      const st = fs.lstatSync(resolved);
+      return {
+        isFile: st.isFile(),
+        isDirectory: st.isDirectory(),
+        isSymbolicLink: st.isSymbolicLink(),
+        size: st.size,
+        mtimeIso: st.mtime.toISOString(),
+      };
+    } catch (err) {
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      const out = runSudoHelperSync('stat', ['-c', '%F|%s|%Y', '--', resolved])
+        .toString('utf8')
+        .trim();
+      const [typeStr, sizeStr, epochStr] = out.split('|');
+      const lower = (typeStr || '').toLowerCase();
+      const epochSec = parseInt(epochStr || '0', 10) || 0;
+      return {
+        isFile: lower.includes('regular file') || lower.includes('regular empty file'),
+        isDirectory: lower.includes('directory'),
+        isSymbolicLink: lower.includes('symbolic link'),
+        size: parseInt(sizeStr || '0', 10) || 0,
+        mtimeIso: new Date(epochSec * 1000).toISOString(),
+      };
+    }
+  },
+
+  readdirNamesSync(targetPath: string): string[] {
+    const resolved = assertSafeFsPath(targetPath);
+    try {
+      return fs.readdirSync(resolved);
+    } catch (err) {
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      const out = runSudoHelperSync('ls', ['-1A', '--', resolved]).toString('utf8');
+      return out.split('\n').filter(Boolean);
+    }
+  },
+
+  rmRecursiveSync(targetPath: string): void {
+    const resolved = assertSafeFsPath(targetPath);
+    if (resolved === '/' || resolved === '/var' || resolved === '/var/lib' || resolved === '/var/lib/lxc') {
+      throw new Error(`Refusing to recursively remove protected system path: ${resolved}`);
+    }
+    try {
+      fs.rmSync(resolved, { recursive: true, force: false });
+    } catch (err) {
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      runSudoHelperSync('rm', ['-rf', '--', resolved]);
+    }
+  },
+
+  chownToCurrentUserSync(targetPath: string): void {
+    if (isRunningAsRoot() || !canPasswordlessSudo()) return;
+    const resolved = assertSafeFsPath(targetPath);
+    const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
+    const gid = typeof process.getgid === 'function' ? process.getgid() : -1;
+    if (uid >= 0 && gid >= 0) {
+      try {
+        runSudoHelperSync('chown', [`${uid}:${gid}`, '--', resolved]);
+      } catch {
+        // best-effort ownership normalization for backup archives
+      }
+    }
+  },
+};
 
 export interface HostCapabilities {
   kvmDevicePresent: boolean;

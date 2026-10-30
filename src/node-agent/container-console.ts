@@ -1,6 +1,13 @@
+import path from 'path';
 import * as pty from 'node-pty';
 import WebSocket from 'ws';
-import { isBinaryAvailable, resolveBinaryPath } from './command-runner';
+import {
+  canPasswordlessSudo,
+  isBinaryAvailable,
+  isRunningAsRoot,
+  resolveBinaryPath,
+  resolveSudoBinary,
+} from './command-runner';
 import { SafeValidators } from '../security/middleware';
 
 export interface ActiveConsoleSession {
@@ -12,16 +19,21 @@ export interface ActiveConsoleSession {
   close: () => void;
 }
 
+const DEFAULT_LXC_BASE = process.env.HKVM_LXC_PATH || '/var/lib/lxc';
+
 /**
- * Spawns a real interactive PTY attached to an LXC container (`lxc-attach -n <name> -- /bin/sh -l` or `/bin/bash`)
+ * Spawns a real interactive PTY attached to an LXC container (`lxc-attach -P <lxcBaseDir> -n <name> ...`)
+ * with automatic `sudo -n` elevation when HKVM runs as a non-root operator user,
  * and bridges stdin/stdout/resize frames over WebSocket. Never fabricates terminal output.
  */
 export class LxcContainerConsoleManager {
   private sessions = new Map<string, ActiveConsoleSession>();
   private idleTimeoutMs: number;
+  private lxcBaseDir: string;
 
-  constructor(idleTimeoutMs = 30 * 60_000) {
+  constructor(idleTimeoutMs = 30 * 60_000, lxcBaseDir = DEFAULT_LXC_BASE) {
     this.idleTimeoutMs = idleTimeoutMs;
+    this.lxcBaseDir = path.resolve(lxcBaseDir);
   }
 
   public attachWebSocket(
@@ -46,24 +58,39 @@ export class LxcContainerConsoleManager {
     const lxcAttachBin = resolveBinaryPath('lxc-attach')!;
     const cols = Math.min(400, Math.max(20, Number(options.cols || 100)));
     const rows = Math.min(200, Math.max(10, Number(options.rows || 30)));
-    const sessionId = options.sessionId || `lxc-pty-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sessionId =
+      options.sessionId || `lxc-pty-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const term = pty.spawn(
-      lxcAttachBin,
-      ['-n', safeName, '--clear-env', '--', '/bin/sh', '-c', 'if [ -x /bin/bash ]; then exec /bin/bash -l; else exec /bin/sh -l; fi'],
-      {
-        name: 'xterm-256color',
-        cols,
-        rows,
-        cwd: '/',
-        env: {
-          TERM: 'xterm-256color',
-          HOME: '/root',
-          PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-          LANG: 'C.UTF-8',
-        },
-      }
-    );
+    const attachArgs = [
+      '-P',
+      this.lxcBaseDir,
+      '-n',
+      safeName,
+      '--clear-env',
+      '--',
+      '/bin/sh',
+      '-c',
+      'if [ -x /bin/bash ]; then exec /bin/bash -l; else exec /bin/sh -l; fi',
+    ];
+
+    const sudoPath = !isRunningAsRoot() && canPasswordlessSudo() ? resolveSudoBinary() : null;
+    const ptyExecutable = sudoPath || lxcAttachBin;
+    const ptyArgs = sudoPath ? ['-n', '--', lxcAttachBin, ...attachArgs] : attachArgs;
+
+    const term = pty.spawn(ptyExecutable, ptyArgs, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd: '/',
+      env: {
+        TERM: 'xterm-256color',
+        HOME: '/root',
+        USER: 'root',
+        LOGNAME: 'root',
+        PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+        LANG: 'C.UTF-8',
+      },
+    });
 
     let closed = false;
     let idleTimer = setTimeout(() => teardown('Idle timeout reached'), this.idleTimeoutMs);
