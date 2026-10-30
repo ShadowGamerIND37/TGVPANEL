@@ -2407,8 +2407,8 @@ app.get('/api/vms/:vm_id/stats', checkAuth, async (req, res) => {
           stats.disk_usage = `${tel.diskUsedGb} GB`;
           stats.pid = tel.pid || activePid;
         } catch (e) {}
-      } else if (vm.disk_file && fs.existsSync(vm.disk_file)) {
-        const size = fs.statSync(vm.disk_file).size / (1024 * 1024 * 1024);
+      } else if ((vm.disk_file || vm.img_file) && fs.existsSync(vm.disk_file || vm.img_file)) {
+        const size = fs.statSync(vm.disk_file || vm.img_file).size / (1024 * 1024 * 1024);
         stats.disk_usage = size.toFixed(2) + ' GB';
       }
 
@@ -2503,6 +2503,8 @@ app.post('/api/vms/:vm_id/reinstall', checkAuth, async (req, res) => {
 
         // Delete old files (but keep logs)
         console.log(`[VM-${vm_id}] Cleaning up old files...`);
+        const targetDiskFile = vm.disk_file || path.join(VM_DIR, `vm-${vm_id}-disk.qcow2`);
+        const targetSeedFile = vm.seed_file || path.join(VM_DIR, `vm-${vm_id}-seed.iso`);
         
         if (vm.disk_file && fs.existsSync(vm.disk_file)) {
           try {
@@ -2510,6 +2512,14 @@ app.post('/api/vms/:vm_id/reinstall', checkAuth, async (req, res) => {
             console.log(`[VM-${vm_id}] ✓ Deleted disk file: ${vm.disk_file}`);
           } catch (err) {
             console.warn(`[VM-${vm_id}] ⚠ Failed to delete disk file:`, err.message);
+          }
+        }
+        if (vm.img_file && vm.img_file !== vm.disk_file && fs.existsSync(vm.img_file)) {
+          try {
+            fs.unlinkSync(vm.img_file);
+            console.log(`[VM-${vm_id}] ✓ Deleted legacy img file: ${vm.img_file}`);
+          } catch (err) {
+            console.warn(`[VM-${vm_id}] ⚠ Failed to delete legacy img file:`, err.message);
           }
         }
 
@@ -2530,7 +2540,7 @@ app.post('/api/vms/:vm_id/reinstall', checkAuth, async (req, res) => {
             os_type = ?, template_type = ?, username = ?, password = ?,
             img_file = '', seed_file = ?, disk_file = ?
           WHERE vm_id = ?`,
-          [templateName, new_os_template, username, password, vm.seed_file, vm.disk_file, vm_id],
+          [templateName, new_os_template, username, password, targetSeedFile, targetDiskFile, vm_id],
           async (err) => {
             if (err) {
               console.error(`[VM-${vm_id}] Failed to update VM info:`, err.message);
@@ -2642,8 +2652,11 @@ app.post('/api/vms/:vm_id/reinstall', checkAuth, async (req, res) => {
                 });
 
               } else {
-                // Non-cloud-init template (ISO)
-                logVMAction(vm_id, 'reinstall', 'success', `VM configuration updated for ${templateName}. Ready to start.`);
+                // Non-cloud-init template (ISO) - recreate blank qcow2 root disk
+                const diskSizeVal = vm.disk_size || '20G';
+                execSync(`qemu-img create -f qcow2 "${targetDiskFile}" ${diskSizeVal}`, { stdio: 'pipe' });
+                console.log(`[VM-${vm_id}] ✓ Blank ISO disk created at ${targetDiskFile} (${diskSizeVal})`);
+                logVMAction(vm_id, 'reinstall', 'success', `VM configuration and fresh disk created for ${templateName}. Ready to start.`);
                 res.json({ 
                   success: true, 
                   message: `VM updated to ${templateName}. Ready to start.`,
@@ -4131,8 +4144,21 @@ async function startQemuVM(vm) {
       args.push(`-drive`, `if=floppy,index=-1`);
       
       // Drives - root disk
-      // Always use disk_file for root filesystem (allows resizing)
-      args.push(`-drive`, `file=${vm.disk_file},format=qcow2,if=virtio,media=disk`);
+      // Support both current and legacy disk path fields
+      const diskPath = vm.disk_file || vm.img_file;
+
+      if (!diskPath || !fs.existsSync(diskPath)) {
+        throw new Error(
+          `[VM-${vm.vm_id}] Disk image missing or invalid: ${diskPath || 'No disk path in database'}`
+        );
+      }
+
+      console.log(`[VM-${vm.vm_id}] Image File: ${diskPath}`);
+
+      args.push(
+        '-drive',
+        `file=${diskPath},format=qcow2,if=virtio,media=disk`
+      );
       
       // ISO media (if attached) - CD/DVD drive
       if (vm.iso_attached) {
@@ -4211,7 +4237,7 @@ async function startQemuVM(vm) {
       }
       console.log(`[VM-${vm.vm_id}] Template: ${vm.template_type} (${vm.os_type})`);
       console.log(`[VM-${vm.vm_id}] Starting: ${vm.vm_name}`);
-      console.log(`[VM-${vm.vm_id}] Image File: ${vm.img_file}`);
+      console.log(`[VM-${vm.vm_id}] Disk File: ${diskPath}`);
       console.log(`[VM-${vm.vm_id}] Console: Direct terminal access via -nographic -serial mon:stdio`);
 
       // Use spawn for background process execution
