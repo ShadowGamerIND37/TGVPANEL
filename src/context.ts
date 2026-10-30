@@ -1,8 +1,10 @@
+import crypto from 'crypto';
 import http from 'http';
 import sqlite3 from 'sqlite3';
 import WebSocket, { WebSocketServer } from 'ws';
 import { registerUnifiedDatabase, UnifiedDatabase } from './db/database';
 import { runMigrations } from './db/migrations';
+import { decryptSecret, encryptSecret, generateApiKeyPair } from './security/crypto-vault';
 import { NodeManager } from './services/nodes/NodeClient';
 import { KVMAdapter, LegacyKvmHooks } from './services/virtualization/KVMAdapter';
 import { LXCAdapter } from './services/virtualization/LXCAdapter';
@@ -38,6 +40,33 @@ export async function initializeUnifiedHkvmRuntime(
 ): Promise<HkvmRuntimeContext> {
   const db = registerUnifiedDatabase(rawDb, dbPath);
   await runMigrations(db);
+
+  // Ensure local node credentials decrypt cleanly with this host's .hkvm-secret
+  // (e.g. after cloning a repository whose initial DB was seeded on another host)
+  const localNodes = await db.all<{ id: number }>(
+    `SELECT id FROM nodes WHERE is_local = 1`
+  );
+  for (const ln of localNodes) {
+    const cred = await db.get<{ api_key_enc: string; hmac_secret_enc: string }>(
+      `SELECT api_key_enc, hmac_secret_enc FROM node_credentials WHERE node_id = ?`,
+      [ln.id]
+    );
+    if (!cred || !decryptSecret(cred.api_key_enc) || !decryptSecret(cred.hmac_secret_enc)) {
+      const pair = generateApiKeyPair('hkvm_node');
+      const hmac = crypto.randomBytes(32).toString('hex');
+      await db.run(
+        `INSERT INTO node_credentials (node_id, api_key_prefix, api_key_hash, api_key_enc, hmac_secret_enc, rotated_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(node_id) DO UPDATE SET
+           api_key_prefix = excluded.api_key_prefix,
+           api_key_hash = excluded.api_key_hash,
+           api_key_enc = excluded.api_key_enc,
+           hmac_secret_enc = excluded.hmac_secret_enc,
+           rotated_at = datetime('now')`,
+        [ln.id, pair.keyPrefix, pair.keyHash, encryptSecret(pair.rawKey), encryptSecret(hmac)]
+      );
+    }
+  }
 
   const nodeManager = new NodeManager(db);
   const kvmAdapter = new KVMAdapter(db, legacyKvmHooks);

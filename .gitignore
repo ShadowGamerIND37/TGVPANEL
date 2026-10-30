@@ -1,13 +1,13 @@
 # Dependencies
-node_modules/
+/node_modules/
 
 # Environment & Secrets
-.env
-.env.local
-.env.*.local
-.hkvm-secret
-certs/*.key
-certs/*.pem
+/.env
+/.env.local
+/.env.*.local
+/.hkvm-secret
+/certs/*.key
+/certs/*.pem
 
 # SQLite WAL / SHM & runtime temp files
 *.db-wal
@@ -15,19 +15,19 @@ certs/*.pem
 *.db-journal
 
 # Runtime logs & PID files
-logs/
-*.log
-*.pid
+/logs/
+/*.log
+/*.pid
 npm-debug.log*
 
-# Runtime VM / Container / Upload / Temp artifacts
-vms/
-storage/
-tmp/
-.tmp/
-backups/*.tar.gz
-backups/*.qcow2
-data/backups/
-data/instance-backups/
-data/lxc-templates/
-data/node-agent-credentials.json
+# Runtime VM / Container / Upload / Temp artifacts (root-anchored so src/ & lib/ are never matched)
+/vms/
+/storage/
+/tmp/
+/.tmp/
+/backups/*.tar.gz
+/backups/*.qcow2
+/data/backups/
+/data/instance-backups/
+/data/lxc-templates/
+/data/node-agent-credentials.json
