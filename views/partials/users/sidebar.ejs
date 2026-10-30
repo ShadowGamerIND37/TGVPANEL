@@ -13,7 +13,7 @@
     
     <nav class="sidebar-nav">
         <div class="nav-section">
-            <div class="nav-section-label">Menu</div>
+            <div class="nav-section-label">Compute &amp; Network</div>
             
             <a href="/dashboard" class="nav-item <%= currentPage === 'dashboard' ? 'active' : '' %>">
                 <span class="nav-icon">
@@ -26,6 +26,18 @@
                 </span>
                 <span class="nav-text">Dashboard</span>
             </a>
+
+            <a href="/instances" class="nav-item <%= currentPage === 'instances' ? 'active' : '' %>">
+                <span class="nav-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="20" height="7" rx="1"></rect>
+                        <rect x="2" y="14" width="20" height="7" rx="1"></rect>
+                        <circle cx="6" cy="6.5" r="1"></circle>
+                        <circle cx="6" cy="17.5" r="1"></circle>
+                    </svg>
+                </span>
+                <span class="nav-text">My Instances (KVM &amp; LXC)</span>
+            </a>
             
             <a href="/vms" class="nav-item <%= currentPage === 'vms' ? 'active' : '' %>">
                 <span class="nav-icon">
@@ -36,7 +48,26 @@
                         <circle cx="12" cy="12" r="3"></circle>
                     </svg>
                 </span>
-                <span class="nav-text">My Virtual Machines</span>
+                <span class="nav-text">My KVM VMs</span>
+            </a>
+
+            <a href="/ports" class="nav-item <%= currentPage === 'ports' ? 'active' : '' %>">
+                <span class="nav-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="16 3 21 3 21 8"></polyline>
+                        <line x1="4" y1="20" x2="21" y2="3"></line>
+                    </svg>
+                </span>
+                <span class="nav-text">Port Forwarding</span>
+            </a>
+
+            <a href="/security" class="nav-item <%= currentPage === 'security' ? 'active' : '' %>">
+                <span class="nav-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                    </svg>
+                </span>
+                <span class="nav-text">Security &amp; API Keys</span>
             </a>
             
             <a href="/profile" class="nav-item <%= currentPage === 'profile' ? 'active' : '' %>">

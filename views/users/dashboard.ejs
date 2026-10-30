@@ -654,13 +654,25 @@
             <span id="lastUpdate" style="opacity: 0.7;"></span>
           </p>
         </div>
-        <div style="position: relative; z-index: 1;">
+        <div style="position: relative; z-index: 1; display: flex; gap: 10px; align-items: center;">
+          <a href="/instances" class="btn-refresh" style="text-decoration: none;"><i class="fas fa-layer-group"></i> All Unified VPS</a>
+          <a href="/lxc" class="btn-refresh" style="text-decoration: none;"><i class="fas fa-cube"></i> LXC Containers (<span id="v3LxcCount">0</span>)</a>
           <button class="btn-refresh" id="refreshBtn" onclick="loadMyVMs()">
             <svg class="icon"><use href="#i-refresh"/></svg>
             Refresh
           </button>
         </div>
       </div>
+
+      <script>
+        document.addEventListener('DOMContentLoaded', async () => {
+          try {
+            const d = await window.hkvmApi('/api/v1/lxc');
+            const el = document.getElementById('v3LxcCount');
+            if (el && d.containers) el.textContent = d.containers.length;
+          } catch (_) {}
+        });
+      </script>
 
       <!-- Stats -->
       <div class="stats-enhanced">
