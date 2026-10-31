@@ -254,7 +254,7 @@ async function loadVMs() {
   if (btn) btn.classList.add('is-loading');
   
   try {
-    const res = await fetch('/api/admin/vms');
+    const res = await fetch('/api/admin/vms', { cache: 'no-store' });
     if (!res.ok) throw new Error('Failed to fetch VMs');
     allVMs = await res.json();
     
@@ -386,6 +386,7 @@ function renderVMCard(vm) {
         <a href="/admin/vm/${vm.vm_id}/edit" class="btn btn-primary btn-sm"><svg width="12" height="12"><use href="#i-edit"/></svg> Edit</a>
         <a href="/admin/vm/${vm.vm_id}" class="btn btn-outline btn-sm"><svg width="12" height="12"><use href="#i-info"/></svg> Details</a>
         <a href="/admin/vm/${vm.vm_id}/console" class="btn btn-ghost btn-sm"><svg width="12" height="12"><use href="#i-terminal"/></svg> Console</a>
+        <button class="btn btn-danger btn-sm" onclick="confirmDelete(${vm.vm_id}, '${escHtml(vm.vm_name)}')" title="Delete"><svg width="12" height="12"><use href="#i-trash"/></svg> Delete</button>
       </div>
     </div>
   `;
@@ -516,7 +517,7 @@ async function confirmDelete(vmId, vmName) {
     const data = await res.json();
     if (res.ok && data.success) {
       showToast('VM deleted successfully', 'success');
-      loadVMs();
+      await loadVMs();
     } else {
       showToast('Delete failed: ' + (data.error || 'Unknown error'), 'error');
     }

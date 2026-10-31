@@ -553,7 +553,7 @@ async function deleteVM() {
     const res = await fetch(`/api/vms/${vmId}`, { method: 'DELETE' });
     if (res.ok) {
       showToast('VM deleted', 'success');
-      setTimeout(() => { window.location.href = '/admin/vms'; }, 1000);
+      setTimeout(() => { window.location.href = '/vms'; }, 1000);
     } else {
       const data = await res.json();
       showToast('Failed: ' + (data.error || 'Unknown error'), 'error');

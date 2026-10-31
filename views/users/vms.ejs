@@ -896,7 +896,7 @@ async function loadVMs() {
   btn.classList.add('spinning');
   
   try {
-    const res = await fetch('/api/vms');
+    const res = await fetch('/api/vms', { cache: 'no-store' });
     if (!res.ok) throw new Error('Failed to fetch VMs');
     allVMs = await res.json();
     

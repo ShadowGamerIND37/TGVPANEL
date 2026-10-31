@@ -633,6 +633,22 @@ export class LXCAdapter implements VirtualizationAdapter {
       await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'destroy').catch(
         () => undefined
       );
+      await this.db
+        .run(
+          `UPDATE ip_allocations
+           SET instance_type = NULL, instance_ref_id = NULL, assigned_user_id = NULL
+           WHERE instance_type = 'lxc' AND instance_ref_id = ?`,
+          [refId]
+        )
+        .catch(() => undefined);
+      await this.db
+        .run(`DELETE FROM port_forwards WHERE instance_type = 'lxc' AND instance_ref_id = ?`, [
+          refId,
+        ])
+        .catch(() => undefined);
+      await this.db
+        .run(`DELETE FROM metrics_history WHERE target_type = 'lxc' AND target_id = ?`, [refId])
+        .catch(() => undefined);
       await this.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [refId]);
       await this.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [refId]);
       return this.mapRowToUnified({ ...row, status: 'deleted' });

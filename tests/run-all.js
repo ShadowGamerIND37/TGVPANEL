@@ -166,7 +166,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
-    await runStep('T01: Transactional SQLite backup & migrations v001..v008 preserve legacy data & rebrand visible HKVM -> TGVPANEL', async () => {
+    await runStep('T01: Transactional SQLite backup & migrations v001..v009 preserve legacy data & cascade VM FKs', async () => {
       const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
       const v2Raw = new sqlite3.Database(v2ScratchPath);
       const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
@@ -174,8 +174,11 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, email TEXT, full_name TEXT, role TEXT DEFAULT 'user', is_active INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
         INSERT INTO users (username, password, email, role) VALUES ('admin', '$2a$10$legacyhashplaceholder123456789012345678901234567', 'admin@hopingboyz.local', 'admin');
         CREATE TABLE vms (vm_id INTEGER PRIMARY KEY AUTOINCREMENT, vm_name TEXT, hostname TEXT, owner_id INTEGER, memory INTEGER DEFAULT 1024, cpus INTEGER DEFAULT 1, disk_size TEXT DEFAULT '20G', status TEXT DEFAULT 'stopped', password TEXT);
-        CREATE TABLE vm_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, vm_id INTEGER, action TEXT, status TEXT, message TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
-        CREATE TABLE vm_snapshots (snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT, vm_id INTEGER, snapshot_name TEXT, size_gb REAL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+        INSERT INTO vms (vm_name, hostname, owner_id) VALUES ('legacy-fk-vm', 'legacy-fk', 1);
+        CREATE TABLE vm_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, vm_id INTEGER, action TEXT, status TEXT, message TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(vm_id) REFERENCES vms(vm_id));
+        INSERT INTO vm_logs (vm_id, action, status, message) VALUES (1, 'create', 'pending', 'Legacy VM created');
+        CREATE TABLE vm_snapshots (snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT, vm_id INTEGER, snapshot_name TEXT, size_gb REAL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(vm_id) REFERENCES vms(vm_id));
+        INSERT INTO vm_snapshots (vm_id, snapshot_name, size_gb, description) VALUES (1, 'snap-legacy', 1.2, 'Before upgrade');
         CREATE TABLE os_templates (template_id INTEGER PRIMARY KEY AUTOINCREMENT, template_key TEXT UNIQUE, template_name TEXT, password TEXT);
         CREATE TABLE settings (setting_key TEXT PRIMARY KEY, setting_value TEXT, updated_at DATETIME);
         INSERT INTO settings (setting_key, setting_value, updated_at) VALUES ('site_name', 'HKVM', datetime('now'));
@@ -185,8 +188,17 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       `);
 
       const migRes = await runMigrations(v2Db);
-      assert.ok(migRes.applied.length >= 8, 'Expected v001..v008 migrations to apply');
+      assert.ok(migRes.applied.length >= 9, 'Expected v001..v009 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
+
+      // Verify v009 upgraded vm_logs & vm_snapshots to ON DELETE CASCADE while preserving rows,
+      // and deleting from vms with PRAGMA foreign_keys = ON succeeds cleanly!
+      assert.strictEqual((await v2Db.all(`SELECT * FROM vm_logs WHERE vm_id = 1`)).length, 1);
+      assert.strictEqual((await v2Db.all(`SELECT * FROM vm_snapshots WHERE vm_id = 1`)).length, 1);
+      await v2Db.run(`DELETE FROM vms WHERE vm_id = 1`);
+      assert.strictEqual((await v2Db.all(`SELECT * FROM vms WHERE vm_id = 1`)).length, 0);
+      assert.strictEqual((await v2Db.all(`SELECT * FROM vm_logs WHERE vm_id = 1`)).length, 0);
+      assert.strictEqual((await v2Db.all(`SELECT * FROM vm_snapshots WHERE vm_id = 1`)).length, 0);
 
       const lxcCols = await v2Db.all(`PRAGMA table_info(lxc_instances)`);
       assert.ok(lxcCols.some((c) => c.name === 'kvm_nesting'), 'Expected kvm_nesting column on lxc_instances');
@@ -2430,6 +2442,126 @@ exec "$@"
           }
         }
       }
+    });
+
+    await runStep('T20: KVM VM deletion (DELETE /api/vms/:id & Unified /api/v1/instances) permanently removes VM across page refreshes', async () => {
+      const vmDir = path.join(os.homedir(), 'vms');
+      fs.mkdirSync(vmDir, { recursive: true });
+
+      // 1. Test `DELETE /api/vms/:vm_id` on a VM with active `vm_logs`, `vm_snapshots`, disk/seed files & `instances` registry row
+      const disk1 = path.join(tmpRoot, 'vm-del-test-1.qcow2');
+      const seed1 = path.join(tmpRoot, 'vm-del-test-1-seed.iso');
+      fs.writeFileSync(disk1, 'qcow2-test-bytes');
+      fs.writeFileSync(seed1, 'seed-test-bytes');
+
+      const ins1 = await ctx.db.run(
+        `INSERT INTO vms (vm_name, hostname, owner_id, memory, cpus, disk_size, disk_file, seed_file, status, password)
+         VALUES ('delete-persist-vm-01', 'del-vm-01', 1, 2048, 2, '20G', ?, ?, 'stopped', ?)`,
+        [disk1, seed1, encryptSecret('DelPass1!')]
+      );
+      const delVmId1 = ins1.lastID;
+      await ctx.db.run(
+        `INSERT INTO vm_logs (vm_id, action, status, message) VALUES (?, 'create', 'pending', 'VM created')`,
+        [delVmId1]
+      );
+      await ctx.db.run(
+        `INSERT INTO vm_logs (vm_id, action, status, message) VALUES (?, 'start', 'running', 'VM started')`,
+        [delVmId1]
+      );
+      await ctx.db.run(
+        `INSERT INTO vm_snapshots (vm_id, snapshot_name, size_gb, description) VALUES (?, 'pre-delete-snap', 0.5, 'test snap')`,
+        [delVmId1]
+      );
+      await ctx.kvmAdapter.syncRegistryRow(delVmId1);
+
+      // Verify VM appears in all 3 refresh endpoints BEFORE deletion
+      const beforeAdminList = await adminClient.request('GET', '/api/admin/vms');
+      assert.strictEqual(beforeAdminList.status, 200);
+      assert.ok(beforeAdminList.json.some((v) => v.vm_id === delVmId1), 'Expected VM in /api/admin/vms before delete');
+
+      const beforeUserList = await adminClient.request('GET', '/api/vms');
+      assert.strictEqual(beforeUserList.status, 200);
+      assert.ok(beforeUserList.json.some((v) => v.vm_id === delVmId1), 'Expected VM in /api/vms before delete');
+
+      const beforeUnifiedList = await adminClient.request('GET', '/api/v1/instances?engine=kvm');
+      assert.strictEqual(beforeUnifiedList.status, 200);
+      assert.ok(
+        beforeUnifiedList.json.instances.some((i) => i.engine === 'kvm' && i.refId === delVmId1),
+        'Expected VM in /api/v1/instances before delete'
+      );
+
+      // Delete via `DELETE /api/vms/:vm_id` (used by `/admin/vms`, `/admin/vm/:id`, `/vm/:id`)
+      const delRes1 = await adminClient.request('DELETE', `/api/vms/${delVmId1}`);
+      assert.strictEqual(delRes1.status, 200, `DELETE /api/vms/${delVmId1} failed: ${delRes1.text}`);
+      assert.strictEqual(delRes1.json.success, true);
+
+      // Simulate page refresh immediately after delete — VM must NOT reappear anywhere!
+      const afterAdminList = await adminClient.request('GET', '/api/admin/vms');
+      assert.strictEqual(afterAdminList.status, 200);
+      assert.ok(
+        String(afterAdminList.headers['cache-control'] || '').includes('no-store'),
+        'Expected Cache-Control: no-store on /api/admin/vms'
+      );
+      assert.strictEqual(
+        afterAdminList.json.some((v) => v.vm_id === delVmId1),
+        false,
+        'Deleted VM must NOT reappear in /api/admin/vms on refresh!'
+      );
+
+      const afterUserList = await adminClient.request('GET', '/api/vms');
+      assert.strictEqual(
+        afterUserList.json.some((v) => v.vm_id === delVmId1),
+        false,
+        'Deleted VM must NOT reappear in /api/vms on refresh!'
+      );
+
+      const afterUnifiedList = await adminClient.request('GET', '/api/v1/instances?engine=kvm');
+      assert.strictEqual(
+        afterUnifiedList.json.instances.some((i) => i.engine === 'kvm' && i.refId === delVmId1),
+        false,
+        'Deleted VM must NOT reappear in /api/v1/instances on refresh!'
+      );
+
+      assert.strictEqual((await adminClient.request('GET', `/api/vms/${delVmId1}`)).status, 404);
+      assert.strictEqual(fs.existsSync(disk1), false, 'Expected VM disk file removed');
+      assert.strictEqual(fs.existsSync(seed1), false, 'Expected VM seed file removed');
+      assert.strictEqual((await ctx.db.all(`SELECT * FROM vm_logs WHERE vm_id = ?`, [delVmId1])).length, 0);
+      assert.strictEqual((await ctx.db.all(`SELECT * FROM vm_snapshots WHERE vm_id = ?`, [delVmId1])).length, 0);
+
+      // 2. Test Unified Instance delete (`POST /api/v1/instances/kvm/:id/action` `{ action: 'delete' }`)
+      const ins2 = await ctx.db.run(
+        `INSERT INTO vms (vm_name, hostname, owner_id, memory, cpus, disk_size, status, password)
+         VALUES ('delete-persist-vm-02', 'del-vm-02', 1, 1024, 1, '10G', 'stopped', ?)`,
+        [encryptSecret('DelPass2!')]
+      );
+      const delVmId2 = ins2.lastID;
+      await ctx.db.run(
+        `INSERT INTO vm_logs (vm_id, action, status, message) VALUES (?, 'create', 'pending', 'VM 2 created')`,
+        [delVmId2]
+      );
+      await ctx.db.run(
+        `INSERT INTO vm_snapshots (vm_id, snapshot_name, size_gb, description) VALUES (?, 'snap-2', 0.2, 'snap')`,
+        [delVmId2]
+      );
+      await ctx.kvmAdapter.syncRegistryRow(delVmId2);
+
+      const delRes2 = await adminClient.request('POST', `/api/v1/instances/kvm/${delVmId2}/action`, {
+        action: 'delete',
+      });
+      assert.strictEqual(delRes2.status, 200, `Unified KVM delete failed: ${delRes2.text}`);
+
+      const afterAdminList2 = await adminClient.request('GET', '/api/admin/vms');
+      assert.strictEqual(
+        afterAdminList2.json.some((v) => v.vm_id === delVmId2),
+        false,
+        'Unified-deleted KVM VM must NOT reappear in /api/admin/vms!'
+      );
+      const afterUnifiedList2 = await adminClient.request('GET', '/api/v1/instances');
+      assert.strictEqual(
+        afterUnifiedList2.json.instances.some((i) => i.engine === 'kvm' && i.refId === delVmId2),
+        false,
+        'Unified-deleted KVM VM must NOT reappear in /api/v1/instances!'
+      );
     });
   } finally {
     const { execFileSync } = require('child_process');

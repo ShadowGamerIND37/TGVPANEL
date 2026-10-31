@@ -516,7 +516,7 @@ function initializeDatabase() {
       status TEXT,
       message TEXT,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(vm_id) REFERENCES vms(vm_id)
+      FOREIGN KEY(vm_id) REFERENCES vms(vm_id) ON DELETE CASCADE
     )`);
 
     db.run(`CREATE TABLE IF NOT EXISTS vm_snapshots (
@@ -526,7 +526,7 @@ function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       size_gb REAL,
       description TEXT,
-      FOREIGN KEY(vm_id) REFERENCES vms(vm_id)
+      FOREIGN KEY(vm_id) REFERENCES vms(vm_id) ON DELETE CASCADE
     )`);
 
     db.run(`CREATE TABLE IF NOT EXISTS os_templates (
@@ -1964,6 +1964,7 @@ app.get('/api/vms', checkAuth, (req, res) => {
       console.error('[API Error] /api/vms:', err);
       return res.status(500).json({ error: err.message });
     }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     console.log(`[API Success] /api/vms: User ${userId} (${req.session.role}) fetched ${vms ? vms.length : 0} VMs (own VMs only)`);
     res.json(vms || []);
   });
@@ -1985,6 +1986,7 @@ app.get('/api/admin/vms', checkAuth, checkAdmin, (req, res) => {
       console.error('[API Error] /api/admin/vms:', err);
       return res.status(500).json({ error: err.message });
     }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     console.log(`[API Success] /api/admin/vms: Admin ${userId} fetched ${vms ? vms.length : 0} VMs (all VMs)`);
     res.json(vms || []);
   });
@@ -2841,7 +2843,7 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
           [img_file, seed_file, disk_file, vm_id],
           async (err) => {
             if (err) {
-              db.run(`DELETE FROM vms WHERE vm_id = ?`, [vm_id]);
+              cleanupFailedVmCreation(vm_id);
               return res.status(500).json({ error: err.message });
             }
 
@@ -3006,6 +3008,9 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
               }
 
               logVMAction(vm_id, 'create', 'pending', `VM ${vm_name} (ID:${vm_id}) created from ${templateName}`);
+              if (hkvmV3Context) {
+                hkvmV3Context.kvmAdapter.syncRegistryRow(vm_id).catch(() => undefined);
+              }
               res.json({ 
                 success: true, 
                 vm_id: vm_id, 
@@ -3030,14 +3035,14 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
               if (fs.existsSync(img_file)) {
                 try { fs.unlinkSync(img_file); } catch (e) {}
               }
-              db.run(`DELETE FROM vms WHERE vm_id = ?`, [vm_id]);
+              cleanupFailedVmCreation(vm_id);
               return res.status(500).json({ error: `Failed to download template: ${downloadError.message}` });
             }
           }
         );
       } catch (error) {
         logError('VM', vm_id, 'creation', error);
-        db.run(`DELETE FROM vms WHERE vm_id = ?`, [vm_id]);
+        cleanupFailedVmCreation(vm_id);
         res.status(500).json({ error: error.message });
       }
     }
@@ -3202,37 +3207,134 @@ app.post('/api/vms/:vm_id/restart', checkAuth, async (req, res) => {
 
 // VM REINSTALL (Using VM ID)
 
+function dbRunAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve({ lastID: this.lastID, changes: this.changes });
+    });
+  });
+}
+
+function dbGetAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+
+function cleanupFailedVmCreation(vmId) {
+  db.serialize(() => {
+    db.run(`DELETE FROM vm_logs WHERE vm_id = ?`, [vmId], () => {});
+    db.run(`DELETE FROM vm_snapshots WHERE vm_id = ?`, [vmId], () => {});
+    db.run(`DELETE FROM instances WHERE engine = 'kvm' AND ref_id = ?`, [vmId], () => {});
+    db.run(`DELETE FROM vms WHERE vm_id = ?`, [vmId], () => {});
+  });
+}
+
+function safeUnlinkVmArtifact(filePath, vmId) {
+  if (!filePath || typeof filePath !== 'string') return;
+  const resolved = path.resolve(filePath);
+  const sharedTemplatesDir = path.resolve(TEMPLATES_DIR) + path.sep;
+  const sharedIsoDir = path.resolve(ISO_DIR) + path.sep;
+  if (resolved.startsWith(sharedTemplatesDir)) return;
+  if (resolved.startsWith(sharedIsoDir) && resolved.toLowerCase().endsWith('.iso')) return;
+  try {
+    if (fs.existsSync(resolved)) {
+      fs.unlinkSync(resolved);
+    }
+  } catch (e) {
+    console.warn(`[VM-${vmId}] Could not remove artifact ${resolved}: ${e.message}`);
+  }
+}
+
+async function performFullVmDelete(vm, actorUserId = null) {
+  const vmId = Number(vm.vm_id);
+  const candidatePids = new Set();
+  if (vmProcesses.has(vmId)) candidatePids.add(Number(vmProcesses.get(vmId)));
+  if (vm.pid) candidatePids.add(Number(vm.pid));
+
+  const pidFile = path.join(VM_DIR, `vm-${vmId}.pid`);
+  if (fs.existsSync(pidFile)) {
+    try {
+      const parsedPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+      if (parsedPid > 1) candidatePids.add(parsedPid);
+    } catch (e) {}
+  }
+
+  for (const pid of candidatePids) {
+    if (pid && pid > 1) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (e) {}
+    }
+  }
+
+  vmProcesses.delete(vmId);
+  qemuStdins.delete(vmId);
+
+  safeUnlinkVmArtifact(vm.img_file, vmId);
+  safeUnlinkVmArtifact(vm.seed_file, vmId);
+  safeUnlinkVmArtifact(vm.disk_file, vmId);
+  safeUnlinkVmArtifact(pidFile, vmId);
+  safeUnlinkVmArtifact(path.join(VM_DIR, `vm-${vmId}.log`), vmId);
+
+  // Delete dependent rows BEFORE deleting `vms(vm_id)` so SQLite foreign_keys enforcement
+  // never rejects `DELETE FROM vms WHERE vm_id = ?` with SQLITE_CONSTRAINT!
+  await dbRunAsync(`DELETE FROM vm_logs WHERE vm_id = ?`, [vmId]);
+  await dbRunAsync(`DELETE FROM vm_snapshots WHERE vm_id = ?`, [vmId]);
+  await dbRunAsync(`DELETE FROM instances WHERE engine = 'kvm' AND ref_id = ?`, [vmId]).catch(
+    () => undefined
+  );
+  await dbRunAsync(
+    `UPDATE ip_allocations
+     SET instance_type = NULL, instance_ref_id = NULL, assigned_user_id = NULL
+     WHERE instance_type = 'kvm' AND instance_ref_id = ?`,
+    [vmId]
+  ).catch(() => undefined);
+  await dbRunAsync(
+    `DELETE FROM port_forwards WHERE instance_type = 'kvm' AND instance_ref_id = ?`,
+    [vmId]
+  ).catch(() => undefined);
+  await dbRunAsync(
+    `DELETE FROM metrics_history WHERE target_type = 'kvm' AND target_id = ?`,
+    [vmId]
+  ).catch(() => undefined);
+  await dbRunAsync(`DELETE FROM vms WHERE vm_id = ?`, [vmId]);
+
+  const remaining = await dbGetAsync(`SELECT vm_id FROM vms WHERE vm_id = ?`, [vmId]);
+  if (remaining) {
+    throw new Error(`Database failed to remove VM #${vmId}`);
+  }
+
+  if (hkvmV3Context) {
+    await hkvmV3Context.db
+      .logActivity({
+        userId: actorUserId || null,
+        action: 'vm_delete',
+        resourceType: 'kvm',
+        resourceId: String(vmId),
+        details: { vm_name: vm.vm_name },
+      })
+      .catch(() => undefined);
+  }
+}
+
 // VM DELETE (Using VM ID)
 app.delete('/api/vms/:vm_id', checkAuth, (req, res) => {
-  db.get(`SELECT * FROM vms WHERE vm_id = ?`, [req.params.vm_id], (err, vm) => {
+  db.get(`SELECT * FROM vms WHERE vm_id = ?`, [req.params.vm_id], async (err, vm) => {
     if (err || !vm) return res.status(404).json({ error: 'VM not found' });
     if (req.session.role !== 'admin' && vm.owner_id !== req.session.userId) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
     try {
-      const pidFile = path.join(VM_DIR, `vm-${vm.vm_id}.pid`);
-      if (fs.existsSync(pidFile)) {
-        const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
-        try {
-          process.kill(pid, 'SIGKILL');
-        } catch (e) {}
-      }
-
-      if (vm.img_file && fs.existsSync(vm.img_file)) fs.unlinkSync(vm.img_file);
-      if (vm.seed_file && fs.existsSync(vm.seed_file)) fs.unlinkSync(vm.seed_file);
-      if (vm.disk_file && fs.existsSync(vm.disk_file)) fs.unlinkSync(vm.disk_file);
-
-      vmProcesses.delete(vm.vm_id);
-      qemuStdins.delete(vm.vm_id);
-      db.run(`DELETE FROM vms WHERE vm_id = ?`, [vm.vm_id], () => {
-        if (hkvmV3Context) hkvmV3Context.kvmAdapter.syncRegistryRow(vm.vm_id).catch(() => undefined);
-      });
-      db.run(`DELETE FROM vm_logs WHERE vm_id = ?`, [vm.vm_id]);
-      
-      logVMAction(vm.vm_id, 'delete', 'deleted', `VM ${vm.vm_name} deleted`);
+      await performFullVmDelete(vm, req.session.userId);
       res.json({ success: true, message: `VM ${vm.vm_name} (ID:${vm.vm_id}) deleted` });
     } catch (error) {
+      console.error(`[API Error] DELETE /api/vms/${vm.vm_id}:`, error);
       res.status(500).json({ error: error.message });
     }
   });
@@ -3453,7 +3555,12 @@ app.get('/api/admin/dashboard', checkAuth, checkAdmin, (req, res) => {
 function logVMAction(vm_id, action, status, message) {
   db.run(
     `INSERT INTO vm_logs (vm_id, action, status, message) VALUES (?, ?, ?, ?)`,
-    [vm_id, action, status, message]
+    [vm_id, action, status, message],
+    (err) => {
+      if (err) {
+        console.warn(`[VM-${vm_id}] logVMAction(${action}) skipped: ${err.message}`);
+      }
+    }
   );
 }
 
@@ -5122,18 +5229,7 @@ async function bootstrapHkvmV3() {
     deleteVmById: async (vmId) => {
       const vm = await hkvmV3Context.db.get(`SELECT * FROM vms WHERE vm_id = ?`, [vmId]);
       if (!vm) return;
-      const pidFile = path.join(VM_DIR, `vm-${vmId}.pid`);
-      if (fs.existsSync(pidFile)) {
-        const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-        try { process.kill(pid, 'SIGKILL'); } catch (e) {}
-      }
-      if (vm.img_file && fs.existsSync(vm.img_file)) fs.unlinkSync(vm.img_file);
-      if (vm.seed_file && fs.existsSync(vm.seed_file)) fs.unlinkSync(vm.seed_file);
-      if (vm.disk_file && fs.existsSync(vm.disk_file)) fs.unlinkSync(vm.disk_file);
-      vmProcesses.delete(vmId);
-      qemuStdins.delete(vmId);
-      await hkvmV3Context.db.run(`DELETE FROM vms WHERE vm_id = ?`, [vmId]);
-      await hkvmV3Context.db.run(`DELETE FROM vm_logs WHERE vm_id = ?`, [vmId]);
+      await performFullVmDelete(vm, null);
     }
   });
 
