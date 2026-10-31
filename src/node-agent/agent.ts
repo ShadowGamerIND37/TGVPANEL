@@ -207,7 +207,11 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
 
   app.post('/api/v1/containers/:name/repair-network', async (req, res) => {
     try {
-      const repair = await runtime.containerManager.repairContainerNetworking(req.params.name);
+      const fallbackBridge = req.body?.bridge ? String(req.body.bridge) : 'lxcbr0';
+      const repair = await runtime.containerManager.repairContainerNetworking(
+        req.params.name,
+        fallbackBridge
+      );
       res.json({ success: true, repair });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

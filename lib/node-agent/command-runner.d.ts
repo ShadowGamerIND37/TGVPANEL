@@ -19,6 +19,11 @@ export interface CommandOptions {
      */
     asRoot?: boolean;
 }
+/**
+ * Binaries that manage system-wide hypervisor/container/network/volume state and require UID 0
+ * when targeting host resources.
+ */
+export declare function isAllowlistedBinary(binaryName: string): boolean;
 export declare function isRunningAsRoot(): boolean;
 export declare function currentUsername(): string;
 export declare function currentHomedir(): string;

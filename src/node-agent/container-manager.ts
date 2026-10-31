@@ -6,6 +6,7 @@ import {
   privilegedFs,
   runAllowlistedCommand,
 } from './command-runner';
+import { getSharedBridgeDnsRelay } from './dns-relay';
 import { SafeValidators } from '../security/middleware';
 
 export interface LxcCreateSpec {
@@ -88,6 +89,7 @@ export interface LxcBridgeNetworkInfo {
   subnetCidr: string | null;
   hasDhcpServer: boolean;
   natConfigured: boolean;
+  dnsRelayPort: number;
 }
 
 export interface LxcNetworkRepairResult {
@@ -97,8 +99,10 @@ export interface LxcNetworkRepairResult {
   ipv4Address: string | null;
   gateway: string | null;
   dnsServers: string[];
+  dnsRelayPort?: number;
   natConfigured: boolean;
   liveApplied: boolean;
+  restartedForVeth?: boolean;
 }
 
 export function ipv4ToUint32(ip: string): number {
@@ -466,11 +470,33 @@ export class LxcContainerManager {
     }
   }
 
+  private async ensureIptablesRule(
+    bin: 'iptables' | 'iptables-legacy',
+    table: 'filter' | 'nat' | 'mangle',
+    chain: string,
+    ruleArgs: string[],
+    insertTop = true
+  ): Promise<boolean> {
+    const tblArgs = table === 'filter' ? [] : ['-t', table];
+    const check = await runAllowlistedCommand(
+      bin,
+      [...tblArgs, '-C', chain, ...ruleArgs],
+      { timeoutMs: 4000, asRoot: true }
+    );
+    if (check.exitCode === 0) return true;
+    const addArgs = insertTop
+      ? [...tblArgs, '-I', chain, '1', ...ruleArgs]
+      : [...tblArgs, '-A', chain, ...ruleArgs];
+    const add = await runAllowlistedCommand(bin, addArgs, { timeoutMs: 4000, asRoot: true });
+    return add.exitCode === 0;
+  }
+
   /**
    * Ensures the Linux bridge exists, is UP, has an IPv4 gateway address (when operating as
-   * a virtual NAT bridge such as `lxcbr0`), enables `net.ipv4.ip_forward=1`, and installs
-   * idempotent outbound NAT MASQUERADE + top-priority FORWARD ACCEPT rules so Docker's
-   * `FORWARD DROP` policy or UFW never blocks LXC container internet/DNS access.
+   * a virtual NAT bridge such as `lxcbr0`), starts HKVM's host-side `BridgeDnsRelay`, enables
+   * kernel forwarding/rp_filter sysctls, and installs idempotent MASQUERADE, FORWARD ACCEPT,
+   * INPUT ACCEPT, TCPMSS clamping, and PREROUTING DNS REDIRECT rules across BOTH `iptables`
+   * and `iptables-legacy` (preventing WSL2 / Docker Desktop / UFW split-brain packet drops).
    */
   public async ensureBridgeNetworkReady(bridgeName: string): Promise<LxcBridgeNetworkInfo> {
     const safeBridge = SafeValidators.bridgeOrIface(bridgeName);
@@ -482,6 +508,7 @@ export class LxcContainerManager {
         subnetCidr: null,
         hasDhcpServer: this.detectBridgeDhcpServer(safeBridge),
         natConfigured: false,
+        dnsRelayPort: 0,
       };
     }
 
@@ -500,6 +527,7 @@ export class LxcContainerManager {
         subnetCidr: null,
         hasDhcpServer: false,
         natConfigured: false,
+        dnsRelayPort: 0,
       };
     }
 
@@ -550,55 +578,111 @@ export class LxcContainerManager {
 
     const subnetCidr = bridgeIp ? computeIpv4SubnetCidr(bridgeIp, prefixLen) : null;
     let natConfigured = false;
+    let dnsRelayPort = 0;
 
     if (bridgeIp && subnetCidr && isVirtualNatBridge && isPrivateRfc1918Ipv4(bridgeIp)) {
-      if (isBinaryAvailable('sysctl')) {
-        await runAllowlistedCommand('sysctl', ['-w', 'net.ipv4.ip_forward=1'], {
-          timeoutMs: 5000,
-          asRoot: true,
-        }).catch(() => undefined);
+      const dnsRelay = getSharedBridgeDnsRelay();
+      dnsRelay.addExcludedLoopIp(bridgeIp);
+      dnsRelayPort = await dnsRelay.ensureStarted().catch(() => 0);
+
+      if (isBinaryAvailable('modprobe')) {
+        for (const mod of ['iptable_nat', 'nf_nat', 'xt_MASQUERADE', 'xt_REDIRECT', 'xt_TCPMSS']) {
+          await runAllowlistedCommand('modprobe', [mod], {
+            timeoutMs: 3000,
+            asRoot: true,
+          }).catch(() => undefined);
+        }
       }
 
-      if (isBinaryAvailable('iptables')) {
-        const checkMasq = await runAllowlistedCommand(
-          'iptables',
-          ['-t', 'nat', '-C', 'POSTROUTING', '-s', subnetCidr, '!', '-d', subnetCidr, '-j', 'MASQUERADE'],
-          { timeoutMs: 5000, asRoot: true }
-        );
-        if (checkMasq.exitCode !== 0) {
-          const addMasq = await runAllowlistedCommand(
-            'iptables',
-            ['-t', 'nat', '-A', 'POSTROUTING', '-s', subnetCidr, '!', '-d', subnetCidr, '-j', 'MASQUERADE'],
-            { timeoutMs: 5000, asRoot: true }
-          );
-          natConfigured = addMasq.exitCode === 0;
-        } else {
-          natConfigured = true;
+      if (isBinaryAvailable('sysctl')) {
+        const sysctlKeys = [
+          'net.ipv4.ip_forward=1',
+          'net.ipv4.conf.all.forwarding=1',
+          'net.ipv4.conf.default.forwarding=1',
+          `net.ipv4.conf.${safeBridge}.forwarding=1`,
+          `net.ipv4.conf.${safeBridge}.rp_filter=0`,
+          'net.ipv4.conf.all.rp_filter=0',
+        ];
+        for (const kv of sysctlKeys) {
+          await runAllowlistedCommand('sysctl', ['-w', kv], {
+            timeoutMs: 3000,
+            asRoot: true,
+          }).catch(() => undefined);
         }
+      }
 
-        const checkFwdIn = await runAllowlistedCommand(
-          'iptables',
-          ['-C', 'FORWARD', '-i', safeBridge, '-j', 'ACCEPT'],
-          { timeoutMs: 5000, asRoot: true }
+      // Program BOTH iptables (often iptables-nft) AND iptables-legacy if present on host:
+      // on WSL2 + Docker Desktop / Ubuntu, Docker frequently sets `FORWARD DROP` in
+      // iptables-legacy while `/usr/sbin/iptables` points to iptables-nft!
+      const iptBins: Array<'iptables' | 'iptables-legacy'> = [];
+      if (isBinaryAvailable('iptables')) iptBins.push('iptables');
+      if (isBinaryAvailable('iptables-legacy')) iptBins.push('iptables-legacy');
+
+      for (const bin of iptBins) {
+        const masqOk = await this.ensureIptablesRule(
+          bin,
+          'nat',
+          'POSTROUTING',
+          ['-s', subnetCidr, '!', '-d', subnetCidr, '-j', 'MASQUERADE'],
+          true
         );
-        if (checkFwdIn.exitCode !== 0) {
-          await runAllowlistedCommand(
-            'iptables',
-            ['-I', 'FORWARD', '1', '-i', safeBridge, '-j', 'ACCEPT'],
-            { timeoutMs: 5000, asRoot: true }
+        if (masqOk) natConfigured = true;
+
+        // Top-of-chain FORWARD ACCEPT by both bridge device AND container CIDR (handles br_netfilter)
+        await this.ensureIptablesRule(bin, 'filter', 'FORWARD', ['-i', safeBridge, '-j', 'ACCEPT'], true);
+        await this.ensureIptablesRule(bin, 'filter', 'FORWARD', ['-o', safeBridge, '-j', 'ACCEPT'], true);
+        await this.ensureIptablesRule(bin, 'filter', 'FORWARD', ['-s', subnetCidr, '-j', 'ACCEPT'], true);
+        await this.ensureIptablesRule(bin, 'filter', 'FORWARD', ['-d', subnetCidr, '-j', 'ACCEPT'], true);
+
+        // Clamp TCP MSS to path MTU (prevents `apt update` hanging at 0% [Working] on WSL2/PPPoE/Hotspot!)
+        await this.ensureIptablesRule(
+          bin,
+          'mangle',
+          'FORWARD',
+          ['-i', safeBridge, '-p', 'tcp', '--tcp-flags', 'SYN,RST', 'SYN', '-j', 'TCPMSS', '--clamp-mss-to-pmtu'],
+          true
+        );
+        await this.ensureIptablesRule(
+          bin,
+          'mangle',
+          'FORWARD',
+          ['-o', safeBridge, '-p', 'tcp', '--tcp-flags', 'SYN,RST', 'SYN', '-j', 'TCPMSS', '--clamp-mss-to-pmtu'],
+          true
+        );
+
+        // Allow DHCP (67/68) and DNS (53 + dnsRelayPort) through host INPUT chain (UFW / INPUT DROP hosts)
+        await this.ensureIptablesRule(bin, 'filter', 'INPUT', ['-i', safeBridge, '-p', 'udp', '--dport', '67', '-j', 'ACCEPT'], true);
+        await this.ensureIptablesRule(bin, 'filter', 'INPUT', ['-s', subnetCidr, '-p', 'udp', '--dport', '53', '-j', 'ACCEPT'], true);
+        await this.ensureIptablesRule(bin, 'filter', 'INPUT', ['-s', subnetCidr, '-p', 'tcp', '--dport', '53', '-j', 'ACCEPT'], true);
+
+        if (dnsRelayPort > 0) {
+          await this.ensureIptablesRule(
+            bin,
+            'filter',
+            'INPUT',
+            ['-s', subnetCidr, '-p', 'udp', '--dport', String(dnsRelayPort), '-j', 'ACCEPT'],
+            true
           );
-        }
-
-        const checkFwdOut = await runAllowlistedCommand(
-          'iptables',
-          ['-C', 'FORWARD', '-o', safeBridge, '-j', 'ACCEPT'],
-          { timeoutMs: 5000, asRoot: true }
-        );
-        if (checkFwdOut.exitCode !== 0) {
-          await runAllowlistedCommand(
-            'iptables',
-            ['-I', 'FORWARD', '1', '-o', safeBridge, '-j', 'ACCEPT'],
-            { timeoutMs: 5000, asRoot: true }
+          await this.ensureIptablesRule(
+            bin,
+            'filter',
+            'INPUT',
+            ['-s', subnetCidr, '-p', 'tcp', '--dport', String(dnsRelayPort), '-j', 'ACCEPT'],
+            true
+          );
+          await this.ensureIptablesRule(
+            bin,
+            'nat',
+            'PREROUTING',
+            ['-s', subnetCidr, '-d', bridgeIp, '-p', 'udp', '--dport', '53', '-j', 'REDIRECT', '--to-ports', String(dnsRelayPort)],
+            true
+          );
+          await this.ensureIptablesRule(
+            bin,
+            'nat',
+            'PREROUTING',
+            ['-s', subnetCidr, '-d', bridgeIp, '-p', 'tcp', '--dport', '53', '-j', 'REDIRECT', '--to-ports', String(dnsRelayPort)],
+            true
           );
         }
       }
@@ -655,6 +739,70 @@ export class LxcContainerManager {
           ],
           { timeoutMs: 5000, asRoot: true }
         );
+        if (dnsRelayPort > 0) {
+          await runAllowlistedCommand(
+            'nft',
+            [
+              'add',
+              'chain',
+              'ip',
+              'hkvm_lxc_nat',
+              'prerouting',
+              '{ type nat hook prerouting priority -100 ; }',
+            ],
+            { timeoutMs: 5000, asRoot: true }
+          );
+          await runAllowlistedCommand('nft', ['flush', 'chain', 'ip', 'hkvm_lxc_nat', 'prerouting'], {
+            timeoutMs: 5000,
+            asRoot: true,
+          });
+          await runAllowlistedCommand(
+            'nft',
+            [
+              'add',
+              'rule',
+              'ip',
+              'hkvm_lxc_nat',
+              'prerouting',
+              'ip',
+              'saddr',
+              subnetCidr,
+              'ip',
+              'daddr',
+              bridgeIp,
+              'udp',
+              'dport',
+              '53',
+              'redirect',
+              'to',
+              `:${dnsRelayPort}`,
+            ],
+            { timeoutMs: 5000, asRoot: true }
+          );
+          await runAllowlistedCommand(
+            'nft',
+            [
+              'add',
+              'rule',
+              'ip',
+              'hkvm_lxc_nat',
+              'prerouting',
+              'ip',
+              'saddr',
+              subnetCidr,
+              'ip',
+              'daddr',
+              bridgeIp,
+              'tcp',
+              'dport',
+              '53',
+              'redirect',
+              'to',
+              `:${dnsRelayPort}`,
+            ],
+            { timeoutMs: 5000, asRoot: true }
+          );
+        }
         natConfigured = nftMasq.exitCode === 0;
       }
     }
@@ -666,6 +814,7 @@ export class LxcContainerManager {
       subnetCidr,
       hasDhcpServer: this.detectBridgeDhcpServer(safeBridge),
       natConfigured,
+      dnsRelayPort,
     };
   }
 
@@ -820,7 +969,25 @@ export class LxcContainerManager {
       // non-fatal on read-only rootfs
     }
 
-    // 2. Configure systemd-resolved upstream drop-in if /etc/systemd exists
+    // 2. Configure systemd-resolved upstream drop-in AND normalize /etc/nsswitch.conf
+    // (`hosts: files resolve [!UNAVAIL=return] dns` on Ubuntu 22.04/24.04 blocks glibc from
+    // falling back to /etc/resolv.conf when systemd-resolved in memory has stale/empty state!)
+    try {
+      const nssPath = path.join(etcDir, 'nsswitch.conf');
+      if (privilegedFs.existsSync(nssPath) && !privilegedFs.lstatMetaSync(nssPath).isSymbolicLink) {
+        const nssRaw = privilegedFs.readTextSync(nssPath);
+        if (/^hosts:.*\[!UNAVAIL=return\]/m.test(nssRaw)) {
+          const nssFixed = nssRaw.replace(
+            /^hosts:.*$/m,
+            'hosts:          files dns'
+          );
+          privilegedFs.writeFileSync(nssPath, nssFixed, 0o644);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     try {
       const systemdDir = this.resolveConfinedRootfsDir(safeName, 'etc/systemd', false);
       if (systemdDir) {
@@ -1632,6 +1799,7 @@ export class LxcContainerManager {
 
     let configuredGuestIpv4: string | null = null;
     let configuredGuestGateway: string | null = null;
+    let activeBridgeInfo: LxcBridgeNetworkInfo | null = null;
 
     if (cfg.bridge) {
       const safeBridge = SafeValidators.bridgeOrIface(cfg.bridge);
@@ -1645,7 +1813,9 @@ export class LxcContainerManager {
             subnetCidr: null,
             hasDhcpServer: true,
             natConfigured: false,
+            dnsRelayPort: 0,
           };
+      activeBridgeInfo = bridgeInfo;
 
       if (bridgeInfo.ready) {
         lines.push(`lxc.net.0.type = veth`);
@@ -1722,33 +1892,71 @@ export class LxcContainerManager {
       0o640
     );
 
+    const dnsServers = this.buildEffectiveGuestDnsList(activeBridgeInfo);
     // Ensure guest /etc/resolv.conf + netplan/networkd/interfaces match so DNS & routing work immediately
     this.configureGuestNetworkingAndDns(safeName, {
       ipv4Cidr: configuredGuestIpv4,
       gateway: configuredGuestGateway && configuredGuestGateway !== 'auto' ? configuredGuestGateway : null,
       useDhcp: !configuredGuestIpv4,
+      dnsServers,
     });
   }
 
-  private async prepareContainerNetworkPreStart(containerName: string): Promise<{
+  private buildEffectiveGuestDnsList(bridgeInfo?: LxcBridgeNetworkInfo | null): string[] {
+    const base = resolveGuestDnsServers();
+    if (bridgeInfo && bridgeInfo.bridgeIp && bridgeInfo.dnsRelayPort > 0) {
+      return [
+        bridgeInfo.bridgeIp,
+        ...base.filter((ip) => ip !== bridgeInfo.bridgeIp),
+      ].slice(0, 3);
+    }
+    return base.slice(0, 3);
+  }
+
+  private async prepareContainerNetworkPreStart(
+    containerName: string,
+    opts: { forceAutoIpIfRunningWithoutIp?: boolean; fallbackBridge?: string } = {}
+  ): Promise<{
     bridge: string;
     ipv4Cidr: string | null;
     gateway: string | null;
     dnsServers: string[];
+    dnsRelayPort: number;
     natConfigured: boolean;
   }> {
     const safeName = SafeValidators.containerName(containerName);
     const netCfg = this.readContainerNetFromConfig(safeName);
-    const bridge = netCfg.bridge || 'lxcbr0';
+    const bridge = SafeValidators.bridgeOrIface(netCfg.bridge || opts.fallbackBridge || 'lxcbr0');
     let ipv4Cidr = netCfg.ipv4Cidr;
     let gateway = netCfg.gateway;
     let natConfigured = false;
+    let activeBridgeInfo: LxcBridgeNetworkInfo | null = null;
 
-    if (this.isSystemLxcStore() && netCfg.bridge) {
+    if (this.isSystemLxcStore()) {
       const bridgeInfo = await this.ensureBridgeNetworkReady(bridge);
+      activeBridgeInfo = bridgeInfo;
       natConfigured = bridgeInfo.natConfigured;
 
-      if (!ipv4Cidr && !bridgeInfo.hasDhcpServer && bridgeInfo.bridgeIp) {
+      const configFile = path.join(this.getContainerDir(safeName), 'config');
+      const curCfgText = privilegedFs.existsSync(configFile)
+        ? privilegedFs.readTextSync(configFile)
+        : '';
+      const hadNetTypeNone = /^\s*lxc\.net\.0\.type\s*=\s*none\b/m.test(curCfgText);
+
+      let runningWithoutIp = false;
+      if (opts.forceAutoIpIfRunningWithoutIp && !ipv4Cidr) {
+        const curInfo = await this.inspectContainer(safeName);
+        if (curInfo.state === 'running' && curInfo.ips.length === 0) {
+          runningWithoutIp = true;
+        }
+      }
+
+      const needsAutoIp =
+        !ipv4Cidr &&
+        Boolean(bridgeInfo.bridgeIp) &&
+        (!bridgeInfo.hasDhcpServer || runningWithoutIp);
+
+      if (needsAutoIp && bridgeInfo.bridgeIp) {
         const autoIp = await this.allocateAutoBridgeIpv4(
           safeName,
           bridge,
@@ -1758,36 +1966,101 @@ export class LxcContainerManager {
         if (autoIp) {
           ipv4Cidr = autoIp;
           gateway = bridgeInfo.bridgeIp;
-          const configFile = path.join(this.getContainerDir(safeName), 'config');
-          if (privilegedFs.existsSync(configFile)) {
-            const cur = privilegedFs.readTextSync(configFile);
-            const markerEnd = '# --- END HKVM MANAGED CONFIG ---';
-            const injectLines = [
-              `lxc.net.0.name = eth0`,
-              `lxc.net.0.ipv4.address = ${ipv4Cidr}`,
-              `lxc.net.0.ipv4.gateway = ${gateway}`,
-            ].join('\n');
-            const cleaned = cur
-              .replace(/^\s*lxc\.net\.0\.(?:name|ipv4\.address|ipv4\.gateway)\s*=.*$/gm, '')
-              .replace(/\n{3,}/g, '\n\n');
-            const updated = cleaned.includes(markerEnd)
-              ? cleaned.replace(markerEnd, `${injectLines}\n${markerEnd}`)
-              : `${cleaned.trimEnd()}\n${injectLines}\n`;
-            privilegedFs.writeFileSync(configFile, updated, 0o640);
-          }
         }
-      } else if (ipv4Cidr && !gateway && bridgeInfo.bridgeIp) {
+      }
+      if (!gateway && bridgeInfo.bridgeIp) {
         gateway = bridgeInfo.bridgeIp;
+      }
+
+      if (bridgeInfo.ready && curCfgText && (hadNetTypeNone || !netCfg.bridge || needsAutoIp)) {
+        const markerEnd = '# --- END HKVM MANAGED CONFIG ---';
+        const netLines = [
+          `lxc.net.0.type = veth`,
+          `lxc.net.0.link = ${bridge}`,
+          `lxc.net.0.flags = up`,
+          `lxc.net.0.name = eth0`,
+          ...(ipv4Cidr ? [`lxc.net.0.ipv4.address = ${ipv4Cidr}`] : []),
+          ...(gateway ? [`lxc.net.0.ipv4.gateway = ${gateway}`] : []),
+        ].join('\n');
+        const cleaned = curCfgText
+          .replace(/^\s*lxc\.net\.0(?:\.(?:type|link|flags|name|ipv4\.address|ipv4\.gateway))?\s*=.*$/gm, '')
+          .replace(/\n{3,}/g, '\n\n');
+        const updated = cleaned.includes(markerEnd)
+          ? cleaned.replace(markerEnd, `${netLines}\n${markerEnd}`)
+          : `${cleaned.trimEnd()}\n${netLines}\n`;
+        privilegedFs.writeFileSync(configFile, updated, 0o640);
       }
     }
 
+    const effectiveDns = this.buildEffectiveGuestDnsList(activeBridgeInfo);
     const dnsServers = this.configureGuestNetworkingAndDns(safeName, {
       ipv4Cidr,
       gateway: gateway && gateway !== 'auto' ? gateway : null,
       useDhcp: !ipv4Cidr,
+      dnsServers: effectiveDns,
     });
 
-    return { bridge, ipv4Cidr, gateway, dnsServers, natConfigured };
+    return {
+      bridge,
+      ipv4Cidr,
+      gateway,
+      dnsServers,
+      dnsRelayPort: activeBridgeInfo?.dnsRelayPort || 0,
+      natConfigured,
+    };
+  }
+
+  /**
+   * Ensures a running container's host-side `veth` peer is enslaved to `bridge` and `UP`
+   * (recovers containers whose bridge was recreated or bounced while the container stayed running).
+   */
+  private async ensureRunningVethAttachedToBridge(
+    containerName: string,
+    bridge: string
+  ): Promise<{ eth0Exists: boolean }> {
+    if (!this.isSystemLxcStore() || !isBinaryAvailable('lxc-attach') || !isBinaryAvailable('ip')) {
+      return { eth0Exists: true };
+    }
+    const safeName = SafeValidators.containerName(containerName);
+    const safeBridge = SafeValidators.bridgeOrIface(bridge);
+    const linkRes = await runAllowlistedCommand(
+      'lxc-attach',
+      [...this.lxcPathArgs(), '-n', safeName, '--', 'ip', '-o', 'link', 'show', 'dev', 'eth0'],
+      { timeoutMs: 5000, asRoot: true }
+    ).catch(() => null);
+
+    if (!linkRes || linkRes.exitCode !== 0) {
+      return { eth0Exists: false };
+    }
+
+    const peerMatch = linkRes.stdout.match(/\beth0@if(\d+):/);
+    if (peerMatch) {
+      const hostIfIndex = parseInt(peerMatch[1], 10);
+      if (hostIfIndex > 0) {
+        const hostLinks = await runAllowlistedCommand('ip', ['-o', 'link', 'show'], {
+          timeoutMs: 4000,
+        }).catch(() => null);
+        if (hostLinks && hostLinks.stdout) {
+          for (const line of hostLinks.stdout.split('\n')) {
+            const m = line.match(new RegExp(`^${hostIfIndex}:\\s+([^:@\\s]+)`));
+            if (m) {
+              const hostVeth = SafeValidators.bridgeOrIface(m[1]);
+              await runAllowlistedCommand(
+                'ip',
+                ['link', 'set', 'dev', hostVeth, 'master', safeBridge],
+                { timeoutMs: 4000, asRoot: true }
+              ).catch(() => undefined);
+              await runAllowlistedCommand('ip', ['link', 'set', 'dev', hostVeth, 'up'], {
+                timeoutMs: 4000,
+                asRoot: true,
+              }).catch(() => undefined);
+              break;
+            }
+          }
+        }
+      }
+    }
+    return { eth0Exists: true };
   }
 
   private async applyLiveGuestNetworkIfNeeded(
@@ -1843,6 +2116,33 @@ export class LxcContainerManager {
         ).catch(() => null);
         if (routeRes && routeRes.exitCode === 0) applied = true;
       }
+    } else if (gateway && gateway !== 'auto') {
+      // Even when IP came via DHCP, ensure a default route exists on eth0
+      const defCheck = await runAllowlistedCommand(
+        'lxc-attach',
+        [...this.lxcPathArgs(), '-n', safeName, '--', 'ip', '-4', 'route', 'show', 'default'],
+        rootOpt
+      ).catch(() => null);
+      if (defCheck && defCheck.exitCode === 0 && !defCheck.stdout.trim()) {
+        await runAllowlistedCommand(
+          'lxc-attach',
+          [
+            ...this.lxcPathArgs(),
+            '-n',
+            safeName,
+            '--',
+            'ip',
+            'route',
+            'replace',
+            'default',
+            'via',
+            gateway,
+            'dev',
+            'eth0',
+          ],
+          rootOpt
+        ).catch(() => undefined);
+      }
     }
 
     if (dnsServers.length > 0 && (force || this.isSystemLxcStore())) {
@@ -1863,19 +2163,56 @@ export class LxcContainerManager {
         { ...rootOpt, stdinData: resolvBody }
       ).catch(() => null);
       if (teeRes && teeRes.exitCode === 0) applied = true;
+
+      // Also push DNS servers into live systemd-resolved (if running inside Ubuntu/Debian guest)
+      await runAllowlistedCommand(
+        'lxc-attach',
+        [...this.lxcPathArgs(), '-n', safeName, '--', 'resolvectl', 'dns', 'eth0', ...dnsServers],
+        { ...rootOpt, timeoutMs: 4000 }
+      ).catch(() => undefined);
+      await runAllowlistedCommand(
+        'lxc-attach',
+        [...this.lxcPathArgs(), '-n', safeName, '--', 'resolvectl', 'flush-caches'],
+        { ...rootOpt, timeoutMs: 4000 }
+      ).catch(() => undefined);
     }
 
     return applied;
   }
 
   /**
-   * Repairs host bridge/NAT/FORWARD rules, auto-assigns an IPv4 address if the bridge lacks
-   * a DHCP daemon, writes reliable non-loopback `/etc/resolv.conf` + netplan/networkd config,
-   * and applies IP/route/DNS live inside a running container without requiring a reboot.
+   * Repairs host bridge/NAT/FORWARD/DNS-relay rules, upgrades `lxc.net.0.type = none` if needed,
+   * auto-assigns a collision-free IPv4 if the container lacks one, re-enslaves orphaned host
+   * `veth` peers (or restarts the container if `eth0` was never created), and applies IP/route/DNS
+   * live inside the guest.
    */
-  public async repairContainerNetworking(containerName: string): Promise<LxcNetworkRepairResult> {
+  public async repairContainerNetworking(
+    containerName: string,
+    fallbackBridge = 'lxcbr0'
+  ): Promise<LxcNetworkRepairResult> {
     const safeName = SafeValidators.containerName(containerName);
-    const pre = await this.prepareContainerNetworkPreStart(safeName);
+    let pre = await this.prepareContainerNetworkPreStart(safeName, {
+      forceAutoIpIfRunningWithoutIp: true,
+      fallbackBridge,
+    });
+
+    let restartedForVeth = false;
+    const beforeInfo = await this.inspectContainer(safeName);
+    if (beforeInfo.state === 'running' && this.isSystemLxcStore()) {
+      const vethCheck = await this.ensureRunningVethAttachedToBridge(safeName, pre.bridge);
+      if (!vethCheck.eth0Exists) {
+        // Container booted previously without an eth0 veth device (e.g. lxc.net.0.type = none):
+        // restart it once so liblxc attaches the newly configured veth pair to the bridge.
+        await this.stopContainer(safeName).catch(() => undefined);
+        await this.startContainer(safeName);
+        restartedForVeth = true;
+        pre = await this.prepareContainerNetworkPreStart(safeName, {
+          forceAutoIpIfRunningWithoutIp: true,
+          fallbackBridge,
+        });
+      }
+    }
+
     const liveApplied = await this.applyLiveGuestNetworkIfNeeded(
       safeName,
       pre.ipv4Cidr,
@@ -1893,8 +2230,10 @@ export class LxcContainerManager {
       ipv4Address: resolvedIp,
       gateway: pre.gateway && pre.gateway !== 'auto' ? pre.gateway : null,
       dnsServers: pre.dnsServers,
+      dnsRelayPort: pre.dnsRelayPort || undefined,
       natConfigured: pre.natConfigured,
-      liveApplied,
+      liveApplied: liveApplied || restartedForVeth,
+      restartedForVeth,
     };
   }
 

@@ -843,6 +843,12 @@ printf 'ID=%s\\nVERSION_ID="%s"\\n' "$DISTRO" "$REL" > "$CT/rootfs/etc/os-releas
 printf 'root:*:19000:0:99999:7:::\\n' > "$CT/rootfs/etc/shadow"
 chmod 0640 "$CT/rootfs/etc/shadow"
 ln -sf ../run/systemd/resolve/stub-resolv.conf "$CT/rootfs/etc/resolv.conf"
+cat > "$CT/rootfs/etc/nsswitch.conf" <<EOF
+passwd:         files systemd
+group:          files systemd
+hosts:          files resolve [!UNAVAIL=return] dns
+networks:       files
+EOF
 cat > "$CT/rootfs/etc/netplan/10-lxc.yaml" <<EOF
 network:
   version: 2
@@ -1054,7 +1060,7 @@ if [ "$1" = "ps" ]; then
   printf '1 root 0.1 0.5 /sbin/init\\n48 www-data 0.4 1.8 nginx\\n'
   exit 0
 fi
-if [ "$1" = "ip" ]; then
+if [ "$1" = "ip" ] || [ "$1" = "resolvectl" ]; then
   printf '%s\\n' "$*" >> "$CT/.live_net"
   exit 0
 fi
@@ -1819,6 +1825,52 @@ exec "$@"
       assert.ok(filteredDns.includes('1.1.1.1') && filteredDns.includes('8.8.8.8'));
       assert.strictEqual(filteredDns.length, 3, 'Must respect glibc MAXNS=3 limit');
 
+      // Verify built-in host BridgeDnsRelay (UDP + TCP + OS getaddrinfo synthesis for localhost!)
+      const dgram = require('dgram');
+      const { BridgeDnsRelay, parseDnsQuestion, synthesizeDnsFromOsLookup } = require('../lib/node-agent/dns-relay');
+      // Build a real RFC 1035 query for "localhost" IN A (txId=0x4242)
+      const qHeader = Buffer.from([0x42, 0x42, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+      const qBody = Buffer.concat([
+        Buffer.from([9]),
+        Buffer.from('localhost', 'ascii'),
+        Buffer.from([0x00, 0x00, 0x01, 0x00, 0x01]),
+      ]);
+      const localhostQuery = Buffer.concat([qHeader, qBody]);
+      const parsedQ = parseDnsQuestion(localhostQuery);
+      assert.strictEqual(parsedQ.qname, 'localhost');
+      assert.strictEqual(parsedQ.qtype, 1);
+
+      const synthAns = await synthesizeDnsFromOsLookup(localhostQuery);
+      assert.ok(synthAns && synthAns.length > localhostQuery.length, 'Expected synthesized A record for localhost');
+      assert.strictEqual(synthAns.readUInt16BE(0), 0x4242);
+      assert.strictEqual(synthAns.readUInt16BE(2) & 0x000f, 0, 'Expected NOERROR rcode');
+      assert.ok(synthAns.readUInt16BE(6) >= 1, 'Expected ANCOUNT >= 1');
+
+      const testRelay = new BridgeDnsRelay();
+      // Point upstream to closed local port via env so relay exercises OS lookup fallback deterministically
+      const prevDnsEnv = process.env.HKVM_LXC_DNS;
+      process.env.HKVM_LXC_DNS = '127.0.0.254';
+      const relayPort = await testRelay.ensureStarted();
+      assert.ok(relayPort > 0, 'Expected BridgeDnsRelay to bind UDP+TCP port');
+      const relayReply = await new Promise((resolve, reject) => {
+        const client = dgram.createSocket('udp4');
+        const t = setTimeout(() => {
+          client.close();
+          reject(new Error('BridgeDnsRelay UDP query timed out'));
+        }, 4000);
+        client.on('message', (msg) => {
+          clearTimeout(t);
+          client.close();
+          resolve(msg);
+        });
+        client.send(localhostQuery, relayPort, '127.0.0.1');
+      });
+      assert.strictEqual(relayReply.readUInt16BE(0), 0x4242);
+      assert.ok(relayReply.readUInt16BE(6) >= 1, 'BridgeDnsRelay resolved localhost over live UDP');
+      testRelay.stop();
+      if (prevDnsEnv === undefined) delete process.env.HKVM_LXC_DNS;
+      else process.env.HKVM_LXC_DNS = prevDnsEnv;
+
       // Create an Ubuntu 22.04 container with static IP WITHOUT explicit gateway -> verify auto-gateway (.1),
       // dangling stub-resolv.conf symlink replacement, systemd-resolved drop-in, and Netplan 10-lxc.yaml sync!
       const createNetRes = await adminClient.request('POST', '/api/v1/lxc', {
@@ -1861,6 +1913,10 @@ exec "$@"
       assert.ok(netplanTxt.includes('10.88.55.25/24'), 'Netplan must match assigned IPv4 CIDR');
       assert.ok(netplanTxt.includes('via: 10.88.55.1'), 'Netplan must configure default route gateway');
 
+      const nssTxt = privilegedFs.readTextSync(path.join(ctDir, 'rootfs/etc/nsswitch.conf'));
+      assert.ok(!nssTxt.includes('[!UNAVAIL=return]'), 'nsswitch.conf must remove [!UNAVAIL=return] trap');
+      assert.ok(nssTxt.includes('hosts:          files dns'), 'nsswitch.conf must prioritize direct files dns');
+
       // Verify collision-free auto-IP allocation helper
       const localCm = new LxcContainerManager(process.env.HKVM_LXC_PATH);
       const autoIp1 = await localCm.allocateAutoBridgeIpv4('auto-ip-test-a', 'lxcbr0', '10.88.55.1', 24);
@@ -1879,6 +1935,7 @@ exec "$@"
       assert.ok(liveNetLog.includes('ip link set eth0 up'), 'Expected live eth0 link up via lxc-attach');
       assert.ok(liveNetLog.includes('ip addr replace 10.88.55.25/24 dev eth0'), 'Expected live IPv4 injection');
       assert.ok(liveNetLog.includes('ip route replace default via 10.88.55.1 dev eth0'), 'Expected live default route injection');
+      assert.ok(liveNetLog.includes('resolvectl dns eth0'), 'Expected live systemd-resolved DNS update via resolvectl');
 
       const repairedResolv = privilegedFs.readTextSync(resolvPath);
       assert.ok(repairedResolv.includes('nameserver 1.1.1.1'), 'Expected live repaired /etc/resolv.conf');
@@ -1903,6 +1960,76 @@ exec "$@"
       // Cleanup both test containers
       await adminClient.request('POST', `/api/v1/instances/lxc/${netCtId}/action`, { action: 'delete' });
       await adminClient.request('POST', `/api/v1/instances/lxc/${remoteCtId}/action`, { action: 'delete' });
+    });
+
+    await runStep('T17: WSL2 BridgeDnsRelay TCP/AAAA fast-path, loop prevention & iptables-legacy/modprobe allowlist', async () => {
+      const net = require('net');
+      const { BridgeDnsRelay, synthesizeDnsFromOsLookup } = require('../lib/node-agent/dns-relay');
+      const { isAllowlistedBinary } = require('../lib/node-agent/command-runner');
+
+      // 1. Verify dual iptables-legacy & modprobe allowlist without weakening shell restrictions
+      assert.ok(isAllowlistedBinary('iptables-legacy'), 'Expected iptables-legacy in allowlist');
+      assert.ok(isAllowlistedBinary('ip6tables-legacy'), 'Expected ip6tables-legacy in allowlist');
+      assert.ok(isAllowlistedBinary('modprobe'), 'Expected modprobe in allowlist');
+      assert.ok(!isAllowlistedBinary('sh') && !isAllowlistedBinary('bash') && !isAllowlistedBinary('sudo'));
+
+      // 2. Verify AAAA (qtype=28) synthesis returns instant empty NOERROR (rcode=0) instead of timing out when IPv4 exists
+      const aaaaHeader = Buffer.from([0x51, 0x52, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+      const ipv4OnlyHost = '127.0.0.1';
+      const labels = ipv4OnlyHost.split('.').map((lbl) => Buffer.concat([Buffer.from([lbl.length]), Buffer.from(lbl, 'ascii')]));
+      const aaaaQuery = Buffer.concat([aaaaHeader, ...labels, Buffer.from([0x00, 0x00, 0x1c, 0x00, 0x01])]);
+      const aaaaSynth = await synthesizeDnsFromOsLookup(aaaaQuery);
+      assert.ok(aaaaSynth && aaaaSynth.length >= 12);
+      assert.strictEqual(aaaaSynth.readUInt16BE(0), 0x5152);
+      assert.strictEqual(aaaaSynth.readUInt16BE(2) & 0x000f, 0, 'AAAA for IPv4-only host must return instant NOERROR');
+      assert.strictEqual(aaaaSynth.readUInt16BE(6), 0, 'AAAA for IPv4-only host must have 0 answers');
+
+      // 3. Verify live RFC 1035 DNS-over-TCP framing (2-byte big-endian length prefix) + bridge IP loop exclusion
+      const relay = new BridgeDnsRelay();
+      relay.addExcludedLoopIp('10.0.3.1');
+      const port = await relay.ensureStarted();
+      assert.ok(port > 0);
+
+      const tcpQ = Buffer.concat([
+        Buffer.from([0x77, 0x88, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+        Buffer.from([9]),
+        Buffer.from('localhost', 'ascii'),
+        Buffer.from([0x00, 0x00, 0x01, 0x00, 0x01]),
+      ]);
+      const framed = Buffer.alloc(2 + tcpQ.length);
+      framed.writeUInt16BE(tcpQ.length, 0);
+      tcpQ.copy(framed, 2);
+
+      const tcpReply = await new Promise((resolve, reject) => {
+        const sock = net.createConnection({ host: '127.0.0.1', port }, () => {
+          sock.write(framed);
+        });
+        let buf = Buffer.alloc(0);
+        const timer = setTimeout(() => {
+          sock.destroy();
+          reject(new Error('TCP DNS relay query timed out'));
+        }, 4000);
+        sock.on('data', (chunk) => {
+          buf = Buffer.concat([buf, chunk]);
+          if (buf.length >= 2) {
+            const len = buf.readUInt16BE(0);
+            if (buf.length >= 2 + len) {
+              clearTimeout(timer);
+              sock.end();
+              resolve(buf.subarray(2, 2 + len));
+            }
+          }
+        });
+        sock.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+
+      assert.strictEqual(tcpReply.readUInt16BE(0), 0x7788);
+      assert.strictEqual(tcpReply.readUInt16BE(2) & 0x000f, 0);
+      assert.ok(tcpReply.readUInt16BE(6) >= 1, 'Expected TCP DNS relay to return >=1 A record for localhost');
+      relay.stop();
     });
   } finally {
     const { execFileSync } = require('child_process');
