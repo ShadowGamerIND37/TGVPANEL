@@ -34,10 +34,15 @@ export declare class BackupSnapshotManager {
         sizeBytes: number;
         checksumSha256: string;
     }>;
+    getBackupRecord(backupId: number): Promise<any | undefined>;
     verifyBackupIntegrity(backupId: number): Promise<{
         valid: boolean;
         expectedSha256: string | null;
         actualSha256: string | null;
+    }>;
+    restoreBackup(backupId: number, actorId?: number): Promise<{
+        restored: boolean;
+        status: string;
     }>;
     deleteBackup(backupId: number): Promise<void>;
 }

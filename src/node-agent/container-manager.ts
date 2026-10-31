@@ -469,7 +469,7 @@ export class LxcContainerManager {
     if (isBinaryAvailable('du')) {
       const res = await runAllowlistedCommand('du', ['-sb', rootfs], {
         timeoutMs: 8000,
-        asRoot: this.needsRootForStore() || undefined,
+        asRoot: true,
       });
       if (res.exitCode === 0) {
         const bytes = parseInt(res.stdout.trim().split(/\s+/)[0] || '0', 10);
@@ -493,7 +493,7 @@ export class LxcContainerManager {
       ['--numeric-owner', '-xpf', resolvedArchive, '-C', rootfsDir],
       {
         timeoutMs: 600_000,
-        asRoot: this.needsRootForStore() || undefined,
+        asRoot: true,
       }
     );
     if (tarRes.exitCode !== 0) {
@@ -1111,7 +1111,6 @@ export class LxcContainerManager {
    * Zero shell interpolation of password characters.
    */
   public async setRootPassword(containerName: string, newPassword: string): Promise<void> {
-    this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(containerName);
     if (!newPassword || newPassword.includes('\n') || newPassword.includes('\0')) {
       throw new Error('Password contains invalid control characters.');
@@ -1124,6 +1123,7 @@ export class LxcContainerManager {
       throw new Error(`Container "${safeName}" is not running and /etc/shadow could not be updated.`);
     }
 
+    this.assertLxcInstalled();
     const res = await runAllowlistedCommand(
       'lxc-attach',
       [...this.lxcPathArgs(), '-n', safeName, '--', 'chpasswd'],
@@ -1241,12 +1241,27 @@ export class LxcContainerManager {
       throw new Error('Path traversal outside container rootfs denied.');
     }
 
-    // Check existing parent/target realpath to prevent symlink escape
-    const checkTarget = privilegedFs.existsSync(joined) ? joined : path.dirname(joined);
-    if (privilegedFs.existsSync(checkTarget)) {
-      const realTarget = privilegedFs.realpathSync(checkTarget);
-      if (realTarget !== realRootfs && !realTarget.startsWith(realRootfs + path.sep)) {
-        throw new Error('Symlink escape outside container rootfs denied.');
+    // Walk every existing path segment from rootfs downward to block intermediate or broken symlink escapes
+    const segments = safeRel.split('/').filter(Boolean);
+    let cursor = realRootfs;
+    for (const seg of segments) {
+      cursor = path.join(cursor, seg);
+      let meta: ReturnType<typeof privilegedFs.lstatMetaSync>;
+      try {
+        meta = privilegedFs.lstatMetaSync(cursor);
+      } catch {
+        break;
+      }
+      if (meta.isSymbolicLink) {
+        let realTarget: string;
+        try {
+          realTarget = privilegedFs.realpathSync(cursor);
+        } catch {
+          throw new Error('Symlink escape outside container rootfs denied.');
+        }
+        if (realTarget !== realRootfs && !realTarget.startsWith(realRootfs + path.sep)) {
+          throw new Error('Symlink escape outside container rootfs denied.');
+        }
       }
     }
 

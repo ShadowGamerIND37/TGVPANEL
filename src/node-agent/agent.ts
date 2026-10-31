@@ -47,7 +47,7 @@ export class LocalNodeRuntime {
       this.containerManager,
       this.snapshotManager
     );
-    this.consoleManager = new LxcContainerConsoleManager();
+    this.consoleManager = new LxcContainerConsoleManager(undefined, options?.lxcBaseDir);
     this.shellManager = new AdminNodeShellManager({
       interactiveEnabled: options?.interactiveHostShell,
       onAuditEvent: options?.onAuditEvent,
@@ -92,7 +92,10 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
     apiKeyHash: hashApiKey(rawApiKey),
     hmacSecret,
     requireMtls: Boolean(opts.requireMtls || process.env.HKVM_NODE_MTLS === 'true'),
-    credentialsFilePath: path.resolve(process.cwd(), 'data', 'node-agent-credentials.json'),
+    credentialsFilePath: path.join(
+      process.env.HKVM_DATA_DIR || path.resolve(process.cwd(), 'data'),
+      'node-agent-credentials.json'
+    ),
   });
 
   const app = express();
@@ -108,8 +111,8 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
   // Authenticated REST endpoints
   app.use('/api/v1', authenticator.expressMiddleware());
 
-  app.get('/api/v1/health', async (_req, res) => {
-    const report = await getNodeHealthReport();
+  app.get('/api/v1/health', async (req, res) => {
+    const report = await getNodeHealthReport(req.query.refresh === '1');
     res.json(report);
   });
 
@@ -314,6 +317,59 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
       res.status(201).json({ backup: artifact });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/v1/containers/:name/backups/restore', async (req, res) => {
+    try {
+      const name = req.params.name;
+      const { filePath, expectedSha256 } = req.body || {};
+      const confined = runtime.snapshotManager.resolveConfinedBackupPath(String(filePath || ''));
+      const before = await runtime.containerManager.inspectContainer(name);
+      const wasRunning = before.state === 'running' || before.state === 'frozen';
+      if (wasRunning) {
+        await runtime.containerManager.stopContainer(name, false);
+      }
+      await runtime.snapshotManager.restoreTarBackup(
+        confined,
+        expectedSha256 ? String(expectedSha256) : undefined,
+        name
+      );
+      if (wasRunning) {
+        await runtime.containerManager.startContainer(name);
+      }
+      const after = await runtime.containerManager.inspectContainer(name);
+      res.json({ success: true, container: after });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/v1/backups/verify', async (req, res) => {
+    try {
+      const { filePath, expectedSha256 } = req.body || {};
+      const confined = runtime.snapshotManager.resolveConfinedBackupPath(String(filePath || ''));
+      if (!fs.existsSync(confined)) {
+        return res.json({ valid: false, expectedSha256: expectedSha256 || null, actualSha256: null });
+      }
+      const actual = await runtime.snapshotManager.computeFileSha256(confined);
+      const valid = !expectedSha256 || String(expectedSha256).toLowerCase() === actual.toLowerCase();
+      return res.json({ valid, expectedSha256: expectedSha256 || null, actualSha256: actual });
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/v1/backups/file', (req, res) => {
+    try {
+      const filePath = String(req.body?.filePath || req.query.filePath || '');
+      const confined = runtime.snapshotManager.resolveConfinedBackupPath(filePath);
+      if (fs.existsSync(confined)) {
+        fs.unlinkSync(confined);
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
     }
   });
 

@@ -38,6 +38,18 @@ export class LxcSnapshotAndBackupManager {
     fs.mkdirSync(this.backupDir, { recursive: true });
   }
 
+  public getBackupDir(): string {
+    return this.backupDir;
+  }
+
+  public resolveConfinedBackupPath(filePath: string): string {
+    const resolved = path.resolve(filePath);
+    if (resolved !== this.backupDir && !resolved.startsWith(this.backupDir + path.sep)) {
+      throw new Error('Backup path is outside the configured node backup directory.');
+    }
+    return resolved;
+  }
+
   private needsRootForStore(): boolean {
     if (isRunningAsRoot()) return false;
     if (this.lxcBaseDir === '/var/lib/lxc' || this.lxcBaseDir.startsWith('/var/lib/lxc/')) {
@@ -181,22 +193,19 @@ export class LxcSnapshotAndBackupManager {
     const fileName = `${safeName}_${safeLabel}.tar.gz`;
     const archivePath = path.join(this.backupDir, fileName);
 
-    const needsRoot = this.needsRootForStore();
     const tarRes = await runAllowlistedCommand(
       'tar',
       ['--numeric-owner', '-czpf', archivePath, '-C', this.lxcBaseDir, safeName],
       {
         timeoutMs: 900_000,
-        asRoot: needsRoot || undefined,
+        asRoot: true,
       }
     );
     if (tarRes.exitCode !== 0) {
       throw new Error(`tar backup failed: ${tarRes.stderr || tarRes.stdout}`);
     }
 
-    if (needsRoot) {
-      privilegedFs.chownToCurrentUserSync(archivePath);
-    }
+    privilegedFs.chownToCurrentUserSync(archivePath);
 
     const checksumSha256 = await this.computeFileSha256(archivePath);
     const st = fs.statSync(archivePath);
@@ -212,7 +221,8 @@ export class LxcSnapshotAndBackupManager {
 
   public async restoreTarBackup(
     archivePath: string,
-    expectedChecksumSha256?: string
+    expectedChecksumSha256?: string,
+    cleanContainerName?: string
   ): Promise<void> {
     const resolved = path.resolve(archivePath);
     if (!fs.existsSync(resolved)) {
@@ -229,12 +239,20 @@ export class LxcSnapshotAndBackupManager {
     }
 
     privilegedFs.mkdirpSync(this.lxcBaseDir, 0o755);
+    if (cleanContainerName) {
+      const safeName = SafeValidators.containerName(cleanContainerName);
+      const existingRootfs = path.join(this.lxcBaseDir, safeName, 'rootfs');
+      if (privilegedFs.existsSync(existingRootfs)) {
+        privilegedFs.rmRecursiveSync(existingRootfs);
+      }
+    }
+
     const untarRes = await runAllowlistedCommand(
       'tar',
       ['--numeric-owner', '-xzpf', resolved, '-C', this.lxcBaseDir],
       {
         timeoutMs: 900_000,
-        asRoot: this.needsRootForStore() || undefined,
+        asRoot: true,
       }
     );
     if (untarRes.exitCode !== 0) {

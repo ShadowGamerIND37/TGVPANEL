@@ -402,7 +402,12 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       return res.json({ success: true, instance });
     } catch (err: any) {
       const code =
-        err.statusCode || (/only supported for|Cannot start a suspended/i.test(String(err.message)) ? 400 : 500);
+        err.statusCode ||
+        (/only supported for|Cannot start a suspended|is suspended and cannot be/i.test(
+          String(err.message)
+        )
+          ? 400
+          : 500);
       return res.status(code).json({ error: err.message });
     }
   });
@@ -504,7 +509,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
           nodeId: b.nodeId ? Number(b.nodeId) : undefined,
           containerName: String(b.containerName || ''),
           hostname: b.hostname ? String(b.hostname) : undefined,
-          templateSlug: b.templateSlug ? String(b.templateSlug) : 'ubuntu:24.04',
+          templateSlug: b.templateSlug ? String(b.templateSlug) : 'ubuntu-24.04',
           cpuCores: Number(b.cpuCores || 1),
           cpuShares: Number(b.cpuShares || 1024),
           cpuLimitPercent: Number(b.cpuLimitPercent || 100),
@@ -577,7 +582,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId, true);
       const out = await ctx.lxcAdapter.reinstallLxcInstance(
         refId,
-        String(req.body?.templateSlug || 'ubuntu:24.04'),
+        String(req.body?.templateSlug || 'ubuntu-24.04'),
         req.body?.rootPassword ? String(req.body.rootPassword) : undefined
       );
       res.json(out);
@@ -1129,6 +1134,25 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       }
     }
   );
+
+  router.post('/backups/:id/restore', async (req: Request, res: Response) => {
+    try {
+      const backupId = pInt(req.params.id);
+      const bkp = await ctx.backupManager.getBackupRecord(backupId);
+      if (!bkp) {
+        return res.status(404).json({ error: 'Backup record not found.' });
+      }
+      await ctx.instanceManager.getAuthorizedInstance(
+        req.principal!,
+        bkp.instance_type as VirtualizationEngine,
+        Number(bkp.instance_ref_id)
+      );
+      const out = await ctx.backupManager.restoreBackup(backupId, req.principal!.userId);
+      return res.json({ success: true, ...out });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
 
   router.delete(
     '/backups/:id',

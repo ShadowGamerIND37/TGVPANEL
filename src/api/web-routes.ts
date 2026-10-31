@@ -451,11 +451,25 @@ export function createUnifiedWebRouter(
         lxcId
       );
       const templates = await ctx.storageManager.listLxcTemplates(false);
+      const rawRow = await ctx.lxcAdapter.getRawLxcRow(lxcId);
+      const lxcConfig = rawRow
+        ? {
+            cpuLimitPercent: Number(rawRow.cpu_limit_pct || 100),
+            cpuShares: Number(rawRow.cpu_shares || 1024),
+            cpuPinning: rawRow.cpu_pinning || '',
+            bridge: rawRow.bridge || 'lxcbr0',
+            ipAddress: rawRow.ip_address || '',
+            gateway: rawRow.gateway || '',
+            nesting: Boolean(rawRow.nesting),
+            autostart: Boolean(rawRow.autostart),
+          }
+        : null;
       return res.render('users/lxc-detail', {
         title: `${instance.name} (LXC VPS) - HKVM`,
         currentPage: 'instances',
         user: res.locals.user || (req as any).session?.user,
         instance,
+        lxcConfig,
         templates,
         isStaff: ctx.instanceManager.isStaff(req.principal!),
       });

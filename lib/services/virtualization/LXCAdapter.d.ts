@@ -51,6 +51,7 @@ export declare class LXCAdapter implements VirtualizationAdapter {
     }): Promise<UnifiedInstanceRecord[]>;
     getInstance(refId: number): Promise<UnifiedInstanceRecord | undefined>;
     getRawLxcRow(refId: number): Promise<any | undefined>;
+    private resolveCatalogTemplate;
     createLxcInstance(input: CreateLxcInstanceInput): Promise<{
         instance: UnifiedInstanceRecord;
         generatedRootPassword: string;
