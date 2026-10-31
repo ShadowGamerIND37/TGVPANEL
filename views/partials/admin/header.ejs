@@ -28,7 +28,7 @@
         </svg>
       </span>
       <span class="breadcrumb-separator"></span>
-      <span class="breadcrumb-item">HKVM</span>
+      <span class="breadcrumb-item"><%= (typeof siteName !== 'undefined' && siteName) ? siteName : 'TGVPANEL' %></span>
       <% if (_pageName && _pageName !== 'dashboard') { %>
       <span class="breadcrumb-separator"></span>
       <span class="breadcrumb-item active"><%= _pageTitle.split(' - ')[0] %></span>

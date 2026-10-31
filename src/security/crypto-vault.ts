@@ -298,7 +298,7 @@ export function verifyTotpCode(secretBase32: string, code: string, windowSteps =
 export async function generateTotpQrDataUrl(
   username: string,
   secretBase32: string,
-  issuer = 'HKVM'
+  issuer = 'TGVPANEL'
 ): Promise<{ otpauthUrl: string; qrDataUrl: string }> {
   const label = encodeURIComponent(`${issuer}:${username}`);
   const otpauthUrl = `otpauth://totp/${label}?secret=${encodeURIComponent(

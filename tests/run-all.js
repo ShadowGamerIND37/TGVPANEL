@@ -139,7 +139,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
 (async () => {
   console.log('\n====================================================================');
-  console.log('  HKVM V3 — Unified Virtualization Panel Acceptance Test Suite');
+  console.log('  TGVPANEL — Unified Virtualization Panel Acceptance Test Suite');
   console.log('====================================================================\n');
 
   let agentServer = null;
@@ -150,7 +150,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
-    await runStep('T01: Transactional SQLite backup & migrations v001..v007 preserve legacy HKVM data & rebrand default email', async () => {
+    await runStep('T01: Transactional SQLite backup & migrations v001..v008 preserve legacy data & rebrand visible HKVM -> TGVPANEL', async () => {
       const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
       const v2Raw = new sqlite3.Database(v2ScratchPath);
       const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
@@ -162,12 +162,14 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         CREATE TABLE vm_snapshots (snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT, vm_id INTEGER, snapshot_name TEXT, size_gb REAL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE os_templates (template_id INTEGER PRIMARY KEY AUTOINCREMENT, template_key TEXT UNIQUE, template_name TEXT, password TEXT);
         CREATE TABLE settings (setting_key TEXT PRIMARY KEY, setting_value TEXT, updated_at DATETIME);
+        INSERT INTO settings (setting_key, setting_value, updated_at) VALUES ('site_name', 'HKVM', datetime('now'));
+        INSERT INTO settings (setting_key, setting_value, updated_at) VALUES ('panel_title', 'HKVM Panel V2.0', datetime('now'));
         CREATE TABLE discord_settings (id INTEGER PRIMARY KEY, enabled INTEGER DEFAULT 0);
         CREATE TABLE user_discord_accounts (id INTEGER PRIMARY KEY, user_id INTEGER, discord_id TEXT);
       `);
 
       const migRes = await runMigrations(v2Db);
-      assert.ok(migRes.applied.length >= 7, 'Expected v001..v007 migrations to apply');
+      assert.ok(migRes.applied.length >= 8, 'Expected v001..v008 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
 
       const lxcCols = await v2Db.all(`PRAGMA table_info(lxc_instances)`);
@@ -176,6 +178,12 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const adminUser = await v2Db.get(`SELECT * FROM users WHERE username = 'admin'`);
       assert.ok(adminUser, 'Legacy admin user preserved');
       assert.strictEqual(adminUser.email, 'admin@shadowgamerind.local', 'Expected default email rebranded to ShadowGamerIND');
+      const siteNameSetting = await v2Db.get(`SELECT setting_value FROM settings WHERE setting_key = 'site_name'`);
+      assert.strictEqual(siteNameSetting.setting_value, 'TGVPANEL', 'Expected legacy site_name HKVM migrated to TGVPANEL');
+      const panelTitleSetting = await v2Db.get(`SELECT setting_value FROM settings WHERE setting_key = 'panel_title'`);
+      assert.strictEqual(panelTitleSetting.setting_value, 'TGVPANEL V3.0', 'Expected legacy panel_title migrated to TGVPANEL V3.0');
+      const maintMsgSetting = await v2Db.get(`SELECT setting_value FROM settings WHERE setting_key = 'maintenance_message'`);
+      assert.ok(maintMsgSetting.setting_value.startsWith('TGVPANEL'), 'Expected maintenance_message branded as TGVPANEL');
       const templates = await v2Db.all(`SELECT * FROM lxc_templates`);
       assert.ok(templates.length >= 15, 'Seeded LXC OS template catalog');
       await v2Db.close();
@@ -308,6 +316,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const setup = await userClient.request('POST', '/api/v1/auth/2fa/setup', {});
       assert.strictEqual(setup.status, 200, `2FA setup failed: ${setup.text}`);
       assert.ok(setup.json.qrDataUrl.startsWith('data:image/png;base64,'));
+      assert.ok(setup.json.otpauthUrl.includes('issuer=TGVPANEL'), 'Expected TOTP issuer=TGVPANEL');
       const secret = setup.json.secret;
       const validCode = computeTotpCode(secret);
       assert.strictEqual(verifyTotpCode(secret, validCode), true);
@@ -657,13 +666,26 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       for (const p of adminPages) {
         const r = await adminClient.request('GET', p);
         assert.strictEqual(r.status, 200, `Expected 200 OK on admin route ${p}, got ${r.status}`);
+        assert.ok(r.text.includes('TGVPANEL'), `Expected TGVPANEL branding on admin route ${p}`);
+        assert.ok(!/HKVM\s*PANEL/i.test(r.text), `Unexpected visible HKVM Panel branding on admin route ${p}`);
       }
+
+      const healthRes = await adminClient.request('GET', '/api/v1/health');
+      assert.strictEqual(healthRes.status, 200);
+      assert.strictEqual(healthRes.json.panel, 'TGVPANEL', 'Expected /api/v1/health panel === TGVPANEL');
+
+      const unauthLogin = await new SessionClient(baseUrl).request('GET', '/login');
+      assert.strictEqual(unauthLogin.status, 200);
+      assert.ok(unauthLogin.text.includes('TGVPANEL'), 'Expected TGVPANEL branding on /login');
+      assert.ok(!/HKVM\s*PANEL/i.test(unauthLogin.text), 'Unexpected HKVM Panel branding on /login');
 
       const aliceLxc = await ctx.db.get(`SELECT id FROM lxc_instances WHERE container_name = 'ct-alice-01'`);
       const userPages = ['/dashboard', '/instances', '/lxc', `/lxc/${aliceLxc.id}`, `/lxc/${aliceLxc.id}/console`, '/ports', '/security', '/profile'];
       for (const p of userPages) {
         const r = await adminClient.request('GET', p);
         assert.strictEqual(r.status, 200, `Expected 200 OK on user route ${p}, got ${r.status}`);
+        assert.ok(r.text.includes('TGVPANEL'), `Expected TGVPANEL branding on user route ${p}`);
+        assert.ok(!/HKVM\s*PANEL/i.test(r.text), `Unexpected visible HKVM Panel branding on user route ${p}`);
       }
 
       await new Promise((resolve, reject) => {

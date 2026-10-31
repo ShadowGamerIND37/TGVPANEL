@@ -961,7 +961,7 @@ export const MIGRATIONS: MigrationDefinition[] = [
       const defaultV3Settings: Record<string, string> = {
         panel_version: 'V3.0',
         maintenance_mode: '0',
-        maintenance_message: 'HKVM is currently undergoing scheduled maintenance.',
+        maintenance_message: 'TGVPANEL is currently undergoing scheduled maintenance.',
         cpu_threshold: '90',
         ram_threshold: '90',
         auto_suspend_high_usage: '0',
@@ -1162,6 +1162,30 @@ export const MIGRATIONS: MigrationDefinition[] = [
         `UPDATE users
          SET email = 'admin@shadowgamerind.local'
          WHERE LOWER(email) IN ('admin@hopingboyz.local', 'admin@hopingboy.local')`
+      );
+    },
+  },
+  {
+    version: 8,
+    name: 'v008_rebrand_visible_hkvm_to_tgvpanel',
+    up: async (db) => {
+      await db.run(
+        `UPDATE settings
+         SET setting_value = 'TGVPANEL', updated_at = datetime('now')
+         WHERE setting_key = 'site_name'
+           AND LOWER(TRIM(setting_value)) IN ('hkvm', 'hkvm panel', 'hkvm v3', 'my custom panel')`
+      );
+      await db.run(
+        `UPDATE settings
+         SET setting_value = 'TGVPANEL V3.0', updated_at = datetime('now')
+         WHERE setting_key = 'panel_title'
+           AND LOWER(TRIM(setting_value)) LIKE 'hkvm%'`
+      );
+      await db.run(
+        `UPDATE settings
+         SET setting_value = 'TGVPANEL is currently undergoing scheduled maintenance.', updated_at = datetime('now')
+         WHERE setting_key = 'maintenance_message'
+           AND setting_value = 'HKVM is currently undergoing scheduled maintenance.'`
       );
     },
   },

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title><%= title || 'HKVM Unified Admin' %></title>
+  <title><%= title || 'TGVPANEL Unified Admin' %></title>
   <link rel="icon" href="<%= siteLogo %>" type="image/png">
   <link rel="stylesheet" href="/css/admin.css">
   <% if (section === 'node-console') { %>
@@ -1056,7 +1056,7 @@
             <select id="spType"><option value="dir">Directory</option><option value="qcow2">QCOW2 Images</option><option value="raw">RAW Images</option><option value="lvm-thin">LVM Thin</option><option value="zfs">ZFS Dataset</option><option value="btrfs">Btrfs Subvolume</option></select>
           </div>
           <div class="v3-field"><label>Engine Scope</label><select id="spScope"><option value="both">KVM + LXC</option><option value="kvm">KVM Only</option><option value="lxc">LXC Only</option></select></div>
-          <div class="v3-field"><label>Host Path</label><input id="spPath" required placeholder="/var/lib/hkvm/nvme"></div>
+          <div class="v3-field"><label>Host Path</label><input id="spPath" required placeholder="/var/lib/tgvpanel/nvme"></div>
           <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Pool</button></div>
         </form>
       </div>
@@ -1309,7 +1309,7 @@
         <h3>Outbound HMAC-SHA256 Webhooks</h3>
         <form onsubmit="submitWebhook(event)" class="v3-form-grid">
           <div class="v3-field"><label>Name</label><input id="whName" required placeholder="Ops Pager"></div>
-          <div class="v3-field" style="grid-column:span 2;"><label>Endpoint URL</label><input id="whUrl" required placeholder="https://hooks.example.com/hkvm"></div>
+          <div class="v3-field" style="grid-column:span 2;"><label>Endpoint URL</label><input id="whUrl" required placeholder="https://hooks.example.com/tgvpanel"></div>
           <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Register Webhook</button></div>
         </form>
         <div class="v3-table-wrap" style="margin-top:14px;">
@@ -1569,7 +1569,7 @@
             </div>
             <div class="nc-env-snippet">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                <span style="font-size:11px;color:#94a3b8;font-weight:600;">Opt-in via server <code>.env</code> &amp; restart HKVM:</span>
+                <span style="font-size:11px;color:#94a3b8;font-weight:600;">Opt-in via server <code>.env</code> &amp; restart TGVPANEL:</span>
                 <button type="button" class="nc-tool-btn primary" style="padding:3px 9px;font-size:11px;" onclick="copyNodeShellEnvFlag()">Copy .env Flag</button>
               </div>
               <div style="color:#64748b;margin-bottom:3px;"># Enable audited super-admin host PTY shell</div>
@@ -1591,10 +1591,10 @@
 
       <!-- SECTION: LICENSE -->
       <% if (section === 'license') { %>
-      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">HKVM V3 Edition &amp; License</h2></div>
+      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">TGVPANEL V3 Edition &amp; License</h2></div>
       <div class="v3-card">
         <h3>Unified Free &amp; Open Control Plane</h3>
-        <p style="font-size:14px;color:var(--text-secondary);">This HKVM V3 installation is permanently unlocked with multi-node QEMU/KVM + Native LXC support, offline verified migrations, RBAC, and REST API v1.</p>
+        <p style="font-size:14px;color:var(--text-secondary);">This TGVPANEL V3 installation is permanently unlocked with multi-node QEMU/KVM + Native LXC support, offline verified migrations, RBAC, and REST API v1.</p>
         <div class="v3-code"><%= JSON.stringify(licenseInfo, null, 2) %></div>
       </div>
       <% } %>
@@ -2968,7 +2968,7 @@ function downloadDiagOutput() {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `hkvm-node-diag-${_ncActivePreset || 'report'}-${Date.now()}.log`;
+  a.download = `tgvpanel-node-diag-${_ncActivePreset || 'report'}-${Date.now()}.log`;
   document.body.appendChild(a);
   a.click();
   a.remove();

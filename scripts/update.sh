@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# HKVM V3 — Safe Zero-Data-Loss Updater
+# TGVPANEL — Safe Zero-Data-Loss Updater
 # Automatically backs up data/hkvm.db via SQLite VACUUM INTO before migrating.
 # ==============================================================================
 set -euo pipefail
@@ -8,7 +8,7 @@ set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$APP_DIR"
 
-log() { printf "\033[1;34m[HKVM-UPDATE]\033[0m %s\n" "$*"; }
+log() { printf "\033[1;34m[TGVPANEL-UPDATE]\033[0m %s\n" "$*"; }
 ok()  { printf "\033[1;32m[  OK  ]\033[0m %s\n" "$*"; }
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -49,4 +49,4 @@ if [[ $EUID -eq 0 ]] && command -v systemctl >/dev/null 2>&1; then
   systemctl is-active --quiet hkvm-node-agent.service && systemctl restart hkvm-node-agent.service && ok "Restarted hkvm-node-agent.service"
 fi
 
-ok "HKVM V3 update finished cleanly."
+ok "TGVPANEL update finished cleanly."

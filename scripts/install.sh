@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# HKVM V3 — Unified Virtualization Control Panel Installer (QEMU/KVM + LXC)
+# TGVPANEL — Unified Virtualization Control Panel Installer (QEMU/KVM + LXC)
 # Supports: Ubuntu 22.04/24.04, Debian 12/13, AlmaLinux/Rocky 9
 # Modes:
 #   1) Unified Panel + KVM + LXC (Single-Server / Master + Local Compute)
@@ -16,7 +16,7 @@ PANEL_PORT="${PORT:-8080}"
 AGENT_PORT="${AGENT_PORT:-8443}"
 NONINTERACTIVE="${HKVM_NONINTERACTIVE:-0}"
 
-log()  { printf "\033[1;34m[HKVM-INSTALL]\033[0m %s\n" "$*"; }
+log()  { printf "\033[1;34m[TGVPANEL-INSTALL]\033[0m %s\n" "$*"; }
 ok()   { printf "\033[1;32m[  OK  ]\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m[ WARN ]\033[0m %s\n" "$*"; }
 err()  { printf "\033[1;31m[ERROR ]\033[0m %s\n" "$*" >&2; }
@@ -100,7 +100,7 @@ ensure_node_and_deps() {
   [[ -f node_modules/@xterm/xterm/css/xterm.css ]] && cp -f node_modules/@xterm/xterm/css/xterm.css public/vendor/xterm/xterm.css
   [[ -f node_modules/@xterm/addon-fit/lib/addon-fit.js ]] && cp -f node_modules/@xterm/addon-fit/lib/addon-fit.js public/vendor/xterm/addon-fit.js
 
-  log "Compiling HKVM V3 TypeScript services..."
+  log "Compiling TGVPANEL TypeScript services..."
   npm run build
   ok "TypeScript build succeeded."
 }
@@ -134,7 +134,7 @@ write_systemd_units() {
   if [[ "$role" != "agent" ]]; then
     cat > "$UNIT_DIR/hkvm-panel.service" <<EOF
 [Unit]
-Description=HKVM V3 Unified Virtualization Control Panel
+Description=TGVPANEL Unified Virtualization Control Panel
 After=network.target
 
 [Service]
@@ -155,7 +155,7 @@ EOF
   if [[ "$role" == "agent" ]]; then
     cat > "$UNIT_DIR/hkvm-node-agent.service" <<EOF
 [Unit]
-Description=HKVM V3 Remote Node Agent
+Description=TGVPANEL Remote Node Agent
 After=network.target
 
 [Service]
@@ -184,7 +184,7 @@ main() {
   detect_capabilities
 
   if [[ "$MODE" == "auto" && "$NONINTERACTIVE" != "1" && -t 0 ]]; then
-    echo "Select HKVM V3 Installation Mode:"
+    echo "Select TGVPANEL Installation Mode:"
     echo "  1) Unified Panel + KVM + LXC (Recommended)"
     echo "  2) Unified Panel + KVM Only"
     echo "  3) Unified Panel + LXC Only"
@@ -208,7 +208,7 @@ main() {
   fi
   write_systemd_units "$MODE"
   detect_capabilities
-  ok "HKVM V3 installation complete! Start manually with: npm start"
+  ok "TGVPANEL installation complete! Start manually with: npm start"
 }
 
 main "$@"

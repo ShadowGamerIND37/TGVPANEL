@@ -1240,7 +1240,7 @@ export class LxcContainerManager {
       const resolvPath = path.join(etcDir, 'resolv.conf');
       privilegedFs.unlinkSync(resolvPath);
       const resolvBody =
-        ['# Managed by HKVM Panel', ...dnsList.map((ns) => `nameserver ${ns}`), 'options timeout:2 attempts:2', ''].join(
+        ['# Managed by TGVPANEL', ...dnsList.map((ns) => `nameserver ${ns}`), 'options timeout:2 attempts:2', ''].join(
           '\n'
         );
       privilegedFs.writeFileSync(resolvPath, resolvBody, 0o644);
@@ -1303,7 +1303,7 @@ export class LxcContainerManager {
             ? `      routes:\n        - to: default\n          via: ${gateway}\n`
             : '';
           const yaml = [
-            '# Managed by HKVM Panel',
+            '# Managed by TGVPANEL',
             'network:',
             '  version: 2',
             '  ethernets:',
@@ -1322,7 +1322,7 @@ export class LxcContainerManager {
           privilegedFs.writeFileSync(netplanFile, yaml, 0o600);
         } else if (opts.useDhcp) {
           const yaml = [
-            '# Managed by HKVM Panel',
+            '# Managed by TGVPANEL',
             'network:',
             '  version: 2',
             '  ethernets:',
@@ -1334,7 +1334,10 @@ export class LxcContainerManager {
           ].join('\n');
           if (privilegedFs.existsSync(netplanFile)) {
             const existingYaml = privilegedFs.readTextSync(netplanFile);
-            if (existingYaml.includes('Managed by HKVM Panel')) {
+            if (
+              existingYaml.includes('Managed by TGVPANEL') ||
+              existingYaml.includes('Managed by HKVM Panel')
+            ) {
               privilegedFs.writeFileSync(netplanFile, yaml, 0o600);
             }
           }
@@ -1353,7 +1356,7 @@ export class LxcContainerManager {
         if (ipv4Cidr) {
           const cidrFormatted = ipv4Cidr.includes('/') ? ipv4Cidr : `${ipv4Cidr}/24`;
           const lines = [
-            '# Managed by HKVM Panel',
+            '# Managed by TGVPANEL',
             '[Match]',
             'Name=eth0',
             '',
@@ -2748,7 +2751,7 @@ export class LxcContainerManager {
 
     if (dnsServers.length > 0 && (force || this.isSystemLxcStore())) {
       const resolvBody = [
-        '# Managed by HKVM Panel',
+        '# Managed by TGVPANEL',
         ...dnsServers.map((ns) => `nameserver ${ns}`),
         'options timeout:2 attempts:2',
         '',

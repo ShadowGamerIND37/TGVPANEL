@@ -113,7 +113,7 @@ export class NodeManager {
 
     const fallback = await this.db.get<NodeRecord>(`SELECT * FROM nodes ORDER BY is_local DESC, id ASC LIMIT 1`);
     if (!fallback) {
-      throw new Error('No nodes registered in HKVM database.');
+      throw new Error('No nodes registered in TGVPANEL database.');
     }
     return fallback;
   }

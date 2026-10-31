@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
   <meta name="theme-color" content="#0a0a0f">
-  <title><%= title || 'Settings - HKVM Panel' %></title>
+  <title><%= title || 'Settings - TGVPANEL' %></title>
   <link rel="icon" href="<%= siteLogo %>" type="image/png">
   <!-- Font Awesome removed – replaced with inline SVGs (no external icon dependency) -->
   <link rel="stylesheet" href="/css/admin.css">
@@ -74,7 +74,7 @@
           </h1>
           <p class="page-subtitle" style="display: flex; align-items: center; gap: 8px;">
             <span class="dynamic-pulse" style="background: var(--accent-green); width: 8px; height: 8px; border-radius: 50%;"></span>
-            Configure HKVM Panel preferences · live sync
+            Configure TGVPANEL preferences · live sync
           </p>
         </div>
         <div class="page-actions">
@@ -261,7 +261,7 @@
                 <div class="settings-row-desc">The main title shown throughout the application</div>
               </div>
               <div class="settings-row-control">
-                <input type="text" class="form-control" id="setting_site_name" data-key="site_name" placeholder="HKVM Panel">
+                <input type="text" class="form-control" id="setting_site_name" data-key="site_name" placeholder="TGVPANEL">
               </div>
             </div>
             <div class="settings-row">
@@ -294,7 +294,7 @@
           <div class="settings-section-body">
             <div class="settings-row">
               <div class="settings-row-info"><div class="settings-row-label">Panel Title</div><div class="settings-row-desc">The name shown in browser title</div></div>
-              <div class="settings-row-control"><input type="text" class="form-control" id="setting_panel_title" data-key="panel_title" placeholder="HKVM Panel V1.0"></div>
+              <div class="settings-row-control"><input type="text" class="form-control" id="setting_panel_title" data-key="panel_title" placeholder="TGVPANEL V3.0"></div>
             </div>
             <div class="settings-row">
               <div class="settings-row-info"><div class="settings-row-label">Panel Description</div><div class="settings-row-desc">Login page subtitle</div></div>
@@ -351,7 +351,7 @@
               <div style="font-size: 36px; margin-bottom: 10px; display: none; color: var(--accent-primary);" id="previewIconFallback">
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
               </div>
-              <div style="font-size: 16px; font-weight: 700;" id="previewTitle">HKVM Panel</div>
+              <div style="font-size: 16px; font-weight: 700;" id="previewTitle">TGVPANEL</div>
               <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;" id="previewDesc">Virtual Machine Management System</div>
             </div>
           </div>
@@ -414,7 +414,7 @@
               <div>
                 <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); margin-bottom: 12px;">Panel Info</div>
                 <div style="display: grid; gap: 8px;">
-                  <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-subtle);"><span style="font-size: 12px; color: var(--text-muted);">Version</span><span style="font-size: 12px; color: var(--accent-primary); font-weight: 600;">HKVM V1.0.0</span></div>
+                  <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-subtle);"><span style="font-size: 12px; color: var(--text-muted);">Version</span><span style="font-size: 12px; color: var(--accent-primary); font-weight: 600;">TGVPANEL <%= panelVersion %></span></div>
                   <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-subtle);"><span style="font-size: 12px; color: var(--text-muted);">Framework</span><span style="font-size: 12px;">Express.js + EJS</span></div>
                   <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-subtle);"><span style="font-size: 12px; color: var(--text-muted);">Database</span><span style="font-size: 12px;">SQLite3</span></div>
                   <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-subtle);"><span style="font-size: 12px; color: var(--text-muted);">Hypervisor</span><span style="font-size: 12px;">QEMU/KVM</span></div>
@@ -452,7 +452,7 @@
             <div style="font-size: 72px; margin-bottom: 20px; color: var(--accent-primary); animation: float 3s ease-in-out infinite;">
               <svg width="70" height="70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
             </div>
-            <div style="font-size: 28px; font-weight: 800;">HKVM Panel</div>
+            <div style="font-size: 28px; font-weight: 800;">TGVPANEL</div>
             <div style="font-size: 14px; color: var(--text-muted);">Professional VM Management Platform</div>
             <div style="font-size: 13px; color: var(--accent-primary); font-weight: 600; margin-bottom: 24px;"><%= panelVersion %></div>
             <div style="max-width: 500px; margin: 0 auto 28px; font-size: 13px; color: var(--text-muted); line-height: 1.7;">QEMU/KVM platform with cloud-init, monitoring and multi-user access.</div>
@@ -534,7 +534,7 @@
   }
 
   window.updateBrandPreview = function() {
-    const siteName = document.getElementById('setting_site_name')?.value || 'HKVM Panel';
+    const siteName = document.getElementById('setting_site_name')?.value || 'TGVPANEL';
     const siteDesc = document.getElementById('setting_site_description')?.value || 'Virtual Machine Management System';
     const siteIconUrl = getIconUrlInput()?.value || '';
     

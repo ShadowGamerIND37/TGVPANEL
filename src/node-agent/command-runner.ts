@@ -411,7 +411,7 @@ export async function runAllowlistedCommand(
           `${stderrBuf}\n${stdoutBuf}`
         )
       ) {
-        finalStderr = `${stderrBuf.trim()}\n[HKVM Privilege Hint] Process is running as non-root user "${currentUsername()}" without passwordless sudo. Run HKVM as root ("sudo npm start") or configure NOPASSWD sudo for LXC/network binaries.`.trim();
+        finalStderr = `${stderrBuf.trim()}\n[TGVPANEL Privilege Hint] Process is running as non-root user "${currentUsername()}" without passwordless sudo. Run TGVPANEL as root ("sudo npm start") or configure NOPASSWD sudo for LXC/network binaries.`.trim();
       }
       resolve({
         exitCode: finalCode,

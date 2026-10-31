@@ -1,4 +1,4 @@
-# HKVM V3 Unified Migration & Implementation Checklist
+# TGVPANEL Unified Migration & Implementation Checklist
 
 Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Blocked`
 
@@ -10,7 +10,7 @@ Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Block
 |---|---|---|---|
 | **Phase 1** | Audit both codebases & host capabilities | `Tested` | Documented in `docs/PHASE1_SOURCE_AUDIT.md`; 7 HKVM V2 bugs identified and patched in `app.js`. |
 | **Phase 2** | Design unified architecture & schema | `Tested` | Unified adapter pattern (`KVMAdapter` + `LXCAdapter` + `VirtualizationManager` + `InstanceManager`) & PostgreSQL 15+ guide (`docs/POSTGRESQL_MIGRATION.md`). |
-| **Phase 3** | Back up `data/hkvm.db` & build migrations | `Tested` | Pre-V3 backup at `data/backups/hkvm_v2_initial.db`; transactional migrations `v001`–`v005` + `importHvmDatabase` tested in **T01** & **T03**. |
+| **Phase 3** | Back up `data/hkvm.db` & build migrations | `Tested` | Pre-V3 backup at `data/backups/hkvm_v2_initial.db`; transactional migrations `v001`–`v008` + `importHvmDatabase` tested in **T01** & **T03**. |
 | **Phase 4** | Build Node.js + TypeScript Node Agent | `Tested` | `src/node-agent/*.ts` (`agent.ts`, `authentication.ts`, `command-runner.ts`, `container-manager.ts`, `container-console.ts`, `shell-manager.ts`, `snapshot-manager.ts`, `transfer-manager.ts`); HMAC + replay defense (`409`) tested in **T07** & **T09**. |
 | **Phase 5** | Build Virtualization Manager (`KVMAdapter` + `LXCAdapter`) | `Tested` | Capability profiles, lifecycle hooks, Linux `/proc/<pid>` telemetry, sharing, expiration, and honest host binary checks tested in **T06** & **T08**. |
 | **Phase 6** | Integrate nodes, LXC templates, networking, ports, firewall, backups, migrations & monitoring | `Tested` | `NodeManager`, `StorageManager`, `NetworkManager`, `BackupSnapshotManager`, `MigrationManager`, `MonitoringService` tested in **T07**, **T10**, **T11**. |
@@ -25,7 +25,7 @@ Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Block
 
 | Capability Area | Source | Target Module(s) | Status | Notes / Host Constraints |
 |---|---|---|---|---|
-| Express + EJS Foundation & Branding (`HKVM`) | HKVM V2 | `app.js`, `views/**`, `public/**` | `Tested` | Preserved 100%; upgraded to V3.0 without React rewrite or Flask sidecar. |
+| Express + EJS Foundation & Branding (`TGVPANEL`) | HKVM V2 | `app.js`, `views/**`, `public/**` | `Tested` | Preserved 100%; rebranded visible UI/titles/settings to `TGVPANEL` without React rewrite or Flask sidecar (**T01**, **T12**). |
 | Users, Roles (`admin`/`subadmin`/`operator`/`user`/`readonly`), Discord OAuth | HKVM V2 + HVM V9 | `app.js`, `src/security/middleware.ts` | `Tested` | Preserved Discord OAuth; added granular RBAC & audited user impersonation. |
 | Legacy HVM User/VPS/Node/Port Importer & Werkzeug Rehash | HVM V9 | `src/db/hvm-importer.ts`, `app.js` | `Tested` | Verifies `pbkdf2:sha256` & `scrypt`, auto-upgrades to `bcrypt` on login (**T03**). |
 | TOTP Two-Factor Authentication (RFC 6238 + QR) | HVM V9 | `src/security/crypto-vault.ts`, `views/users/login-2fa.ejs` | `Tested` | End-to-end setup, QR generation, and 2-step login tested (**T05**). |

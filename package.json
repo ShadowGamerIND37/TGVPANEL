@@ -1,7 +1,7 @@
 {
-  "name": "hkvm",
+  "name": "tgvpanel",
   "version": "3.0.0",
-  "description": "HKVM V3 — Unified QEMU/KVM & LXC VPS Virtualization Control Panel",
+  "description": "TGVPANEL — Unified QEMU/KVM & LXC VPS Virtualization Control Panel",
   "main": "app.js",
   "scripts": {
     "build": "tsc",
@@ -13,7 +13,7 @@
     "test": "node tests/run-all.js"
   },
   "keywords": [
-    "hkvm",
+    "tgvpanel",
     "vm",
     "qemu",
     "kvm",
