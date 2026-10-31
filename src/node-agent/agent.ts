@@ -2,6 +2,7 @@ import fs from 'fs';
 import http from 'http';
 import https from 'https';
 import path from 'path';
+import dotenv from 'dotenv';
 import express from 'express';
 import WebSocket, { WebSocketServer } from 'ws';
 import { NodeAgentAuthenticator } from './authentication';
@@ -70,39 +71,65 @@ export interface StandaloneAgentOptions {
 }
 
 export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
+  if (!opts.apiKey && !process.env.TGVPANEL_NODE_API_KEY && !process.env.HKVM_NODE_API_KEY) {
+    dotenv.config();
+  }
   const host = opts.host || process.env.TGVPANEL_AGENT_HOST || process.env.HKVM_AGENT_HOST || '0.0.0.0';
-  const port = Number(opts.port || process.env.TGVPANEL_AGENT_PORT || process.env.HKVM_AGENT_PORT || 5055);
+  const port = Number(
+    opts.port ||
+      process.env.TGVPANEL_AGENT_PORT ||
+      process.env.AGENT_PORT ||
+      process.env.HKVM_AGENT_PORT ||
+      5055
+  );
   const nodeId = opts.nodeId || process.env.TGVPANEL_NODE_ID || process.env.HKVM_NODE_ID || 'remote-node';
   const rawApiKey = opts.apiKey || process.env.TGVPANEL_NODE_API_KEY || process.env.HKVM_NODE_API_KEY || '';
   const hmacSecret =
     opts.hmacSecret || process.env.TGVPANEL_NODE_HMAC_SECRET || process.env.HKVM_NODE_HMAC_SECRET || '';
 
-  if (!rawApiKey || !hmacSecret) {
+  const credsFile = path.join(
+    process.env.TGVPANEL_DATA_DIR ||
+      process.env.HKVM_DATA_DIR ||
+      path.resolve(process.cwd(), 'data'),
+    'node-agent-credentials.json'
+  );
+  const hasPersistedCreds = !opts.apiKey && fs.existsSync(credsFile);
+
+  if ((!rawApiKey || !hmacSecret) && !hasPersistedCreds) {
     throw new Error(
       'TGVPANEL Node Agent requires TGVPANEL_NODE_API_KEY and TGVPANEL_NODE_HMAC_SECRET to start securely.'
     );
   }
 
+  const allowedIpsRaw =
+    process.env.TGVPANEL_ALLOWED_CONTROLLER_IPS ||
+    process.env.HKVM_ALLOWED_CONTROLLER_IPS ||
+    '';
+  const allowedControllerIps = allowedIpsRaw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   const runtime = new LocalNodeRuntime({
-    lxcBaseDir: opts.lxcBaseDir,
-    backupDir: opts.backupDir,
+    lxcBaseDir: opts.lxcBaseDir || process.env.TGVPANEL_LXC_DIR || process.env.HKVM_LXC_PATH,
+    backupDir: opts.backupDir || process.env.TGVPANEL_BACKUP_DIR,
+    interactiveHostShell:
+      process.env.TGVPANEL_ENABLE_NODE_SHELL === 'true' ||
+      process.env.HKVM_ENABLE_NODE_SHELL === 'true',
   });
 
   const authenticator = new NodeAgentAuthenticator({
     nodeId,
-    apiKeyHash: hashApiKey(rawApiKey),
+    apiKeyHash: rawApiKey ? hashApiKey(rawApiKey) : '',
     hmacSecret,
     requireMtls: Boolean(
       opts.requireMtls ||
         process.env.TGVPANEL_NODE_MTLS === 'true' ||
         process.env.HKVM_NODE_MTLS === 'true'
     ),
-    credentialsFilePath: path.join(
-      process.env.TGVPANEL_DATA_DIR ||
-        process.env.HKVM_DATA_DIR ||
-        path.resolve(process.cwd(), 'data'),
-      'node-agent-credentials.json'
-    ),
+    allowedControllerIps: allowedControllerIps.length > 0 ? allowedControllerIps : undefined,
+    credentialsFilePath: credsFile,
+    loadPersistedCredentials: !opts.apiKey,
   });
 
   const app = express();

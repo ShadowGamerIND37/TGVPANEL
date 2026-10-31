@@ -12,10 +12,11 @@ export interface AgentCredentialConfig {
   requireMtls: boolean;
   allowedControllerIps?: string[];
   credentialsFilePath?: string;
+  loadPersistedCredentials?: boolean;
 }
 
 /**
- * Replay-protection nonce cache + HMAC/API-Key/mTLS authenticator for the HKVM Node Agent.
+ * Replay-protection nonce cache + HMAC/API-Key/mTLS authenticator for the TGVPANEL Node Agent.
  */
 export class NodeAgentAuthenticator {
   private config: AgentCredentialConfig;
@@ -24,6 +25,21 @@ export class NodeAgentAuthenticator {
 
   constructor(config: AgentCredentialConfig) {
     this.config = { ...config };
+    if (
+      config.loadPersistedCredentials &&
+      config.credentialsFilePath &&
+      fs.existsSync(config.credentialsFilePath)
+    ) {
+      try {
+        const persisted = JSON.parse(fs.readFileSync(config.credentialsFilePath, 'utf8'));
+        if (persisted?.apiKeyHash && persisted?.hmacSecret) {
+          this.config.apiKeyHash = String(persisted.apiKeyHash);
+          this.config.hmacSecret = String(persisted.hmacSecret);
+        }
+      } catch {
+        // fall back to env bootstrap credentials
+      }
+    }
     this.cleanupTimer = setInterval(() => {
       const cutoff = Date.now() - 10 * 60_000;
       for (const [nonce, ts] of this.seenNonces.entries()) {

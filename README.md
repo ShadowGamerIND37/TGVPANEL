@@ -11,6 +11,7 @@ Multi-node · Secure by default · Pure Node.js + TypeScript
 ![Virtualization](https://img.shields.io/badge/QEMU%2FKVM-%2B%20LXC-orange)
 
 [Quick Start](#quick-start) ·
+[Multi-Node Setup Guide](docs/MULTINODE_SETUP.md) ·
 [Features](#features) ·
 [Architecture](#architecture) ·
 [Node Agent](#remote-node-agent) ·
@@ -87,7 +88,7 @@ The installer will:
 2. Ask you to choose a mode: **Unified (KVM + LXC)**, **KVM only**, **LXC only**, or **Standalone remote node agent**.
 3. Build the TypeScript sources.
 4. Create `.tgvpanel-secret` (`0600`).
-5. Back up `data/tgvpanel.db`, then run migrations (`v001`..`v008`).
+5. Back up `data/tgvpanel.db`, then run migrations (`v001`..`v009`).
 6. Write systemd service units (`tgvpanel.service` / `tgvpanel-node-agent.service`).
 
 To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB backup included).
@@ -97,7 +98,7 @@ To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB
 ```bash
 npm install            # see note below if building offline
 npm run build          # compile src/**/*.ts -> lib/**/*.js
-npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v008
+npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v009
 npm start              # panel on 0.0.0.0:8080
 ```
 
@@ -115,7 +116,7 @@ Change the port with `PORT=9090 npm start`. See `.env.example` for the available
 | `npm start` | Start the panel |
 | `npm run start:agent` | Start the standalone node agent |
 | `npm run import:hvm -- <path>` | Import a legacy database |
-| `npm test` | Run all 19 end-to-end acceptance suites |
+| `npm test` | Run all 20 end-to-end acceptance suites |
 
 ## Importing a legacy database
 
@@ -131,25 +132,28 @@ npm run import:hvm -- /path/to/legacy.db
 
 ## Remote node agent
 
+> **Full step-by-step guide:** See [**`docs/MULTINODE_SETUP.md`**](docs/MULTINODE_SETUP.md) for complete Single-Node & Multi-Node setup instructions (firewall rules, NTP sync, TLS / self-signed / Let's Encrypt / mTLS / WireGuard, systemd service, storage & networking setup, cross-node migration, live key rotation, and troubleshooting).
+
 Run the agent on any compute host you want the panel to manage:
 
 ```bash
-TGVPANEL_NODE_ID="eu-node-1" \
+TGVPANEL_NODE_ID="2" \
 TGVPANEL_AGENT_PORT=8443 \
-TGVPANEL_NODE_API_KEY="..." \
+TGVPANEL_NODE_API_KEY="tgv_node_..." \
 TGVPANEL_NODE_HMAC_SECRET="..." \
 npm run start:agent
 ```
 
 | Variable | Purpose |
 |---|---|
-| `TGVPANEL_NODE_ID` | Unique node identifier |
-| `TGVPANEL_AGENT_PORT` | Listening port (example: `8443`) |
+| `TGVPANEL_NODE_ID` | Node ID assigned by **Admin → Nodes** |
+| `TGVPANEL_AGENT_PORT` | Listening port (example: `8443` or `5055`) |
 | `TGVPANEL_NODE_API_KEY` | Per-node API key (stored hashed) |
 | `TGVPANEL_NODE_HMAC_SECRET` | Shared secret for request signing |
+| `TGVPANEL_ALLOWED_CONTROLLER_IPS` | Optional comma-separated Controller IP allowlist |
 | `TGVPANEL_NODE_MTLS` | Set to `true` to require mutual TLS |
 
-Then add the node under **Admin → Nodes**. API keys can be rotated there without restarting the agent.
+Register the node under **Admin → Nodes** to obtain bootstrap credentials, paste them into `/opt/tgvpanel/.env` on the remote host, start `tgvpanel-node-agent.service`, and click **Check Health**. API keys can be rotated live without restarting the agent.
 
 ## VPS migration model
 
@@ -190,7 +194,7 @@ TGVPANEL/
 ├── src/
 │   ├── context.ts          # Runtime bootstrap, authenticated WS multiplexer
 │   ├── security/           # crypto-vault (.tgvpanel-secret, AES-GCM, TOTP, CSRF), RBAC middleware
-│   ├── db/                 # SQLite wrapper, migrations v001..v008, legacy DB importer, CLIs
+│   ├── db/                 # SQLite wrapper, migrations v001..v009, legacy DB importer, CLIs
 │   ├── node-agent/         # Standalone and local agent (auth, command runner, containers,
 │   │                       #   consoles, snapshots, transfers, health and host stats)
 │   ├── services/
@@ -207,8 +211,8 @@ TGVPANEL/
 ├── views/                  # EJS templates (dark/light, local xterm.js)
 ├── public/                 # CSS, tgvpanel-v3.js client helper, /vendor/xterm/
 ├── scripts/                # install.sh, update.sh
-├── docs/                   # Source audit, migration checklist, PostgreSQL 15+ guide
-└── tests/run-all.js        # 19-suite integration and security runner
+├── docs/                   # Multi-node setup guide, source audit, migration checklist, PostgreSQL 15+ guide
+└── tests/run-all.js        # 20-suite integration and security runner
 ```
 
 <details>
@@ -236,11 +240,11 @@ TGVPANEL/
 npm test
 ```
 
-Runs 19 end-to-end suites from `tests/run-all.js` against an isolated temporary clone of `data/tgvpanel.db`, so your real data is never touched.
+Runs 20 end-to-end suites from `tests/run-all.js` against an isolated temporary clone of `data/tgvpanel.db`, so your real data is never touched.
 
 | Coverage |
 |---|
-| Migrations (`v001`..`v008`) & automatic legacy DB / secret-vault file migration |
+| Migrations (`v001`..`v009`) & automatic legacy DB / secret-vault file migration |
 | AES-256-GCM tamper defense (`.tgvpanel-secret`) |
 | Legacy import and login rehash |
 | CSRF and PAT scopes |
