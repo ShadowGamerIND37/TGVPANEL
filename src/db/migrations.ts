@@ -877,8 +877,10 @@ export const MIGRATIONS: MigrationDefinition[] = [
       // 2. Seed default KVM & LXC storage pools if empty
       const poolCount = await db.get<{ cnt: number }>(`SELECT COUNT(*) as cnt FROM storage_pools`);
       if (!poolCount || poolCount.cnt === 0) {
-        const vmPath = process.env.HKVM_VM_DIR || path.join(os.homedir(), 'vms');
-        const lxcPath = process.env.HKVM_LXC_DIR || '/var/lib/lxc';
+        const vmPath =
+          process.env.TGVPANEL_VM_DIR || process.env.HKVM_VM_DIR || path.join(os.homedir(), 'vms');
+        const lxcPath =
+          process.env.TGVPANEL_LXC_DIR || process.env.HKVM_LXC_DIR || '/var/lib/lxc';
         await db.run(
           `INSERT INTO storage_pools (name, node_id, engine, pool_type, path, thin_provisioning, is_default, is_active, status)
            VALUES ('local-kvm', ?, 'kvm', 'qcow2', ?, 1, 1, 1, 'online')`,

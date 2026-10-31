@@ -11,10 +11,10 @@
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODE="${HKVM_INSTALL_MODE:-auto}"
+MODE="${TGVPANEL_INSTALL_MODE:-${HKVM_INSTALL_MODE:-auto}}"
 PANEL_PORT="${PORT:-8080}"
 AGENT_PORT="${AGENT_PORT:-8443}"
-NONINTERACTIVE="${HKVM_NONINTERACTIVE:-0}"
+NONINTERACTIVE="${TGVPANEL_NONINTERACTIVE:-${HKVM_NONINTERACTIVE:-0}}"
 
 log()  { printf "\033[1;34m[TGVPANEL-INSTALL]\033[0m %s\n" "$*"; }
 ok()   { printf "\033[1;32m[  OK  ]\033[0m %s\n" "$*"; }
@@ -115,9 +115,13 @@ init_secrets_and_db() {
     ok "Created .env from .env.example (0600)."
   fi
 
-  log "Initializing .hkvm-secret vault & running versioned SQLite migrations..."
+  if [[ -f .hkvm-secret && ! -f .tgvpanel-secret ]]; then
+    mv .hkvm-secret .tgvpanel-secret
+  fi
+
+  log "Initializing .tgvpanel-secret vault & running versioned SQLite migrations..."
   npm run migrate
-  chmod 600 .hkvm-secret 2>/dev/null || true
+  chmod 600 .tgvpanel-secret 2>/dev/null || true
   ok "Database migrations verified."
 }
 
@@ -132,7 +136,7 @@ write_systemd_units() {
   fi
 
   if [[ "$role" != "agent" ]]; then
-    cat > "$UNIT_DIR/hkvm-panel.service" <<EOF
+    cat > "$UNIT_DIR/tgvpanel.service" <<EOF
 [Unit]
 Description=TGVPANEL Unified Virtualization Control Panel
 After=network.target
@@ -149,11 +153,11 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-    ok "Generated $UNIT_DIR/hkvm-panel.service"
+    ok "Generated $UNIT_DIR/tgvpanel.service"
   fi
 
   if [[ "$role" == "agent" ]]; then
-    cat > "$UNIT_DIR/hkvm-node-agent.service" <<EOF
+    cat > "$UNIT_DIR/tgvpanel-node-agent.service" <<EOF
 [Unit]
 Description=TGVPANEL Remote Node Agent
 After=network.target
@@ -170,13 +174,13 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-    ok "Generated $UNIT_DIR/hkvm-node-agent.service"
+    ok "Generated $UNIT_DIR/tgvpanel-node-agent.service"
   fi
 
   if [[ "$UNIT_DIR" == "/etc/systemd/system" ]]; then
     systemctl daemon-reload
-    [[ "$role" != "agent" ]] && systemctl enable --now hkvm-panel.service
-    [[ "$role" == "agent" ]] && systemctl enable --now hkvm-node-agent.service
+    [[ "$role" != "agent" ]] && systemctl enable --now tgvpanel.service
+    [[ "$role" == "agent" ]] && systemctl enable --now tgvpanel-node-agent.service
   fi
 }
 

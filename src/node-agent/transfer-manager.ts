@@ -29,7 +29,9 @@ export class LxcTransferManager {
     containerManager: LxcContainerManager,
     snapshotManager: LxcSnapshotAndBackupManager,
     stagingDir = path.join(
-      process.env.HKVM_DATA_DIR || path.resolve(process.cwd(), 'data'),
+      process.env.TGVPANEL_DATA_DIR ||
+        process.env.HKVM_DATA_DIR ||
+        path.resolve(process.cwd(), 'data'),
       'migration-staging'
     )
   ) {

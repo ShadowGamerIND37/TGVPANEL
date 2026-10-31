@@ -41,7 +41,7 @@ export async function initializeUnifiedHkvmRuntime(
   const db = registerUnifiedDatabase(rawDb, dbPath);
   await runMigrations(db);
 
-  // Ensure local node credentials decrypt cleanly with this host's .hkvm-secret
+  // Ensure local node credentials decrypt cleanly with this host's .tgvpanel-secret
   // (e.g. after cloning a repository whose initial DB was seeded on another host)
   const localNodes = await db.all<{ id: number }>(
     `SELECT id FROM nodes WHERE is_local = 1`
@@ -84,7 +84,10 @@ export async function initializeUnifiedHkvmRuntime(
   );
   const monitoringService = new MonitoringService(db, nodeManager, instanceManager);
 
-  if (process.env.HKVM_DISABLE_BACKGROUND_POLLER !== 'true') {
+  if (
+    process.env.TGVPANEL_DISABLE_BACKGROUND_POLLER !== 'true' &&
+    process.env.HKVM_DISABLE_BACKGROUND_POLLER !== 'true'
+  ) {
     monitoringService.startBackgroundLoop(60_000);
     lxcAdapter.healLocalContainersNetworking().catch((err) => {
       console.warn('[LXC Network Self-Heal]', err?.message || err);

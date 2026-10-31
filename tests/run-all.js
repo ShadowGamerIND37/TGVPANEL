@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * HKVM V3 — End-to-End Integration, Security & Acceptance Test Suite
+ * TGVPANEL — End-to-End Integration, Security & Acceptance Test Suite
  *
- * Runs against an isolated temporary clone of data/hkvm.db so live database state
+ * Runs against an isolated temporary clone of data/tgvpanel.db so live database state
  * is never polluted. Exercises real SQLite, real Express + WebSocket server,
  * real standalone Node Agent HTTP/HMAC server, real AES-256-GCM/TOTP/CSRF/RBAC,
  * real Werkzeug pbkdf2/scrypt legacy HVM importer, and real node-pty restricted shell.
@@ -16,25 +16,41 @@ const path = require('path');
 const sqlite3 = require('sqlite3');
 const WebSocket = require('ws');
 
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hkvm-v3-acceptance-'));
-const testDbPath = path.join(tmpRoot, 'hkvm.db');
-const candidateBackupDb = path.resolve(__dirname, '../data/backups/hkvm_v2_initial.db');
-const primaryRepoDb = path.resolve(__dirname, '../data/hkvm.db');
-fs.copyFileSync(fs.existsSync(candidateBackupDb) ? candidateBackupDb : primaryRepoDb, testDbPath);
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tgvpanel-acceptance-'));
+const testDbPath = path.join(tmpRoot, 'tgvpanel.db');
+const primaryRepoDb = path.resolve(__dirname, '../data/tgvpanel.db');
+fs.copyFileSync(primaryRepoDb, testDbPath);
 
 const TEST_PORT = 18940 + Math.floor(Math.random() * 500);
 const AGENT_PORT = 19540 + Math.floor(Math.random() * 500);
 
-process.env.HKVM_DATA_DIR = tmpRoot;
-process.env.HKVM_DB_PATH = testDbPath;
-process.env.HKVM_LXC_PATH = path.join(tmpRoot, 'local-lxc');
-process.env.HKVM_BACKUP_DIR = path.join(tmpRoot, 'local-backups');
+const seededLegacySessionSecret = crypto.randomBytes(32).toString('hex');
+fs.writeFileSync(
+  path.join(tmpRoot, '.hkvm-secret'),
+  JSON.stringify(
+    {
+      sessionSecret: seededLegacySessionSecret,
+      credentialKeyHex: crypto.randomBytes(32).toString('hex'),
+      csrfSecret: crypto.randomBytes(32).toString('hex'),
+    },
+    null,
+    2
+  ),
+  { mode: 0o600 }
+);
+
+process.env.TGVPANEL_DATA_DIR = tmpRoot;
+process.env.TGVPANEL_DB_PATH = testDbPath;
+process.env.TGVPANEL_SECRET_FILE = path.join(tmpRoot, '.tgvpanel-secret');
+process.env.TGVPANEL_LXC_PATH = path.join(tmpRoot, 'local-lxc');
+process.env.TGVPANEL_BACKUP_DIR = path.join(tmpRoot, 'local-backups');
 process.env.PORT = String(TEST_PORT);
-process.env.HKVM_DISABLE_BACKGROUND_POLLER = 'true';
-process.env.HKVM_ENABLE_NODE_SHELL = 'true';
+process.env.TGVPANEL_DISABLE_BACKGROUND_POLLER = 'true';
+process.env.TGVPANEL_ENABLE_NODE_SHELL = 'true';
 
 const {
   getSecretBundle,
+  getSecretVaultPath,
   encryptSecret,
   decryptSecret,
   isEncryptedSecret,
@@ -44,7 +60,7 @@ const {
   computeTotpCode,
   verifyTotpCode,
 } = require('../lib/security/crypto-vault');
-const { UnifiedDatabase } = require('../lib/db/database');
+const { UnifiedDatabase, resolveAndMigrateDatabasePath } = require('../lib/db/database');
 const { runMigrations } = require('../lib/db/migrations');
 const { importHvmDatabase } = require('../lib/db/hvm-importer');
 const { createNodeAgentServer } = require('../lib/node-agent/agent');
@@ -188,6 +204,21 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       assert.ok(templates.length >= 15, 'Seeded LXC OS template catalog');
       await v2Db.close();
 
+      // Verify automatic zero-data-loss file migration: hkvm.db (+ -wal/-shm) -> tgvpanel.db (+ -wal/-shm)
+      const legacyDbDir = path.join(tmpRoot, 'legacy-db-migration-check');
+      fs.mkdirSync(legacyDbDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDbDir, 'hkvm.db'), 'sqlite-main-bytes');
+      fs.writeFileSync(path.join(legacyDbDir, 'hkvm.db-wal'), 'sqlite-wal-bytes');
+      fs.writeFileSync(path.join(legacyDbDir, 'hkvm.db-shm'), 'sqlite-shm-bytes');
+      const resolvedMigratedDb = resolveAndMigrateDatabasePath(legacyDbDir);
+      assert.strictEqual(resolvedMigratedDb, path.join(legacyDbDir, 'tgvpanel.db'));
+      assert.strictEqual(fs.readFileSync(path.join(legacyDbDir, 'tgvpanel.db'), 'utf8'), 'sqlite-main-bytes');
+      assert.strictEqual(fs.readFileSync(path.join(legacyDbDir, 'tgvpanel.db-wal'), 'utf8'), 'sqlite-wal-bytes');
+      assert.strictEqual(fs.readFileSync(path.join(legacyDbDir, 'tgvpanel.db-shm'), 'utf8'), 'sqlite-shm-bytes');
+      assert.strictEqual(fs.existsSync(path.join(legacyDbDir, 'hkvm.db')), false, 'Expected legacy hkvm.db renamed');
+      assert.strictEqual(fs.existsSync(path.join(legacyDbDir, 'hkvm.db-wal')), false, 'Expected legacy hkvm.db-wal renamed');
+      assert.strictEqual(fs.existsSync(path.join(legacyDbDir, 'hkvm.db-shm')), false, 'Expected legacy hkvm.db-shm renamed');
+
       // Ensure testDbPath also has all migrations applied cleanly
       const rawSqlite = new sqlite3.Database(testDbPath);
       const udb = new UnifiedDatabase(rawSqlite, testDbPath);
@@ -196,9 +227,13 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
     });
 
     // 2. Cryptographic Vault & API Key Hashing
-    await runStep('T02: Secret vault (.hkvm-secret), AES-256-GCM encryption & tamper rejection', async () => {
+    await runStep('T02: Secret vault (.tgvpanel-secret + legacy .hkvm-secret migration), AES-256-GCM & tamper rejection', async () => {
+      const legacyVaultFile = path.join(tmpRoot, '.hkvm-secret');
       const bundle = getSecretBundle();
-      assert.ok(bundle.sessionSecret.length >= 32);
+      assert.strictEqual(bundle.sessionSecret, seededLegacySessionSecret, 'Expected legacy .hkvm-secret secrets preserved');
+      assert.ok(getSecretVaultPath().endsWith('.tgvpanel-secret'), 'Expected .tgvpanel-secret vault path');
+      assert.strictEqual(fs.existsSync(getSecretVaultPath()), true, 'Expected .tgvpanel-secret to exist');
+      assert.strictEqual(fs.existsSync(legacyVaultFile), false, 'Expected legacy .hkvm-secret renamed to .tgvpanel-secret');
       const ct = encryptSecret('super-secret-kvm-pass-99!');
       assert.ok(isEncryptedSecret(ct));
       assert.strictEqual(decryptSecret(ct), 'super-secret-kvm-pass-99!');
@@ -1165,7 +1200,7 @@ exec "$@"
       assert.ok(regRow1 && regRow1.status === 'running', 'Unified instances registry synced');
 
       const ct1Shadow = privilegedFs.readTextSync(
-        path.join(process.env.HKVM_LXC_PATH, 'e2e-ubuntu-01', 'rootfs', 'etc', 'shadow')
+        path.join(process.env.TGVPANEL_LXC_PATH, 'e2e-ubuntu-01', 'rootfs', 'etc', 'shadow')
       );
       assert.match(ct1Shadow, /^root:\$6\$/m, 'Container /etc/shadow updated with SHA-512 hash');
 
@@ -1235,7 +1270,7 @@ exec "$@"
       assert.strictEqual(customStamp.json.content.trim(), 'HKVM-Custom-OS-3.0');
 
       // 13f. Orphan host directory auto-recovery + GPG --no-validate fallback + WSL2 cgroup retry + sync-host
-      const orphanDir = path.join(process.env.HKVM_LXC_PATH, 'e2e-orphan-03');
+      const orphanDir = path.join(process.env.TGVPANEL_LXC_PATH, 'e2e-orphan-03');
       fs.mkdirSync(path.join(orphanDir, 'rootfs'), { recursive: true });
       fs.writeFileSync(path.join(orphanDir, 'config'), 'lxc.uts.name = e2e-orphan-03\n');
 
@@ -1268,7 +1303,7 @@ exec "$@"
         action: 'stop',
       });
       privilegedFs.writeFileSync(
-        path.join(process.env.HKVM_LXC_PATH, 'e2e-orphan-03', '.fail_cgroup_once'),
+        path.join(process.env.TGVPANEL_LXC_PATH, 'e2e-orphan-03', '.fail_cgroup_once'),
         '1'
       );
       const retryStart = await adminClient.request(
@@ -1284,7 +1319,7 @@ exec "$@"
         '-n',
         '/usr/local/bin/lxc-create',
         '-P',
-        process.env.HKVM_LXC_PATH,
+        process.env.TGVPANEL_LXC_PATH,
         '-n',
         'ext-host-ct-04',
         '--',
@@ -1362,7 +1397,7 @@ exec "$@"
       assert.strictEqual(patchRes.json.instance.cpuCores, 4);
       assert.strictEqual(patchRes.json.instance.ramMb, 4096);
       const liveCg = privilegedFs.readTextSync(
-        path.join(process.env.HKVM_LXC_PATH, 'e2e-ubuntu-01', '.live_cgroup')
+        path.join(process.env.TGVPANEL_LXC_PATH, 'e2e-ubuntu-01', '.live_cgroup')
       );
       assert.ok(liveCg.includes('4096M'), 'Live lxc-cgroup memory limit applied while running');
 
@@ -1623,7 +1658,7 @@ exec "$@"
       assert.strictEqual(okMig.json.migration.checksum_sha256.length, 64);
 
       assert.ok(
-        !fs.existsSync(path.join(process.env.HKVM_LXC_PATH, 'e2e-ubuntu-01')),
+        !fs.existsSync(path.join(process.env.TGVPANEL_LXC_PATH, 'e2e-ubuntu-01')),
         'Source container cleaned up after verified target cutover'
       );
       assert.ok(
@@ -1767,7 +1802,7 @@ exec "$@"
       const dbRow = await ctx.db.get(`SELECT kvm_nesting, nesting, autostart FROM lxc_instances WHERE id = ?`, [kvmCtId]);
       assert.strictEqual(dbRow.kvm_nesting, 1, 'Expected kvm_nesting=1 persisted in SQLite');
 
-      const cfgPath = path.join(process.env.HKVM_LXC_PATH, 'kvm-nested-lxc-01', 'config');
+      const cfgPath = path.join(process.env.TGVPANEL_LXC_PATH, 'kvm-nested-lxc-01', 'config');
       const cfgTextOn = privilegedFs.readTextSync(cfgPath);
       assert.ok(
         cfgTextOn.includes('lxc.mount.entry = /dev/kvm dev/kvm none bind,optional,create=file 0 0'),
@@ -1797,9 +1832,9 @@ exec "$@"
 
       // Test WSL2 / undelegated cgroup-v2 /proc VmRSS telemetry fallback when lxc-info omits "Memory use:"
       const { execFileSync } = require('child_process');
-      const omitMarker = path.join(process.env.HKVM_LXC_PATH, 'kvm-nested-lxc-01', '.omit_mem_use');
+      const omitMarker = path.join(process.env.TGVPANEL_LXC_PATH, 'kvm-nested-lxc-01', '.omit_mem_use');
       execFileSync('sudo', ['-n', 'touch', omitMarker]);
-      const localCm = new LxcContainerManager(process.env.HKVM_LXC_PATH);
+      const localCm = new LxcContainerManager(process.env.TGVPANEL_LXC_PATH);
       const inspected = await localCm.inspectContainer('kvm-nested-lxc-01');
       assert.strictEqual(inspected.state, 'running');
       assert.ok(inspected.pid > 0, 'Expected live container init PID');
@@ -1883,8 +1918,8 @@ exec "$@"
 
       const testRelay = new BridgeDnsRelay();
       // Point upstream to closed local port via env so relay exercises OS lookup fallback deterministically
-      const prevDnsEnv = process.env.HKVM_LXC_DNS;
-      process.env.HKVM_LXC_DNS = '127.0.0.254';
+      const prevDnsEnv = process.env.TGVPANEL_LXC_DNS;
+      process.env.TGVPANEL_LXC_DNS = '127.0.0.254';
       const relayPort = await testRelay.ensureStarted();
       assert.ok(relayPort > 0, 'Expected BridgeDnsRelay to bind UDP+TCP port');
       const relayReply = await new Promise((resolve, reject) => {
@@ -1903,8 +1938,8 @@ exec "$@"
       assert.strictEqual(relayReply.readUInt16BE(0), 0x4242);
       assert.ok(relayReply.readUInt16BE(6) >= 1, 'BridgeDnsRelay resolved localhost over live UDP');
       testRelay.stop();
-      if (prevDnsEnv === undefined) delete process.env.HKVM_LXC_DNS;
-      else process.env.HKVM_LXC_DNS = prevDnsEnv;
+      if (prevDnsEnv === undefined) delete process.env.TGVPANEL_LXC_DNS;
+      else process.env.TGVPANEL_LXC_DNS = prevDnsEnv;
 
       // Create an Ubuntu 22.04 container with static IP WITHOUT explicit gateway -> verify auto-gateway (.1),
       // dangling stub-resolv.conf symlink replacement, systemd-resolved drop-in, and Netplan 10-lxc.yaml sync!
@@ -1923,7 +1958,7 @@ exec "$@"
       assert.strictEqual(createNetRes.status, 201, `Create net-fix LXC failed: ${createNetRes.text}`);
       const netCtId = createNetRes.json.instance.refId;
 
-      const ctDir = path.join(process.env.HKVM_LXC_PATH, 'net-fix-ubuntu-01');
+      const ctDir = path.join(process.env.TGVPANEL_LXC_PATH, 'net-fix-ubuntu-01');
       const cfgTxt = privilegedFs.readTextSync(path.join(ctDir, 'config'));
       assert.ok(cfgTxt.includes('lxc.net.0.name = eth0'), 'Expected explicit eth0 interface name');
       assert.ok(cfgTxt.includes('lxc.net.0.ipv4.address = 10.88.55.25/24'), 'Expected static IPv4 CIDR');
@@ -1953,7 +1988,7 @@ exec "$@"
       assert.ok(nssTxt.includes('hosts:          files dns'), 'nsswitch.conf must prioritize direct files dns');
 
       // Verify collision-free auto-IP allocation helper
-      const localCm = new LxcContainerManager(process.env.HKVM_LXC_PATH);
+      const localCm = new LxcContainerManager(process.env.TGVPANEL_LXC_PATH);
       const autoIp1 = await localCm.allocateAutoBridgeIpv4('auto-ip-test-a', 'lxcbr0', '10.88.55.1', 24);
       assert.ok(autoIp1 && autoIp1.startsWith('10.88.55.') && autoIp1 !== '10.88.55.1/24' && autoIp1 !== '10.88.55.25/24');
 
@@ -2182,7 +2217,7 @@ exec "$@"
       const stageCtId = stageCtRes.json.instance.refId;
       await adminClient.request('POST', `/api/v1/instances/lxc/${stageCtId}/action`, { action: 'stop' });
 
-      const stageCtDir = path.join(process.env.HKVM_LXC_PATH, 'cgroup-stage-preserve-01');
+      const stageCtDir = path.join(process.env.TGVPANEL_LXC_PATH, 'cgroup-stage-preserve-01');
       privilegedFs.writeFileSync(path.join(stageCtDir, '.fail_cgroup_once'), '1');
       const stageStartRes = await adminClient.request('POST', `/api/v1/instances/lxc/${stageCtId}/action`, {
         action: 'start',
@@ -2227,7 +2262,7 @@ exec "$@"
 
           // Verify `needsContainerCgroupRestartOrHeal` flags processes trapped in `/hkvm.host/lxc.payload.*`
           privilegedFs.writeFileSync(path.join(legacyBrokenPayload, 'cgroup.procs'), `${sleeper.pid}\n`);
-          const cmTest = new LxcContainerManager(process.env.HKVM_LXC_PATH);
+          const cmTest = new LxcContainerManager(process.env.TGVPANEL_LXC_PATH);
           const brokenDiag = cmTest.needsContainerCgroupRestartOrHeal('broken-01', sleeper.pid, {
             ramMb: 1024,
             cpuCores: 1,

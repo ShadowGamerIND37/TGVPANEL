@@ -192,7 +192,7 @@ export class BridgeDnsRelay {
     const now = Date.now();
     if (now - this.cachedHostUpstreams.ts > 15_000 || this.cachedHostUpstreams.list.length === 0) {
       const list: string[] = [];
-      const envDns = (process.env.HKVM_LXC_DNS || '').trim();
+      const envDns = (process.env.TGVPANEL_LXC_DNS || process.env.HKVM_LXC_DNS || '').trim();
       if (envDns) {
         for (const s of envDns.split(/[\s,]+/)) {
           if (net.isIPv4(s) && !this.excludedIps.has(s) && !list.includes(s)) list.push(s);
@@ -316,7 +316,9 @@ export class BridgeDnsRelay {
   public async ensureStarted(): Promise<number> {
     if (this.isRunning()) return this.boundPort;
 
-    const preferred = parseInt(process.env.HKVM_DNS_RELAY_PORT || '53539', 10) || 53539;
+    const preferred =
+      parseInt(process.env.TGVPANEL_DNS_RELAY_PORT || process.env.HKVM_DNS_RELAY_PORT || '53539', 10) ||
+      53539;
     const candidatePorts = [
       preferred,
       53540,

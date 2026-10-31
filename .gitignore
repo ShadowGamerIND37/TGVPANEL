@@ -5,6 +5,7 @@
 /.env
 /.env.local
 /.env.*.local
+/.tgvpanel-secret
 /.hkvm-secret
 /certs/*.key
 /certs/*.pem

@@ -3,7 +3,7 @@
   const _pageTitle = typeof pageTitle !== 'undefined' ? pageTitle : (typeof title !== 'undefined' ? title : '');
 %>
 <meta name="csrf-token" content="<%= typeof csrfToken !== 'undefined' ? csrfToken : '' %>">
-<script src="/js/hkvm-v3.js"></script>
+<script src="/js/tgvpanel-v3.js"></script>
 <% if (typeof impersonating !== 'undefined' && impersonating) { %>
 <div style="background:linear-gradient(90deg,#f59e0b,#ef4444);color:#fff;padding:6px 16px;font-size:12px;font-weight:600;display:flex;justify-content:space-between;align-items:center;">
   <span>Impersonating user account: <strong><%= user && user.username %></strong> (audited session)</span>

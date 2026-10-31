@@ -3,7 +3,17 @@ import fs from 'fs';
 import path from 'path';
 import QRCode from 'qrcode';
 
-const SECRET_FILE_PATH = path.resolve(process.cwd(), '.hkvm-secret');
+function resolveSecretFilePath(): string {
+  return process.env.TGVPANEL_SECRET_FILE || path.resolve(process.cwd(), '.tgvpanel-secret');
+}
+
+function resolveLegacySecretFilePath(): string {
+  return path.join(path.dirname(resolveSecretFilePath()), '.hkvm-secret');
+}
+
+export function getSecretVaultPath(): string {
+  return resolveSecretFilePath();
+}
 
 interface SecretBundle {
   sessionSecret: string;
@@ -15,18 +25,36 @@ let cachedSecrets: SecretBundle | null = null;
 
 /**
  * Loads secrets from environment variables or persists auto-generated 256-bit
- * secrets in `.hkvm-secret` (mode 0600, git-ignored) so sessions and encrypted
+ * secrets in `.tgvpanel-secret` (mode 0600, git-ignored) so sessions and encrypted
  * credentials survive restarts without hardcoding secrets in source code.
+ * Automatically migrates legacy `.hkvm-secret` -> `.tgvpanel-secret` if present.
  */
 export function getSecretBundle(): SecretBundle {
   if (cachedSecrets) {
     return cachedSecrets;
   }
 
-  let fileData: Partial<SecretBundle> = {};
-  if (fs.existsSync(SECRET_FILE_PATH)) {
+  const secretFilePath = resolveSecretFilePath();
+  const legacySecretFilePath = resolveLegacySecretFilePath();
+
+  if (!fs.existsSync(secretFilePath) && fs.existsSync(legacySecretFilePath)) {
     try {
-      fileData = JSON.parse(fs.readFileSync(SECRET_FILE_PATH, 'utf8'));
+      fs.renameSync(legacySecretFilePath, secretFilePath);
+      fs.chmodSync(secretFilePath, 0o600);
+    } catch {
+      // Fallback to reading legacy path below if rename across fs fails
+    }
+  }
+
+  let fileData: Partial<SecretBundle> = {};
+  const readablePath = fs.existsSync(secretFilePath)
+    ? secretFilePath
+    : fs.existsSync(legacySecretFilePath)
+    ? legacySecretFilePath
+    : null;
+  if (readablePath) {
+    try {
+      fileData = JSON.parse(fs.readFileSync(readablePath, 'utf8'));
     } catch {
       fileData = {};
     }
@@ -52,9 +80,9 @@ export function getSecretBundle(): SecretBundle {
 
   cachedSecrets = { sessionSecret, credentialKeyHex, csrfSecret };
 
-  if (!fs.existsSync(SECRET_FILE_PATH)) {
+  if (!fs.existsSync(secretFilePath)) {
     try {
-      fs.writeFileSync(SECRET_FILE_PATH, JSON.stringify(cachedSecrets, null, 2), {
+      fs.writeFileSync(secretFilePath, JSON.stringify(cachedSecrets, null, 2), {
         mode: 0o600,
       });
     } catch {

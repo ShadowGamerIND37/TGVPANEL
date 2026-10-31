@@ -37,7 +37,9 @@ export class AdminNodeShellManager {
     }) => void;
   }) {
     this.interactiveEnabled =
-      options?.interactiveEnabled ?? process.env.HKVM_ENABLE_NODE_SHELL === 'true';
+      options?.interactiveEnabled ??
+      (process.env.TGVPANEL_ENABLE_NODE_SHELL === 'true' ||
+        process.env.HKVM_ENABLE_NODE_SHELL === 'true');
     this.onAuditEvent = options?.onAuditEvent;
   }
 

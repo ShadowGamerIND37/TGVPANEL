@@ -26,8 +26,14 @@ export interface BackupArtifact {
 }
 
 const DEFAULT_BACKUP_DIR =
-  process.env.HKVM_BACKUP_DIR || path.resolve(process.cwd(), 'data', 'instance-backups');
-const DEFAULT_LXC_BASE = process.env.HKVM_LXC_PATH || '/var/lib/lxc';
+  process.env.TGVPANEL_BACKUP_DIR ||
+  process.env.HKVM_BACKUP_DIR ||
+  path.resolve(process.cwd(), 'data', 'instance-backups');
+const DEFAULT_LXC_BASE =
+  process.env.TGVPANEL_LXC_PATH ||
+  process.env.TGVPANEL_LXC_DIR ||
+  process.env.HKVM_LXC_PATH ||
+  '/var/lib/lxc';
 
 export class LxcSnapshotAndBackupManager {
   private backupDir: string;
