@@ -592,6 +592,26 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   });
 
+  router.post('/lxc/:id/repair-network', async (req: Request, res: Response) => {
+    try {
+      const refId = pInt(req.params.id);
+      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId, true);
+      const out = await ctx.lxcAdapter.repairLxcNetworking(refId);
+      await ctx.db
+        .logActivity({
+          userId: req.principal!.userId,
+          action: 'lxc_network_repaired',
+          resourceType: 'lxc',
+          resourceId: String(refId),
+          details: out.repair as unknown as Record<string, unknown>,
+        })
+        .catch(() => undefined);
+      res.json({ success: true, ...out });
+    } catch (err: any) {
+      res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
   router.post('/lxc/:id/password', async (req: Request, res: Response) => {
     try {
       const refId = pInt(req.params.id);

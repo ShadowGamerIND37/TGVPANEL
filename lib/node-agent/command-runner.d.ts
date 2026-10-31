@@ -49,6 +49,7 @@ export declare const privilegedFs: {
     readFileSync(targetPath: string, maxBytes?: number): Buffer;
     readTextSync(targetPath: string): string;
     writeFileSync(targetPath: string, data: Buffer | string, mode?: number): void;
+    unlinkSync(targetPath: string): void;
     lstatMetaSync(targetPath: string): {
         isFile: boolean;
         isDirectory: boolean;

@@ -205,6 +205,15 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
     }
   });
 
+  app.post('/api/v1/containers/:name/repair-network', async (req, res) => {
+    try {
+      const repair = await runtime.containerManager.repairContainerNetworking(req.params.name);
+      res.json({ success: true, repair });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get('/api/v1/containers/:name/processes', async (req, res) => {
     try {
       const processes = await runtime.containerManager.getContainerProcesses(req.params.name);

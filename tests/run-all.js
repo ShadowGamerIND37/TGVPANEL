@@ -49,7 +49,12 @@ const { runMigrations } = require('../lib/db/migrations');
 const { importHvmDatabase } = require('../lib/db/hvm-importer');
 const { createNodeAgentServer } = require('../lib/node-agent/agent');
 const { runAllowlistedCommand, buildSafeSpawnEnv } = require('../lib/node-agent/command-runner');
-const { LxcContainerManager, resolveDownloadReleaseCandidates } = require('../lib/node-agent/container-manager');
+const {
+  LxcContainerManager,
+  resolveDownloadReleaseCandidates,
+  computeIpv4SubnetCidr,
+  resolveGuestDnsServers,
+} = require('../lib/node-agent/container-manager');
 
 const results = [];
 async function runStep(name, fn) {
@@ -832,11 +837,18 @@ if [ "$DISTRO" = "gpgtest" ] && [ "$NOVAL" = "0" ]; then
   exit 1
 fi
 CT="$BASE/$NAME"
-mkdir -p "$CT/rootfs/etc" "$CT/rootfs/root" "$CT/rootfs/var/log" "$CT/rootfs/tmp"
+mkdir -p "$CT/rootfs/etc/netplan" "$CT/rootfs/etc/systemd" "$CT/rootfs/root" "$CT/rootfs/var/log" "$CT/rootfs/tmp"
 printf '%s\\n' "$NAME" > "$CT/rootfs/etc/hostname"
 printf 'ID=%s\\nVERSION_ID="%s"\\n' "$DISTRO" "$REL" > "$CT/rootfs/etc/os-release"
 printf 'root:*:19000:0:99999:7:::\\n' > "$CT/rootfs/etc/shadow"
 chmod 0640 "$CT/rootfs/etc/shadow"
+ln -sf ../run/systemd/resolve/stub-resolv.conf "$CT/rootfs/etc/resolv.conf"
+cat > "$CT/rootfs/etc/netplan/10-lxc.yaml" <<EOF
+network:
+  version: 2
+  ethernets:
+    eth0: {dhcp4: true}
+EOF
 cat > "$CT/config" <<EOF
 lxc.rootfs.path = dir:$CT/rootfs
 lxc.uts.name = $NAME
@@ -1040,6 +1052,18 @@ if [ "$1" = "chpasswd" ]; then
 fi
 if [ "$1" = "ps" ]; then
   printf '1 root 0.1 0.5 /sbin/init\\n48 www-data 0.4 1.8 nginx\\n'
+  exit 0
+fi
+if [ "$1" = "ip" ]; then
+  printf '%s\\n' "$*" >> "$CT/.live_net"
+  exit 0
+fi
+if [ "$1" = "rm" ] && [ "$3" = "/etc/resolv.conf" ]; then
+  rm -f "$CT/rootfs/etc/resolv.conf"
+  exit 0
+fi
+if [ "$1" = "tee" ] && [ "$2" = "/etc/resolv.conf" ]; then
+  cat > "$CT/rootfs/etc/resolv.conf"
   exit 0
 fi
 export CONTAINER_NAME="$NAME"
@@ -1778,6 +1802,107 @@ exec "$@"
         action: 'delete',
       });
       assert.strictEqual(del.status, 200);
+    });
+
+    // 16. LXC Networking, Dangling stub-resolv.conf + WSL2 Tunnel DNS Fix, Netplan Sync & Live Repair API
+    await runStep('T16: LXC Networking, stub-resolv.conf/WSL2 DNS fix, Netplan sync, Auto-IP & live repair-network API', async () => {
+      const { execFileSync } = require('child_process');
+      const { privilegedFs } = require('../lib/node-agent/command-runner');
+
+      // Unit-verify subnet calculation & guest DNS resolver filtering (127.0.0.53 + WSL2 10.255.255.254 excluded!)
+      assert.strictEqual(computeIpv4SubnetCidr('10.0.3.1', 24), '10.0.3.0/24');
+      const filteredDns = resolveGuestDnsServers(
+        '# systemd-resolved stub\nnameserver 127.0.0.53\nnameserver 10.255.255.254\nnameserver 192.168.50.1\n'
+      );
+      assert.ok(!filteredDns.includes('127.0.0.53'), 'Must strip host loopback stub 127.0.0.53');
+      assert.ok(!filteredDns.includes('10.255.255.254'), 'Must strip non-bridge-routable WSL2 tunnel 10.255.255.254');
+      assert.ok(filteredDns.includes('1.1.1.1') && filteredDns.includes('8.8.8.8'));
+      assert.strictEqual(filteredDns.length, 3, 'Must respect glibc MAXNS=3 limit');
+
+      // Create an Ubuntu 22.04 container with static IP WITHOUT explicit gateway -> verify auto-gateway (.1),
+      // dangling stub-resolv.conf symlink replacement, systemd-resolved drop-in, and Netplan 10-lxc.yaml sync!
+      const createNetRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'net-fix-ubuntu-01',
+        hostname: 'net-fix-01.hkvm.local',
+        nodeId: 1,
+        templateSlug: 'ubuntu-22.04',
+        cpuCores: 2,
+        ramMb: 1024,
+        swapMb: 256,
+        diskGb: 15,
+        ipv4Address: '10.88.55.25/24',
+        provisionOnHost: true,
+      });
+      assert.strictEqual(createNetRes.status, 201, `Create net-fix LXC failed: ${createNetRes.text}`);
+      const netCtId = createNetRes.json.instance.refId;
+
+      const ctDir = path.join(process.env.HKVM_LXC_PATH, 'net-fix-ubuntu-01');
+      const cfgTxt = privilegedFs.readTextSync(path.join(ctDir, 'config'));
+      assert.ok(cfgTxt.includes('lxc.net.0.name = eth0'), 'Expected explicit eth0 interface name');
+      assert.ok(cfgTxt.includes('lxc.net.0.ipv4.address = 10.88.55.25/24'), 'Expected static IPv4 CIDR');
+      assert.ok(cfgTxt.includes('lxc.net.0.ipv4.gateway = 10.88.55.1'), 'Expected inferred .1 gateway when omitted');
+
+      // Verify dangling ../run/systemd/resolve/stub-resolv.conf symlink was replaced by a real regular file!
+      const resolvPath = path.join(ctDir, 'rootfs/etc/resolv.conf');
+      const resolvMeta = privilegedFs.lstatMetaSync(resolvPath);
+      assert.strictEqual(resolvMeta.isSymbolicLink, false, 'resolv.conf must be a regular file, not a dangling stub symlink');
+      const resolvTxt = privilegedFs.readTextSync(resolvPath);
+      assert.ok(resolvTxt.includes('nameserver 1.1.1.1') && resolvTxt.includes('nameserver 8.8.8.8'));
+      assert.ok(!resolvTxt.includes('127.0.0.53'));
+
+      // Verify systemd-resolved drop-in & Netplan 10-lxc.yaml were synchronized (so systemd-networkd never flushes eth0!)
+      const dropinTxt = privilegedFs.readTextSync(
+        path.join(ctDir, 'rootfs/etc/systemd/resolved.conf.d/99-hkvm-dns.conf')
+      );
+      assert.ok(dropinTxt.includes('DNS=1.1.1.1 8.8.8.8'));
+
+      const netplanTxt = privilegedFs.readTextSync(path.join(ctDir, 'rootfs/etc/netplan/10-lxc.yaml'));
+      assert.ok(netplanTxt.includes('dhcp4: false'), 'Netplan must disable dhcp4 when static/auto IP is set');
+      assert.ok(netplanTxt.includes('10.88.55.25/24'), 'Netplan must match assigned IPv4 CIDR');
+      assert.ok(netplanTxt.includes('via: 10.88.55.1'), 'Netplan must configure default route gateway');
+
+      // Verify collision-free auto-IP allocation helper
+      const localCm = new LxcContainerManager(process.env.HKVM_LXC_PATH);
+      const autoIp1 = await localCm.allocateAutoBridgeIpv4('auto-ip-test-a', 'lxcbr0', '10.88.55.1', 24);
+      assert.ok(autoIp1 && autoIp1.startsWith('10.88.55.') && autoIp1 !== '10.88.55.1/24' && autoIp1 !== '10.88.55.25/24');
+
+      // Simulate broken DNS inside running container & invoke live POST /api/v1/lxc/:id/repair-network!
+      execFileSync('sudo', ['-n', 'ln', '-sf', '../run/systemd/resolve/stub-resolv.conf', resolvPath]);
+      const repairRes = await adminClient.request('POST', `/api/v1/lxc/${netCtId}/repair-network`, {});
+      assert.strictEqual(repairRes.status, 200, `POST repair-network failed: ${repairRes.text}`);
+      assert.strictEqual(repairRes.json.success, true);
+      assert.strictEqual(repairRes.json.repair.ipv4Address, '10.88.55.25');
+      assert.strictEqual(repairRes.json.repair.gateway, '10.88.55.1');
+      assert.strictEqual(repairRes.json.repair.liveApplied, true);
+
+      const liveNetLog = privilegedFs.readTextSync(path.join(ctDir, '.live_net'));
+      assert.ok(liveNetLog.includes('ip link set eth0 up'), 'Expected live eth0 link up via lxc-attach');
+      assert.ok(liveNetLog.includes('ip addr replace 10.88.55.25/24 dev eth0'), 'Expected live IPv4 injection');
+      assert.ok(liveNetLog.includes('ip route replace default via 10.88.55.1 dev eth0'), 'Expected live default route injection');
+
+      const repairedResolv = privilegedFs.readTextSync(resolvPath);
+      assert.ok(repairedResolv.includes('nameserver 1.1.1.1'), 'Expected live repaired /etc/resolv.conf');
+
+      // Also test remote Node Agent POST /api/v1/lxc/:id/repair-network via migrated/remote container
+      const remoteCreate = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'net-fix-remote-02',
+        nodeId: remoteNodeId,
+        templateSlug: 'ubuntu-22.04',
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 10,
+        ipv4Address: '10.88.66.30/24',
+        provisionOnHost: true,
+      });
+      assert.strictEqual(remoteCreate.status, 201);
+      const remoteCtId = remoteCreate.json.instance.refId;
+      const remoteRepair = await adminClient.request('POST', `/api/v1/lxc/${remoteCtId}/repair-network`, {});
+      assert.strictEqual(remoteRepair.status, 200, `Remote repair-network failed: ${remoteRepair.text}`);
+      assert.strictEqual(remoteRepair.json.repair.ipv4Address, '10.88.66.30');
+
+      // Cleanup both test containers
+      await adminClient.request('POST', `/api/v1/instances/lxc/${netCtId}/action`, { action: 'delete' });
+      await adminClient.request('POST', `/api/v1/instances/lxc/${remoteCtId}/action`, { action: 'delete' });
     });
   } finally {
     const { execFileSync } = require('child_process');

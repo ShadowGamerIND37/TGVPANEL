@@ -524,6 +524,17 @@ export const privilegedFs = {
     }
   },
 
+  unlinkSync(targetPath: string): void {
+    const resolved = assertSafeFsPath(targetPath);
+    try {
+      fs.unlinkSync(resolved);
+    } catch (err: any) {
+      if (err && err.code === 'ENOENT') return;
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      runSudoHelperSync('rm', ['-f', '--', resolved]);
+    }
+  },
+
   lstatMetaSync(targetPath: string): {
     isFile: boolean;
     isDirectory: boolean;

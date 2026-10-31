@@ -6,7 +6,11 @@ import {
 } from '../../security/crypto-vault';
 import { SafeValidators } from '../../security/middleware';
 import { NodeManager } from '../nodes/NodeClient';
-import { LxcContainerRuntimeInfo, LxcCreateSpec } from '../../node-agent/container-manager';
+import {
+  LxcContainerRuntimeInfo,
+  LxcCreateSpec,
+  LxcNetworkRepairResult,
+} from '../../node-agent/container-manager';
 import {
   InstanceCapabilityProfile,
   InstanceTelemetry,
@@ -339,6 +343,7 @@ export class LXCAdapter implements VirtualizationAdapter {
 
       let runtimeState = 'stopped';
       let detectedIp = input.ipv4Address || null;
+      let detectedGw = spec.ipv4Gateway || null;
       let hostProvisioned = false;
       let warning: string | undefined;
 
@@ -346,7 +351,12 @@ export class LXCAdapter implements VirtualizationAdapter {
         if (node.is_local) {
           const info = await this.nodeManager.localRuntime.containerManager.createContainer(spec);
           runtimeState = info.state === 'running' ? 'running' : 'stopped';
-          if (!detectedIp && info.ips.length > 0) detectedIp = info.ips[0];
+          if (!detectedIp && (info.ips.length > 0 || info.configuredIpv4)) {
+            detectedIp = info.ips[0] || info.configuredIpv4 || null;
+          }
+          if (!detectedGw && info.configuredGateway && info.configuredGateway !== 'auto') {
+            detectedGw = info.configuredGateway;
+          }
           if (info.startupWarning) warning = info.startupWarning;
           hostProvisioned = true;
         } else {
@@ -358,7 +368,12 @@ export class LXCAdapter implements VirtualizationAdapter {
             600_000
           );
           runtimeState = info.state === 'running' ? 'running' : 'stopped';
-          if (!detectedIp && info.ips?.length > 0) detectedIp = info.ips[0];
+          if (!detectedIp && (info.ips?.length > 0 || info.configuredIpv4)) {
+            detectedIp = info.ips?.[0] || info.configuredIpv4 || null;
+          }
+          if (!detectedGw && info.configuredGateway && info.configuredGateway !== 'auto') {
+            detectedGw = info.configuredGateway;
+          }
           if (info.startupWarning) warning = info.startupWarning;
           hostProvisioned = true;
         }
@@ -397,7 +412,7 @@ export class LXCAdapter implements VirtualizationAdapter {
           encryptedPass,
           spec.bridge,
           detectedIp,
-          spec.ipv4Gateway,
+          detectedGw,
           spec.ipv6Address,
           mac,
           spec.vlanId,
@@ -1041,6 +1056,23 @@ export class LXCAdapter implements VirtualizationAdapter {
           : row.status || 'stopped'
         : runtime.state;
 
+    const liveIp = runtime.ips?.[0] || runtime.configuredIpv4 || row.ip_address || null;
+    if (liveIp && !row.ip_address) {
+      await this.db
+        .run(
+          `UPDATE lxc_instances SET ip_address = ?, gateway = COALESCE(gateway, ?), updated_at = datetime('now') WHERE id = ?`,
+          [
+            liveIp,
+            runtime.configuredGateway && runtime.configuredGateway !== 'auto'
+              ? runtime.configuredGateway
+              : null,
+            refId,
+          ]
+        )
+        .catch(() => undefined);
+      await this.syncRegistryRow(refId).catch(() => undefined);
+    }
+
     return {
       engine: 'lxc',
       refId,
@@ -1054,7 +1086,88 @@ export class LXCAdapter implements VirtualizationAdapter {
       diskTotalGb: Number(row.disk_gb || 20),
       netRxBytes: runtime.rxBytes,
       netTxBytes: runtime.txBytes,
+      primaryIp: liveIp,
       measuredAt: new Date().toISOString(),
     };
+  }
+
+  public async repairLxcNetworking(refId: number): Promise<{
+    repair: LxcNetworkRepairResult;
+    instance: UnifiedInstanceRecord;
+  }> {
+    const row = await this.getRawLxcRow(refId);
+    if (!row) throw new Error(`LXC container #${refId} not found.`);
+
+    let repair: LxcNetworkRepairResult;
+    if (row.is_local) {
+      repair = await this.nodeManager.localRuntime.containerManager.repairContainerNetworking(
+        row.container_name
+      );
+    } else {
+      const resp = await this.nodeManager.requestRemoteNode<{ repair: LxcNetworkRepairResult }>(
+        row.node_id,
+        'POST',
+        `/api/v1/containers/${encodeURIComponent(row.container_name)}/repair-network`,
+        {}
+      );
+      repair = resp.repair;
+    }
+
+    if (repair.ipv4Address || repair.gateway) {
+      await this.db.run(
+        `UPDATE lxc_instances
+         SET ip_address = COALESCE(?, ip_address),
+             gateway = COALESCE(?, gateway),
+             updated_at = datetime('now')
+         WHERE id = ?`,
+        [repair.ipv4Address || null, repair.gateway || null, refId]
+      );
+      await this.syncRegistryRow(refId);
+    }
+
+    return {
+      repair,
+      instance: (await this.getInstance(refId))!,
+    };
+  }
+
+  /**
+   * Automatically repairs bridge NAT/FORWARD rules, missing IPv4 assignments, and guest
+   * `/etc/resolv.conf` on active local LXC containers during HKVM server startup.
+   */
+  public async healLocalContainersNetworking(): Promise<void> {
+    const localNode = await this.db.get<{ id: number }>(
+      `SELECT id FROM nodes WHERE is_local = 1 LIMIT 1`
+    );
+    if (!localNode) return;
+
+    const rows = await this.db.all<{ id: number; container_name: string }>(
+      `SELECT id, container_name FROM lxc_instances WHERE node_id = ? AND suspended = 0`,
+      [localNode.id]
+    );
+    const cm = this.nodeManager.localRuntime.containerManager;
+    for (const r of rows) {
+      try {
+        const cfgFile = `${cm.getContainerDir(r.container_name)}/config`;
+        const info = await cm.inspectContainer(r.container_name);
+        if (info.state === 'missing') continue;
+        // Ensure bridge NAT/FORWARD + guest DNS + auto-IP if missing
+        const repair = await cm.repairContainerNetworking(r.container_name);
+        if (repair.ipv4Address || repair.gateway) {
+          await this.db.run(
+            `UPDATE lxc_instances
+             SET ip_address = COALESCE(ip_address, ?),
+                 gateway = COALESCE(gateway, ?),
+                 updated_at = datetime('now')
+             WHERE id = ?`,
+            [repair.ipv4Address || null, repair.gateway || null, r.id]
+          );
+          await this.syncRegistryRow(r.id);
+        }
+        void cfgFile;
+      } catch {
+        // non-fatal per-container self-heal
+      }
+    }
   }
 }

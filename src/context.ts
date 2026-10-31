@@ -86,6 +86,9 @@ export async function initializeUnifiedHkvmRuntime(
 
   if (process.env.HKVM_DISABLE_BACKGROUND_POLLER !== 'true') {
     monitoringService.startBackgroundLoop(60_000);
+    lxcAdapter.healLocalContainersNetworking().catch((err) => {
+      console.warn('[LXC Network Self-Heal]', err?.message || err);
+    });
   }
 
   activeContext = {
