@@ -1147,6 +1147,13 @@ export const MIGRATIONS: MigrationDefinition[] = [
       await ensureColumn(db, 'password_reset_tokens', 'requested_ip', 'TEXT');
     },
   },
+  {
+    version: 6,
+    name: 'v006_add_lxc_kvm_nesting',
+    up: async (db) => {
+      await ensureColumn(db, 'lxc_instances', 'kvm_nesting', 'INTEGER DEFAULT 0');
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

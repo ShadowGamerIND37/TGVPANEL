@@ -454,14 +454,25 @@ export function createUnifiedWebRouter(
       const rawRow = await ctx.lxcAdapter.getRawLxcRow(lxcId);
       const lxcConfig = rawRow
         ? {
+            arch: rawRow.arch || 'amd64',
+            osFamily: rawRow.os_family || 'linux',
+            backingStore: rawRow.rootfs_storage_type || 'dir',
             cpuLimitPercent: Number(rawRow.cpu_limit_pct || 100),
             cpuShares: Number(rawRow.cpu_shares || 1024),
             cpuPinning: rawRow.cpu_pinning || '',
             bridge: rawRow.bridge || 'lxcbr0',
             ipAddress: rawRow.ip_address || '',
             gateway: rawRow.gateway || '',
+            ipv6Address: rawRow.ipv6_address || '',
+            macAddress: rawRow.mac_address || '',
+            vlanId: rawRow.vlan_id || null,
+            bandwidthQuotaGb: Number(rawRow.bandwidth_quota_gb || 0),
+            snapshotLimit: Number(rawRow.snapshot_limit || 5),
+            privileged: Boolean(rawRow.privileged),
             nesting: Boolean(rawRow.nesting),
+            kvmNesting: Boolean(rawRow.kvm_nesting),
             autostart: Boolean(rawRow.autostart),
+            notes: rawRow.notes || '',
           }
         : null;
       return res.render('users/lxc-detail', {
@@ -470,6 +481,7 @@ export function createUnifiedWebRouter(
         user: res.locals.user || (req as any).session?.user,
         instance,
         lxcConfig,
+        hostKvmAvailable: fs.existsSync('/dev/kvm'),
         templates,
         isStaff: ctx.instanceManager.isStaff(req.principal!),
       });

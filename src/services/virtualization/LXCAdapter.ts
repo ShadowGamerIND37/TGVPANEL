@@ -34,6 +34,7 @@ export interface CreateLxcInstanceInput {
   backingStore?: 'dir' | 'lvm' | 'zfs' | 'btrfs';
   privileged?: boolean;
   nesting?: boolean;
+  kvmNesting?: boolean;
   bridge?: string;
   ipv4Address?: string | null;
   ipv4Gateway?: string | null;
@@ -323,6 +324,7 @@ export class LXCAdapter implements VirtualizationAdapter {
         backingStore: input.backingStore || 'dir',
         privileged: input.privileged !== false,
         nesting: input.nesting !== false,
+        kvmNesting: Boolean(input.kvmNesting),
         bridge: input.bridge || 'lxcbr0',
         ipv4Address: input.ipv4Address || null,
         ipv4Gateway: input.ipv4Gateway || null,
@@ -368,10 +370,10 @@ export class LXCAdapter implements VirtualizationAdapter {
         `INSERT INTO lxc_instances (
           user_id, node_id, container_name, hostname, os_template, os_family, arch,
           cpu_cores, cpu_shares, cpu_limit_pct, cpu_pinning, ram_mb, swap_mb, disk_gb,
-          rootfs_storage_type, privileged, nesting, autostart, root_password_enc,
+          rootfs_storage_type, privileged, nesting, kvm_nesting, autostart, root_password_enc,
           bridge, ip_address, gateway, ipv6_address, mac_address, vlan_id,
           status, bandwidth_quota_gb, notes, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
         [
           input.userId,
           node.id,
@@ -390,6 +392,7 @@ export class LXCAdapter implements VirtualizationAdapter {
           spec.backingStore,
           spec.privileged ? 1 : 0,
           spec.nesting ? 1 : 0,
+          spec.kvmNesting ? 1 : 0,
           spec.autostart ? 1 : 0,
           encryptedPass,
           spec.bridge,
@@ -631,6 +634,7 @@ export class LXCAdapter implements VirtualizationAdapter {
       swapMb?: number;
       diskGb?: number;
       nesting?: boolean;
+      kvmNesting?: boolean;
       autostart?: boolean;
       bridge?: string;
       ipAddress?: string | null;
@@ -654,6 +658,7 @@ export class LXCAdapter implements VirtualizationAdapter {
         swapMb: patch.swapMb ?? row.swap_mb,
         diskGb: patch.diskGb ?? row.disk_gb,
         nesting: patch.nesting !== undefined ? patch.nesting : Boolean(row.nesting),
+        kvmNesting: patch.kvmNesting !== undefined ? patch.kvmNesting : Boolean(row.kvm_nesting),
         autostart: patch.autostart !== undefined ? patch.autostart : Boolean(row.autostart),
         bridge: patch.bridge ?? row.bridge,
         ipv4Address: patch.ipAddress !== undefined ? patch.ipAddress : row.ip_address,
@@ -696,6 +701,7 @@ export class LXCAdapter implements VirtualizationAdapter {
          swap_mb = COALESCE(?, swap_mb),
          disk_gb = COALESCE(?, disk_gb),
          nesting = COALESCE(?, nesting),
+         kvm_nesting = COALESCE(?, kvm_nesting),
          autostart = COALESCE(?, autostart),
          bridge = COALESCE(?, bridge),
          ip_address = CASE WHEN ? = '__KEEP__' THEN ip_address ELSE ? END,
@@ -716,6 +722,7 @@ export class LXCAdapter implements VirtualizationAdapter {
         patch.swapMb ?? null,
         patch.diskGb ?? null,
         patch.nesting !== undefined ? (patch.nesting ? 1 : 0) : null,
+        patch.kvmNesting !== undefined ? (patch.kvmNesting ? 1 : 0) : null,
         patch.autostart !== undefined ? (patch.autostart ? 1 : 0) : null,
         patch.bridge ?? null,
         patch.ipAddress === undefined ? '__KEEP__' : 'SET',
@@ -769,6 +776,7 @@ export class LXCAdapter implements VirtualizationAdapter {
       backingStore: row.rootfs_storage_type || 'dir',
       privileged: Boolean(row.privileged),
       nesting: Boolean(row.nesting),
+      kvmNesting: Boolean(row.kvm_nesting),
       bridge: row.bridge || 'lxcbr0',
       ipv4Address: row.ip_address || null,
       ipv4Gateway: row.gateway || null,

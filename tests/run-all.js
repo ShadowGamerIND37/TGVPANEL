@@ -145,7 +145,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
-    await runStep('T01: Transactional SQLite backup & migrations v001..v005 preserve legacy HKVM data', async () => {
+    await runStep('T01: Transactional SQLite backup & migrations v001..v006 preserve legacy HKVM data', async () => {
       const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
       const v2Raw = new sqlite3.Database(v2ScratchPath);
       const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
@@ -162,8 +162,11 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       `);
 
       const migRes = await runMigrations(v2Db);
-      assert.ok(migRes.applied.length >= 5, 'Expected v001..v005 migrations to apply');
+      assert.ok(migRes.applied.length >= 6, 'Expected v001..v006 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
+
+      const lxcCols = await v2Db.all(`PRAGMA table_info(lxc_instances)`);
+      assert.ok(lxcCols.some((c) => c.name === 'kvm_nesting'), 'Expected kvm_nesting column on lxc_instances');
 
       const adminUser = await v2Db.get(`SELECT * FROM users WHERE username = 'admin'`);
       assert.ok(adminUser, 'Legacy admin user preserved');
@@ -950,8 +953,10 @@ if [ "$STATE" = "RUNNING" ] || [ "$STATE" = "FROZEN" ]; then
   echo "PID:            $PID"
   CFG_IP="$(grep -E '^[[:space:]]*lxc\\.net\\.0\\.ipv4\\.address' "$CT/config" 2>/dev/null | tail -n 1 | awk -F= '{print $2}' | tr -d ' ' | cut -d/ -f1)"
   echo "IP:             \${CFG_IP:-10.88.10.200}"
-  echo "CPU use:        1.35 seconds"
-  echo "Memory use:     64.25 MiB"
+  if [ ! -f "$CT/.omit_mem_use" ]; then
+    echo "CPU use:        1.35 seconds"
+    echo "Memory use:     64.25 MiB"
+  fi
   echo "TX bytes:       18.00 KiB"
   echo "RX bytes:       42.00 KiB"
 fi
@@ -1663,6 +1668,116 @@ exec "$@"
           action: 'delete',
         });
       }
+    });
+
+    // 15. KVM Nesting (/dev/kvm passthrough), WSL2 /proc telemetry fallback & redesigned LXC Detail Control Center
+    await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
+      const ctx = app.getHkvmV3Context();
+      const { privilegedFs } = require('../lib/node-agent/command-runner');
+
+      // Verify LXC Create Studio renders the KVM Nesting toggle (#cKvmNest)
+      const createPage = await adminClient.request('GET', '/admin/instances/create?engine=lxc');
+      assert.strictEqual(createPage.status, 200);
+      assert.ok(createPage.text.includes('id="cKvmNest"'), 'Expected #cKvmNest toggle in LXC Create Studio');
+      assert.ok(createPage.text.includes('/dev/kvm'), 'Expected /dev/kvm explanation in LXC Create Studio');
+
+      // Provision a real LXC container with kvmNesting: true
+      const createRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'kvm-nested-lxc-01',
+        hostname: 'kvm-nested-01.hkvm.local',
+        nodeId: 1,
+        templateSlug: 'ubuntu-22.04',
+        cpuCores: 4,
+        ramMb: 4096,
+        swapMb: 512,
+        diskGb: 30,
+        nesting: true,
+        kvmNesting: true,
+        autostart: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(createRes.status, 201, `Create KVM-nested LXC failed: ${createRes.text}`);
+      const kvmCtId = createRes.json.instance.refId;
+
+      const dbRow = await ctx.db.get(`SELECT kvm_nesting, nesting, autostart FROM lxc_instances WHERE id = ?`, [kvmCtId]);
+      assert.strictEqual(dbRow.kvm_nesting, 1, 'Expected kvm_nesting=1 persisted in SQLite');
+
+      const cfgPath = path.join(process.env.HKVM_LXC_PATH, 'kvm-nested-lxc-01', 'config');
+      const cfgTextOn = privilegedFs.readTextSync(cfgPath);
+      assert.ok(
+        cfgTextOn.includes('lxc.mount.entry = /dev/kvm dev/kvm none bind,optional,create=file 0 0'),
+        'Expected /dev/kvm bind mount in container config'
+      );
+      assert.ok(
+        cfgTextOn.includes('lxc.mount.entry = /dev/net/tun dev/net/tun none bind,optional,create=file 0 0'),
+        'Expected /dev/net/tun bind mount in container config'
+      );
+      assert.ok(
+        cfgTextOn.includes('devices.allow = c 10:232 rwm') && cfgTextOn.includes('devices.allow = c 10:200 rwm'),
+        'Expected /dev/kvm (10:232) and /dev/net/tun (10:200) device allow rules'
+      );
+      assert.ok(
+        cfgTextOn.includes('lxc.apparmor.profile = unconfined'),
+        'Expected unconfined AppArmor profile when KVM nesting is enabled'
+      );
+
+      // Render redesigned LXC Detail Control Center (/lxc/:id)
+      const detailPage = await adminClient.request('GET', `/lxc/${kvmCtId}`);
+      assert.strictEqual(detailPage.status, 200, `GET /lxc/${kvmCtId} failed`);
+      assert.ok(detailPage.text.includes('class="lxc-hero"'), 'Expected redesigned .lxc-hero header');
+      assert.ok(detailPage.text.includes('id="pane-overview"'), 'Expected Overview & Specs pane');
+      assert.ok(detailPage.text.includes('id="pane-resources"'), 'Expected Staff Resources & KVM pane');
+      assert.ok(detailPage.text.includes('id="resKvmNesting" checked'), 'Expected #resKvmNesting checked for KVM-nested container');
+      assert.ok(detailPage.text.includes('Enabled (/dev/kvm + /dev/net/tun)'), 'Expected KVM status badge on Overview pane');
+
+      // Test WSL2 / undelegated cgroup-v2 /proc VmRSS telemetry fallback when lxc-info omits "Memory use:"
+      const { execFileSync } = require('child_process');
+      const omitMarker = path.join(process.env.HKVM_LXC_PATH, 'kvm-nested-lxc-01', '.omit_mem_use');
+      execFileSync('sudo', ['-n', 'touch', omitMarker]);
+      const localCm = new LxcContainerManager(process.env.HKVM_LXC_PATH);
+      const inspected = await localCm.inspectContainer('kvm-nested-lxc-01');
+      assert.strictEqual(inspected.state, 'running');
+      assert.ok(inspected.pid > 0, 'Expected live container init PID');
+      assert.ok(
+        inspected.memoryBytes > 0,
+        `Expected /proc descendant VmRSS fallback to report >0 bytes when lxc-info omits Memory use (got ${inspected.memoryBytes})`
+      );
+      const telFallback = await adminClient.request('GET', `/api/v1/instances/lxc/${kvmCtId}/telemetry`);
+      assert.strictEqual(telFallback.status, 200);
+      assert.strictEqual(telFallback.json.telemetry.status, 'running');
+      execFileSync('sudo', ['-n', 'rm', '-f', omitMarker]);
+
+      // Toggle kvmNesting OFF via PATCH /api/v1/lxc/:id -> verify rules cleanly stripped from config & DB
+      const patchOff = await adminClient.request('PATCH', `/api/v1/lxc/${kvmCtId}`, {
+        kvmNesting: false,
+      });
+      assert.strictEqual(patchOff.status, 200, `PATCH kvmNesting=false failed: ${patchOff.text}`);
+      const dbRowOff = await ctx.db.get(`SELECT kvm_nesting FROM lxc_instances WHERE id = ?`, [kvmCtId]);
+      assert.strictEqual(dbRowOff.kvm_nesting, 0);
+      const cfgTextOff = privilegedFs.readTextSync(cfgPath);
+      assert.ok(!cfgTextOff.includes('/dev/kvm'), 'Expected /dev/kvm mount removed when kvmNesting=false');
+      assert.ok(!cfgTextOff.includes('10:232'), 'Expected c 10:232 rwm removed when kvmNesting=false');
+
+      // Toggle kvmNesting back ON and reinstall -> verify reinstall preserves kvmNesting!
+      const patchOn = await adminClient.request('PATCH', `/api/v1/lxc/${kvmCtId}`, {
+        kvmNesting: true,
+      });
+      assert.strictEqual(patchOn.status, 200);
+      const reinst = await adminClient.request('POST', `/api/v1/lxc/${kvmCtId}/reinstall`, {
+        templateSlug: 'ubuntu:24.04',
+      });
+      assert.strictEqual(reinst.status, 200, `Reinstall failed: ${reinst.text}`);
+      const cfgAfterReinst = privilegedFs.readTextSync(cfgPath);
+      assert.ok(
+        cfgAfterReinst.includes('lxc.mount.entry = /dev/kvm dev/kvm none bind,optional,create=file 0 0'),
+        'Expected reinstall to preserve KVM nesting /dev/kvm passthrough'
+      );
+
+      // Cleanup container
+      const del = await adminClient.request('POST', `/api/v1/instances/lxc/${kvmCtId}/action`, {
+        action: 'delete',
+      });
+      assert.strictEqual(del.status, 200);
     });
   } finally {
     const { execFileSync } = require('child_process');

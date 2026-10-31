@@ -16,6 +16,7 @@ export interface LxcCreateSpec {
     backingStore?: 'dir' | 'lvm' | 'zfs' | 'btrfs';
     privileged?: boolean;
     nesting?: boolean;
+    kvmNesting?: boolean;
     apparmorProfile?: string;
     bridge?: string;
     ipv4Address?: string | null;
@@ -47,6 +48,7 @@ export interface LxcResourceUpdateSpec {
     swapMb?: number;
     diskGb?: number;
     nesting?: boolean;
+    kvmNesting?: boolean;
     privileged?: boolean;
     apparmorProfile?: string;
     autostart?: boolean;
@@ -98,6 +100,12 @@ export declare class LxcContainerManager {
     private ensureBridgeAvailable;
     listContainers(): Promise<LxcContainerRuntimeInfo[]>;
     inspectContainer(containerName: string): Promise<LxcContainerRuntimeInfo>;
+    /**
+     * Fallback live memory (VmRSS) & CPU time aggregator across `<initPid>` and all its
+     * descendant processes in `/proc` for hosts (e.g. WSL2 / un-delegated cgroup v2) where
+     * `lxc-info` does not emit `Memory use:` / `CPU use:`.
+     */
+    private measureContainerProcTree;
     private parseHumanSizeToBytes;
     private measureDirBytesFast;
     private getRootfsUsedBytes;
@@ -113,6 +121,7 @@ export declare class LxcContainerManager {
         ramMb?: number;
         swapMb?: number;
         nesting?: boolean;
+        kvmNesting?: boolean;
         privileged?: boolean;
         apparmorProfile?: string;
         autostart?: boolean;
