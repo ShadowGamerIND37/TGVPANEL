@@ -25,15 +25,75 @@ fi
 DEFAULT_INSTALL_DIR="${TGVPANEL_DIR:-${DETECTED_DIR:-/opt/tgvpanel}}"
 APP_DIR="$DEFAULT_INSTALL_DIR"
 
-# Colors & UI helpers
-C_RESET="\033[0m"
-C_BOLD="\033[1m"
-C_BLUE="\033[1;34m"
-C_CYAN="\033[1;36m"
-C_GREEN="\033[1;32m"
-C_YELLOW="\033[1;33m"
-C_RED="\033[1;31m"
-C_DIM="\033[2m"
+# Colors, Gradient Palette & ASCII Art UI Helpers
+if [[ -n "${NO_COLOR:-}" || "${TERM:-}" == "dumb" ]]; then
+  C_RESET=""
+  C_BOLD=""
+  C_BLUE=""
+  C_CYAN=""
+  C_GREEN=""
+  C_YELLOW=""
+  C_RED=""
+  C_DIM=""
+  C_GRAD1=""
+  C_GRAD2=""
+  C_GRAD3=""
+  C_GRAD4=""
+  C_GRAD5=""
+elif [[ "${TERM:-}" =~ (256color|xterm|screen|tmux|rxvt|kitty|alacritty|linux) ]] || { command -v tput >/dev/null 2>&1 && [[ "$(tput colors 2>/dev/null || echo 16)" -ge 256 ]]; }; then
+  C_RESET="\033[0m"
+  C_BOLD="\033[1m"
+  C_BLUE="\033[1;34m"
+  C_CYAN="\033[1;36m"
+  C_GREEN="\033[1;32m"
+  C_YELLOW="\033[1;33m"
+  C_RED="\033[1;31m"
+  C_DIM="\033[2m"
+  C_GRAD1="\033[1;38;5;51m"
+  C_GRAD2="\033[1;38;5;45m"
+  C_GRAD3="\033[1;38;5;39m"
+  C_GRAD4="\033[1;38;5;33m"
+  C_GRAD5="\033[1;38;5;69m"
+else
+  C_RESET="\033[0m"
+  C_BOLD="\033[1m"
+  C_BLUE="\033[1;34m"
+  C_CYAN="\033[1;36m"
+  C_GREEN="\033[1;32m"
+  C_YELLOW="\033[1;33m"
+  C_RED="\033[1;31m"
+  C_DIM="\033[2m"
+  C_GRAD1="\033[1;36m"
+  C_GRAD2="\033[1;36m"
+  C_GRAD3="\033[1;34m"
+  C_GRAD4="\033[1;34m"
+  C_GRAD5="\033[1;35m"
+fi
+
+# Raw 65-column pure 7-bit ASCII logo lines (safe across all SSH/TTY locales)
+TGVPANEL_ASCII_1=' _______  _____ __    __ _____      /\     _   _  ______  _      '
+TGVPANEL_ASCII_2='|__   __|/ ____|\ \  / /|  __ \    /  \   | \ | ||  ____|| |     '
+TGVPANEL_ASCII_3='   | |  | |  __  \ \/ / | |__) |  / /\ \  |  \| || |__   | |     '
+TGVPANEL_ASCII_4='   | |  | | |_ |  \  /  |  ___/  / ____ \ | |\  ||  __|  | |____ '
+TGVPANEL_ASCII_5='   |_|   \_____|   \/   |_|     /_/    \_\|_| \_||______||______|'
+
+print_ascii_logo() {
+  printf "  %b%s%b\n" "$C_GRAD1" "$TGVPANEL_ASCII_1" "$C_RESET"
+  printf "  %b%s%b\n" "$C_GRAD2" "$TGVPANEL_ASCII_2" "$C_RESET"
+  printf "  %b%s%b\n" "$C_GRAD3" "$TGVPANEL_ASCII_3" "$C_RESET"
+  printf "  %b%s%b\n" "$C_GRAD4" "$TGVPANEL_ASCII_4" "$C_RESET"
+  printf "  %b%s%b\n" "$C_GRAD5" "$TGVPANEL_ASCII_5" "$C_RESET"
+  printf "  %bUnified QEMU/KVM Virtual Machines  •  LXC Containers  •  v3.0%b\n" "$C_DIM" "$C_RESET"
+}
+
+print_section_banner() {
+  local title="$1"
+  echo ""
+  printf "%b+----------------------------------------------------------------------+%b\n" "$C_CYAN" "$C_RESET"
+  printf "%b|%b  %b%-68s%b%b|%b\n" "$C_CYAN" "$C_RESET" "$C_BOLD" "$title" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b+----------------------------------------------------------------------+%b\n" "$C_CYAN" "$C_RESET"
+  echo ""
+}
 
 info()  { printf "${C_BLUE}[TGVPANEL]${C_RESET} %s\n" "$*"; }
 ok()    { printf "${C_GREEN}[  OK  ]${C_RESET} %s\n" "$*"; }
@@ -471,9 +531,7 @@ configure_firewall_port() {
 # OPTION 1: Auto Install & Setup Panel
 # ==============================================================================
 option_install_panel() {
-  echo ""
-  echo -e "${C_BOLD}=== [1] Auto Install & Setup TGVPANEL (Controller + Local Compute) ===${C_RESET}"
-  echo ""
+  print_section_banner "[1] Auto Install & Setup TGVPANEL (24/7 Controller + Compute)"
 
   local target_dir
   target_dir="$(prompt_default "Installation directory" "$APP_DIR")"
@@ -612,9 +670,7 @@ option_install_panel() {
 # OPTION 2: Auto Configure Node (Remote Compute Node -> Online 24/7)
 # ==============================================================================
 option_configure_node() {
-  echo ""
-  echo -e "${C_BOLD}=== [2] Auto Configure Remote Compute Node (24/7 Node Agent) ===${C_RESET}"
-  echo ""
+  print_section_banner "[2] Auto Configure Remote Compute Node (24/7 Node Agent)"
 
   local target_dir
   target_dir="$(prompt_default "Node Agent installation directory" "$APP_DIR")"
@@ -1145,9 +1201,7 @@ migration_panel_bundle() {
 }
 
 option_migration_menu() {
-  echo ""
-  echo -e "${C_BOLD}=== [3] TGVPANEL Migration Center ===${C_RESET}"
-  echo ""
+  print_section_banner "[3] TGVPANEL Migration Center"
   local target_dir
   target_dir="$(prompt_default "TGVPANEL directory" "$APP_DIR")"
   APP_DIR="$target_dir"
@@ -1175,9 +1229,7 @@ option_migration_menu() {
 # OPTION 4: Auto Update (Zero-Data-Loss Backup -> Git Pull -> Build -> Restart)
 # ==============================================================================
 option_auto_update() {
-  echo ""
-  echo -e "${C_BOLD}=== [4] Auto Update TGVPANEL ===${C_RESET}"
-  echo ""
+  print_section_banner "[4] Zero-Data-Loss Auto Update"
   local target_dir="${1:-}"
   if [[ -z "$target_dir" ]]; then
     target_dir="$(prompt_default "TGVPANEL directory to update" "$APP_DIR")"
@@ -1225,11 +1277,17 @@ option_auto_update() {
 # OPTION 5: Service Status, Control & Live Logs
 # ==============================================================================
 print_status_summary() {
+  local show_logo="${1:-0}"
   local panel_state agent_state panel_port agent_port
   panel_state="$(get_service_state "tgvpanel" "$APP_DIR/data/tgvpanel-panel.pid")"
   agent_state="$(get_service_state "tgvpanel-node-agent" "$APP_DIR/data/tgvpanel-agent.pid")"
   panel_port="$(read_env_val "PORT" "$APP_DIR/.env")"
   agent_port="$(read_env_val "TGVPANEL_AGENT_PORT" "$APP_DIR/.env")"
+
+  if [[ "$show_logo" == "1" ]]; then
+    echo ""
+    print_ascii_logo
+  fi
 
   echo ""
   echo -e "${C_BOLD}--- TGVPANEL Runtime Status ---${C_RESET}"
@@ -1244,7 +1302,8 @@ print_status_summary() {
 }
 
 option_service_control() {
-  print_status_summary
+  print_section_banner "[5] Service Status, Control & Live Logs"
+  print_status_summary 0
   echo ""
   echo "Service Actions:"
   echo "  1) Restart Panel (24/7)"
@@ -1301,11 +1360,12 @@ option_service_control() {
 # Interactive Main Menu Loop & CLI Entrypoint
 # ==============================================================================
 render_banner() {
-  local p_state a_state p_port a_port p_badge a_badge
+  local p_state a_state p_port a_port p_badge a_badge host_ip kvm_badge lxc_badge
   p_state="$(get_service_state "tgvpanel" "$APP_DIR/data/tgvpanel-panel.pid")"
   a_state="$(get_service_state "tgvpanel-node-agent" "$APP_DIR/data/tgvpanel-agent.pid")"
   p_port="$(read_env_val "PORT" "$APP_DIR/.env")"
   a_port="$(read_env_val "TGVPANEL_AGENT_PORT" "$APP_DIR/.env")"
+  host_ip="$(detect_primary_ip)"
 
   if [[ "$p_state" == "running" ]]; then
     p_badge="${C_GREEN}● ONLINE (:${p_port:-8080})${C_RESET}"
@@ -1319,26 +1379,45 @@ render_banner() {
     a_badge="${C_DIM}○ STOPPED${C_RESET}"
   fi
 
+  if [[ -e /dev/kvm ]]; then
+    kvm_badge="${C_GREEN}KVM:READY${C_RESET}"
+  else
+    kvm_badge="${C_DIM}KVM:N/A${C_RESET}"
+  fi
+
+  if command -v lxc-create >/dev/null 2>&1; then
+    lxc_badge="${C_GREEN}LXC:READY${C_RESET}"
+  else
+    lxc_badge="${C_DIM}LXC:N/A${C_RESET}"
+  fi
+
   clear 2>/dev/null || true
-  echo -e "${C_CYAN}╔══════════════════════════════════════════════════════════════════════╗${C_RESET}"
-  echo -e "${C_CYAN}║${C_RESET}             ${C_BOLD}TGVPANEL — UNIFIED MANAGEMENT MENU V3.0${C_RESET}                  ${C_CYAN}║${C_RESET}"
-  echo -e "${C_CYAN}║${C_RESET}          QEMU/KVM Virtual Machines  •  LXC Containers                ${C_CYAN}║${C_RESET}"
-  echo -e "${C_CYAN}╠══════════════════════════════════════════════════════════════════════╣${C_RESET}"
+  printf "%b╔══════════════════════════════════════════════════════════════════════╗%b\n" "$C_CYAN" "$C_RESET"
+  printf "%b║%b   %b%s%b  %b║%b\n" "$C_CYAN" "$C_RESET" "$C_GRAD1" "$TGVPANEL_ASCII_1" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b║%b   %b%s%b  %b║%b\n" "$C_CYAN" "$C_RESET" "$C_GRAD2" "$TGVPANEL_ASCII_2" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b║%b   %b%s%b  %b║%b\n" "$C_CYAN" "$C_RESET" "$C_GRAD3" "$TGVPANEL_ASCII_3" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b║%b   %b%s%b  %b║%b\n" "$C_CYAN" "$C_RESET" "$C_GRAD4" "$TGVPANEL_ASCII_4" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b║%b   %b%s%b  %b║%b\n" "$C_CYAN" "$C_RESET" "$C_GRAD5" "$TGVPANEL_ASCII_5" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b║%b                                                                      %b║%b\n" "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b║%b        %bUNIFIED VIRTUALIZATION MANAGEMENT MENU  •  VERSION 3.0%b        %b║%b\n" "$C_CYAN" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b║%b          %bQEMU/KVM Virtual Machines  •  LXC Containers  •  24/7%b       %b║%b\n" "$C_CYAN" "$C_RESET" "$C_DIM" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b╠══════════════════════════════════════════════════════════════════════╣%b\n" "$C_CYAN" "$C_RESET"
   echo -e "  Panel : ${p_badge}      Node Agent : ${a_badge}"
-  echo -e "  Path  : ${C_BOLD}${APP_DIR}${C_RESET}"
-  echo -e "${C_CYAN}╠══════════════════════════════════════════════════════════════════════╣${C_RESET}"
-  echo -e "  ${C_BOLD}1)${C_RESET} Auto Install & Setup Panel   ${C_DIM}(GitHub -> Deps -> Run Panel 24/7)${C_RESET}"
-  echo -e "  ${C_BOLD}2)${C_RESET} Auto Configure Node          ${C_DIM}(Interactive Setup -> Online 24/7)${C_RESET}"
-  echo -e "  ${C_BOLD}3)${C_RESET} Migration                    ${C_DIM}(Schema / Legacy DB / Node VPS / Bundle)${C_RESET}"
-  echo -e "  ${C_BOLD}4)${C_RESET} Auto Update                  ${C_DIM}(Safe DB Backup -> Git Pull -> Rebuild)${C_RESET}"
-  echo -e "  ${C_BOLD}5)${C_RESET} Service Status & Live Logs   ${C_DIM}(Start / Stop / Restart / Logs)${C_RESET}"
-  echo -e "  ${C_BOLD}0)${C_RESET} Exit"
-  echo -e "${C_CYAN}╚══════════════════════════════════════════════════════════════════════╝${C_RESET}"
+  echo -e "  Host  : ${C_BOLD}${host_ip}${C_RESET}   (${kvm_badge} • ${lxc_badge})   Path: ${C_BOLD}${APP_DIR}${C_RESET}"
+  printf "%b╠══════════════════════════════════════════════════════════════════════╣%b\n" "$C_CYAN" "$C_RESET"
+  echo -e "  ${C_CYAN}[1]${C_RESET} ${C_BOLD}Auto Install & Setup Panel${C_RESET}   ${C_DIM}(GitHub -> Deps -> Run Panel 24/7)${C_RESET}"
+  echo -e "  ${C_CYAN}[2]${C_RESET} ${C_BOLD}Auto Configure Node${C_RESET}          ${C_DIM}(Interactive Setup -> Online 24/7)${C_RESET}"
+  echo -e "  ${C_CYAN}[3]${C_RESET} ${C_BOLD}Migration${C_RESET}                    ${C_DIM}(Schema / Legacy DB / Node VPS / Bundle)${C_RESET}"
+  echo -e "  ${C_CYAN}[4]${C_RESET} ${C_BOLD}Auto Update${C_RESET}                  ${C_DIM}(Safe DB Backup -> Git Pull -> Rebuild)${C_RESET}"
+  echo -e "  ${C_CYAN}[5]${C_RESET} ${C_BOLD}Service Status & Live Logs${C_RESET}   ${C_DIM}(Start / Stop / Restart / Logs)${C_RESET}"
+  echo -e "  ${C_CYAN}[0]${C_RESET} ${C_BOLD}Exit${C_RESET}"
+  printf "%b╚══════════════════════════════════════════════════════════════════════╝%b\n" "$C_CYAN" "$C_RESET"
 }
 
 print_help() {
+  echo ""
+  print_ascii_logo
   cat <<EOF
-TGVPANEL Unified Management Menu (menu.sh)
 
 Usage:
   sudo bash menu.sh                 Launch interactive menu
@@ -1356,7 +1435,7 @@ main() {
       exit 0
       ;;
     --status)
-      print_status_summary
+      print_status_summary 1
       exit 0
       ;;
     --migrate-db)
