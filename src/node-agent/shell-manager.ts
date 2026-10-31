@@ -6,7 +6,9 @@ import { runAllowlistedCommand } from './command-runner';
 export interface HostDiagnosticResult {
   preset: string;
   description: string;
+  command: string;
   exitCode: number;
+  durationMs: number;
   output: string;
   executedAt: string;
 }
@@ -49,17 +51,19 @@ export class AdminNodeShellManager {
   ): Promise<HostDiagnosticResult> {
     const presets: Record<
       string,
-      { bin: string; args: string[]; description: string }
+      { bin: string; args: string[]; description: string; asRoot?: boolean }
     > = {
       uptime: { bin: 'uptime', args: [], description: 'Host uptime and load averages' },
       uname: { bin: 'uname', args: ['-a'], description: 'Kernel and architecture version' },
       memory: { bin: 'free', args: ['-h'], description: 'Host RAM and swap allocation' },
       disk: { bin: 'df', args: ['-hT'], description: 'Mounted filesystems and disk usage' },
+      processes: { bin: 'ps', args: ['aux', '--sort=-%mem'], description: 'Top host processes by memory' },
       network_links: { bin: 'ip', args: ['-br', 'addr'], description: 'Network interfaces and IP addresses' },
       network_routes: { bin: 'ip', args: ['route'], description: 'Kernel IPv4 routing table' },
       bridges: { bin: 'ip', args: ['link', 'show', 'type', 'bridge'], description: 'Linux network bridges' },
-      processes: { bin: 'ps', args: ['aux', '--sort=-%mem'], description: 'Top host processes by memory' },
-      lxc_list: { bin: 'lxc-ls', args: ['-f'], description: 'LXC containers summary' },
+      iptables_nat: { bin: 'iptables', args: ['-t', 'nat', '-S'], description: 'Host NAT & MASQUERADE rules', asRoot: true },
+      sysctl_net: { bin: 'sysctl', args: ['net.ipv4.ip_forward'], description: 'Kernel IPv4 packet forwarding state' },
+      lxc_list: { bin: 'lxc-ls', args: ['-f'], description: 'LXC containers runtime summary', asRoot: true },
       lxc_checkconfig: { bin: 'lxc-checkconfig', args: [], description: 'Kernel LXC namespace/cgroup support' },
       qemu_version: { bin: 'qemu-system-x86_64', args: ['--version'], description: 'QEMU hypervisor version' },
     };
@@ -71,18 +75,25 @@ export class AdminNodeShellManager {
       );
     }
 
-    const res = await runAllowlistedCommand(chosen.bin, chosen.args, { timeoutMs: 15_000 });
+    const res = await runAllowlistedCommand(chosen.bin, chosen.args, {
+      timeoutMs: 15_000,
+      asRoot: chosen.asRoot,
+    });
     this.onAuditEvent?.({
       action: 'node_diagnostic_executed',
       actor,
       details: { preset, exitCode: res.exitCode },
     });
 
+    const combined = [res.stdout?.trimEnd(), res.stderr?.trimEnd()].filter(Boolean).join('\n');
+
     return {
       preset,
       description: chosen.description,
+      command: [chosen.bin, ...chosen.args].join(' '),
       exitCode: res.exitCode,
-      output: (res.stdout || res.stderr || '').slice(0, 64_000),
+      durationMs: res.durationMs,
+      output: (combined || '(Command completed with no output)').slice(0, 64_000),
       executedAt: new Date().toISOString(),
     };
   }

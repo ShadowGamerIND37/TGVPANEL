@@ -216,6 +216,227 @@
       background: linear-gradient(90deg, #06b6d4, #818cf8, #22d3ee);
       animation: lxcIndeterminate 1.4s infinite ease-in-out;
     }
+
+    /* --- Node Diagnostic & Host Console Studio --- */
+    .nc-wrap { max-width: 1440px; margin: 0 auto; }
+    .nc-hero {
+      background: linear-gradient(145deg, rgba(6, 182, 212, 0.08) 0%, rgba(99, 102, 241, 0.06) 50%, var(--bg-card) 100%);
+      border: 1px solid var(--border-card);
+      border-radius: 16px;
+      padding: 20px 22px;
+      margin-bottom: 18px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+    .nc-hero::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, #06b6d4, #6366f1, #10b981);
+    }
+    .nc-hero-left { display: flex; align-items: center; gap: 15px; min-width: 0; }
+    .nc-hero-icon {
+      width: 48px; height: 48px; border-radius: 13px; flex-shrink: 0;
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(99, 102, 241, 0.2));
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      color: #22d3ee;
+      display: inline-flex; align-items: center; justify-content: center;
+      box-shadow: 0 6px 20px rgba(6, 182, 212, 0.14);
+    }
+    .nc-title-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+    .nc-title { margin: 0; font-size: 21px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.3px; }
+    .nc-sub { margin: 4px 0 0; font-size: 12.5px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .nc-hero-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+    .nc-node-select-wrap {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(10, 12, 18, 0.85); border: 1px solid var(--border-color);
+      border-radius: 10px; padding: 4px 10px 4px 12px;
+    }
+    .nc-node-select-wrap label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--text-muted); margin: 0; white-space: nowrap;
+    }
+    .nc-node-select {
+      background: transparent; border: none; color: var(--text-primary);
+      font-size: 13px; font-weight: 700; padding: 5px 4px; outline: none; cursor: pointer;
+    }
+    .nc-node-select option { background: #0f111a; color: #f3f4f6; }
+
+    .nc-telemetry-grid {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px;
+    }
+    @media (max-width: 1180px) { .nc-telemetry-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 640px) { .nc-telemetry-grid { grid-template-columns: 1fr; } }
+    .nc-stat-card {
+      background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 13px;
+      padding: 15px 17px; display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
+      transition: border-color 0.18s ease;
+    }
+    .nc-stat-card:hover { border-color: rgba(255,255,255,0.2); }
+    .nc-stat-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .nc-stat-label { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+    .nc-stat-val { font-size: 20px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.3px; }
+    .nc-bar-track { width: 100%; height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; }
+    .nc-bar-fill { height: 100%; border-radius: 999px; transition: width 0.35s ease; }
+    .nc-stat-foot { font-size: 11.5px; color: var(--text-secondary); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .nc-cap-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .nc-cap-chip {
+      display: inline-flex; align-items: center; justify-content: space-between; gap: 6px;
+      padding: 5px 8px; border-radius: 7px; font-size: 11px; font-weight: 600;
+      background: rgba(255,255,255,0.03); border: 1px solid var(--border-subtle); color: var(--text-secondary);
+    }
+    .nc-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+    .nc-dot.ok { background: #10b981; box-shadow: 0 0 8px rgba(16,185,129,0.6); }
+    .nc-dot.warn { background: #f59e0b; box-shadow: 0 0 8px rgba(245,158,11,0.5); }
+    .nc-dot.off { background: #6b7280; }
+
+    .nc-workbench {
+      display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; margin-bottom: 18px; align-items: stretch;
+    }
+    @media (max-width: 1040px) { .nc-workbench { grid-template-columns: 1fr; } }
+
+    .nc-preset-panel {
+      background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 14px;
+      padding: 15px; display: flex; flex-direction: column; gap: 11px;
+    }
+    .nc-preset-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .nc-preset-head h3 { margin: 0; font-size: 14.5px; font-weight: 700; color: var(--text-primary); }
+    .nc-search {
+      width: 100%; padding: 8px 11px; border-radius: 9px; border: 1px solid var(--border-color);
+      background: rgba(10, 12, 18, 0.75); color: var(--text-primary); font-size: 12.5px; outline: none;
+    }
+    .nc-search:focus { border-color: rgba(6, 182, 212, 0.5); }
+    .nc-cat-tabs { display: flex; gap: 5px; flex-wrap: wrap; }
+    .nc-cat-btn {
+      padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 700;
+      border: 1px solid var(--border-color); background: transparent; color: var(--text-muted);
+      cursor: pointer; transition: all 0.15s ease;
+    }
+    .nc-cat-btn:hover { color: var(--text-primary); border-color: rgba(6,182,212,0.4); }
+    .nc-cat-btn.active { background: rgba(6,182,212,0.16); color: #22d3ee; border-color: rgba(6,182,212,0.45); }
+
+    .nc-preset-list {
+      display: flex; flex-direction: column; gap: 6px; max-height: 430px; overflow-y: auto; padding-right: 3px;
+    }
+    .nc-preset-btn {
+      width: 100%; text-align: left; padding: 9px 11px; border-radius: 10px;
+      border: 1px solid var(--border-subtle); background: rgba(255,255,255,0.02);
+      color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 10px;
+      transition: all 0.15s ease;
+    }
+    .nc-preset-btn:hover {
+      border-color: rgba(6, 182, 212, 0.4); background: rgba(6, 182, 212, 0.05); transform: translateX(2px);
+    }
+    .nc-preset-btn.active {
+      border-color: #06b6d4; background: rgba(6, 182, 212, 0.11);
+      box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.25);
+    }
+    .nc-preset-ico {
+      width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+      display: inline-flex; align-items: center; justify-content: center; font-size: 13px;
+    }
+    .nc-preset-ico.sys { background: rgba(6,182,212,0.14); color: #22d3ee; }
+    .nc-preset-ico.net { background: rgba(99,102,241,0.16); color: #818cf8; }
+    .nc-preset-ico.virt { background: rgba(16,185,129,0.15); color: #34d399; }
+    .nc-preset-meta { min-width: 0; flex: 1; }
+    .nc-preset-name { font-size: 12.5px; font-weight: 700; color: var(--text-primary); line-height: 1.2; }
+    .nc-preset-cmd {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px; color: var(--text-muted); margin-top: 2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    .nc-term-card {
+      background: #07080d; border: 1px solid rgba(255,255,255,0.12); border-radius: 14px;
+      display: flex; flex-direction: column; overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+    }
+    .nc-term-bar {
+      background: linear-gradient(180deg, #11131d 0%, #0b0d14 100%);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      padding: 10px 14px; display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; flex-wrap: wrap;
+    }
+    .nc-term-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+    .nc-win-dots { display: inline-flex; gap: 6px; align-items: center; margin-right: 4px; }
+    .nc-win-dots span { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .nc-cmd-badge {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px; color: #e2e8f0; background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.09); border-radius: 7px; padding: 3px 9px;
+      max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .nc-cmd-badge .prompt { color: #22d3ee; font-weight: 700; margin-right: 5px; }
+    .nc-term-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .nc-tool-btn {
+      padding: 5px 9px; border-radius: 7px; font-size: 11.5px; font-weight: 600;
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
+      color: #cbd5e1; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+      transition: all 0.14s ease;
+    }
+    .nc-tool-btn:hover { background: rgba(255,255,255,0.1); color: #ffffff; border-color: rgba(255,255,255,0.22); }
+    .nc-tool-btn.primary {
+      background: rgba(6, 182, 212, 0.16); border-color: rgba(6, 182, 212, 0.4); color: #22d3ee;
+    }
+    .nc-tool-btn.primary:hover { background: rgba(6, 182, 212, 0.26); color: #67e8f9; }
+    .nc-tool-btn.danger {
+      background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.32); color: #f87171;
+    }
+    .nc-tool-btn.danger:hover { background: rgba(239, 68, 68, 0.22); }
+
+    .nc-term-body {
+      flex: 1; min-height: 390px; max-height: 470px; overflow: auto;
+      padding: 15px 18px; margin: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Cascadia Mono", Consolas, monospace;
+      font-size: 12.5px; line-height: 1.58; color: #e2e8f0; white-space: pre;
+      background: radial-gradient(circle at top right, rgba(6,182,212,0.04), transparent 45%), #06070c;
+    }
+    .nc-term-body.wrap { white-space: pre-wrap; word-break: break-word; }
+
+    .nc-term-foot {
+      background: #0a0c13; border-top: 1px solid rgba(255,255,255,0.07);
+      padding: 8px 14px; display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; flex-wrap: wrap; font-size: 11.5px; color: var(--text-muted);
+    }
+    .nc-history-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .nc-hist-chip {
+      padding: 2px 8px; border-radius: 6px; font-family: monospace; font-size: 11px;
+      background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.09);
+      color: #94a3b8; cursor: pointer; transition: all 0.14s ease;
+    }
+    .nc-hist-chip:hover { color: #22d3ee; border-color: rgba(6,182,212,0.4); }
+
+    .nc-pty-card {
+      background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 14px;
+      overflow: hidden; margin-bottom: 18px;
+    }
+    .nc-pty-card.fullscreen {
+      position: fixed; inset: 12px; z-index: 9999; margin: 0;
+      display: flex; flex-direction: column; background: #06070c;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.92);
+    }
+    .nc-pty-card.fullscreen #nodeXtermBox { flex: 1; height: auto !important; }
+    .nc-pty-locked {
+      background: radial-gradient(ellipse at top, rgba(245, 158, 11, 0.06) 0%, transparent 60%), #07080d;
+      padding: 26px 24px;
+      display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, 1fr); gap: 22px; align-items: center;
+    }
+    @media (max-width: 900px) { .nc-pty-locked { grid-template-columns: 1fr; } }
+    .nc-env-snippet {
+      background: #0c0e17; border: 1px solid rgba(255,255,255,0.1); border-radius: 11px;
+      padding: 14px 15px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+    }
+    .nc-ansi-green { color: #34d399; font-weight: 600; }
+    .nc-ansi-yellow { color: #fbbf24; font-weight: 600; }
+    .nc-ansi-red { color: #f87171; font-weight: 600; }
+    .nc-ansi-cyan { color: #22d3ee; }
+    .nc-ansi-bold { color: #f8fafc; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -1110,36 +1331,261 @@
 
       <!-- SECTION: NODE CONSOLE -->
       <% if (section === 'node-console') { %>
-      <div class="v3-toolbar">
-        <div>
-          <h2 style="margin:0;color:var(--text-primary);">Audited Node Diagnostic &amp; Host Console</h2>
-          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Execute allowlisted diagnostic commands safely, or open an audited PTY host shell when enabled by policy.</p>
+      <%
+        const _ncNodes = Array.isArray(nodes) ? nodes : [];
+        const _ncPresets = [
+          { id: 'uptime', cat: 'sys', label: 'Uptime & Load Avg', cmd: 'uptime', svg: '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/>' },
+          { id: 'uname', cat: 'sys', label: 'Kernel & Architecture', cmd: 'uname -a', svg: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/>' },
+          { id: 'memory', cat: 'sys', label: 'Memory & Swap Usage', cmd: 'free -h', svg: '<path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M4 6h16a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z"/>' },
+          { id: 'disk', cat: 'sys', label: 'Filesystems & Storage', cmd: 'df -hT', svg: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>' },
+          { id: 'processes', cat: 'sys', label: 'Top Host Processes', cmd: 'ps aux --sort=-%mem', svg: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>' },
+          { id: 'network_links', cat: 'net', label: 'Network Interfaces & IPs', cmd: 'ip -br addr', svg: '<rect x="2" y="2" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><path d="M5 8v8M8 5h11v11"/>' },
+          { id: 'network_routes', cat: 'net', label: 'IPv4 Routing Table', cmd: 'ip route', svg: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/>' },
+          { id: 'bridges', cat: 'net', label: 'Linux Bridges', cmd: 'ip link show type bridge', svg: '<path d="M4 18v-6a8 8 0 0 1 16 0v6"/><line x1="2" y1="18" x2="22" y2="18"/><line x1="8" y1="12" x2="8" y2="18"/><line x1="16" y1="12" x2="16" y2="18"/>' },
+          { id: 'iptables_nat', cat: 'net', label: 'NAT & Masquerade Rules', cmd: 'iptables -t nat -S', svg: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>' },
+          { id: 'sysctl_net', cat: 'net', label: 'IPv4 Packet Forwarding', cmd: 'sysctl net.ipv4.ip_forward', svg: '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>' },
+          { id: 'lxc_list', cat: 'virt', label: 'LXC Runtime Summary', cmd: 'lxc-ls -f', svg: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>' },
+          { id: 'lxc_checkconfig', cat: 'virt', label: 'LXC Kernel Capabilities', cmd: 'lxc-checkconfig', svg: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>' },
+          { id: 'qemu_version', cat: 'virt', label: 'QEMU Hypervisor Version', cmd: 'qemu-system-x86_64 --version', svg: '<rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>' }
+        ];
+      %>
+      <div class="nc-wrap">
+        <!-- Hero Header -->
+        <div class="nc-hero">
+          <div class="nc-hero-left">
+            <div class="nc-hero-icon" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="4 17 10 11 4 5"></polyline>
+                <line x1="12" y1="19" x2="20" y2="19"></line>
+              </svg>
+            </div>
+            <div>
+              <div class="nc-title-row">
+                <h2 class="nc-title">Node Diagnostic &amp; Host Console</h2>
+                <span class="v3-pill kvm" style="font-size:10.5px;letter-spacing:0.5px;">SUPER-ADMIN AUDITED</span>
+                <span id="ncNodeStatePill" class="v3-pill online" style="font-size:10.5px;">&bull; ONLINE</span>
+              </div>
+              <p class="nc-sub">
+                <span id="ncHostMeta">Inspecting live host state via shell-free allowlisted binaries</span>
+                <span>&bull;</span>
+                <span id="ncUptimeMeta">Telemetry ready</span>
+              </p>
+            </div>
+          </div>
+
+          <div class="nc-hero-actions">
+            <div class="nc-node-select-wrap">
+              <label for="diagNode">Target Node</label>
+              <select id="diagNode" class="nc-node-select" onchange="onNodeConsoleSwitch()">
+                <% _ncNodes.forEach(n => { %>
+                  <option value="<%= n.id %>"><%= n.name %> (<%= n.is_local ? 'local' : n.ip_address %>)</option>
+                <% }) %>
+              </select>
+            </div>
+            <button type="button" class="btn btn-outline" id="ncRefreshTelemetryBtn" onclick="refreshNodeConsoleTelemetry()" style="padding:8px 13px;font-size:12.5px;">
+              &#8635; Refresh Telemetry
+            </button>
+            <button type="button" class="btn btn-primary" id="ncHealthSuiteBtn" onclick="runNodeHealthSuite()" style="padding:8px 14px;font-size:12.5px;">
+              &#9654; Run Full Health Check
+            </button>
+            <a href="/admin/audit-logs" class="btn btn-outline" style="padding:8px 12px;font-size:12.5px;">Audit Trail</a>
+          </div>
         </div>
-      </div>
-      <div class="v3-card">
-        <h3>Safe Allowlisted Host Diagnostics</h3>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-          <select id="diagNode" style="padding:8px 12px;border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-color);">
-            <% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %>
-          </select>
-          <% ['uptime','uname','memory','disk','network_links','bridges','lxc_list','lxc_checkconfig','qemu_version'].forEach(p => { %>
-          <button class="btn btn-outline" onclick="runDiag('<%= p %>')"><%= p %></button>
-          <% }) %>
+
+        <!-- Live 4-Card Host Telemetry Strip -->
+        <div class="nc-telemetry-grid">
+          <div class="nc-stat-card">
+            <div class="nc-stat-top">
+              <span class="nc-stat-label">CPU &amp; Load Average</span>
+              <span class="nc-stat-val" id="ncCpuVal">&mdash;</span>
+            </div>
+            <div class="nc-bar-track">
+              <div class="nc-bar-fill" id="ncCpuBar" style="width:0%;background:linear-gradient(90deg,#06b6d4,#6366f1);"></div>
+            </div>
+            <div class="nc-stat-foot">
+              <span id="ncCpuCores">&mdash; Cores</span>
+              <span id="ncLoadAvg">Load: &mdash;</span>
+            </div>
+          </div>
+
+          <div class="nc-stat-card">
+            <div class="nc-stat-top">
+              <span class="nc-stat-label">Memory &amp; Swap</span>
+              <span class="nc-stat-val" id="ncRamVal">&mdash;</span>
+            </div>
+            <div class="nc-bar-track">
+              <div class="nc-bar-fill" id="ncRamBar" style="width:0%;background:linear-gradient(90deg,#8b5cf6,#ec4899);"></div>
+            </div>
+            <div class="nc-stat-foot">
+              <span id="ncRamDetail">&mdash; / &mdash; MB</span>
+              <span id="ncSwapDetail">Swap: &mdash;</span>
+            </div>
+          </div>
+
+          <div class="nc-stat-card">
+            <div class="nc-stat-top">
+              <span class="nc-stat-label">Root Filesystem</span>
+              <span class="nc-stat-val" id="ncDiskVal">&mdash;</span>
+            </div>
+            <div class="nc-bar-track">
+              <div class="nc-bar-fill" id="ncDiskBar" style="width:0%;background:linear-gradient(90deg,#10b981,#06b6d4);"></div>
+            </div>
+            <div class="nc-stat-foot">
+              <span id="ncDiskDetail">&mdash; / &mdash; GB</span>
+              <span id="ncDiskFree">&mdash; free</span>
+            </div>
+          </div>
+
+          <div class="nc-stat-card">
+            <div class="nc-stat-top">
+              <span class="nc-stat-label">Engine &amp; Policy Matrix</span>
+              <span class="v3-pill lxc" style="font-size:10px;padding:1px 7px;" id="ncAgentVer">v3.0</span>
+            </div>
+            <div class="nc-cap-grid">
+              <div class="nc-cap-chip"><span>KVM /dev/kvm</span><span class="nc-dot off" id="ncCapKvm"></span></div>
+              <div class="nc-cap-chip"><span>QEMU Binary</span><span class="nc-dot off" id="ncCapQemu"></span></div>
+              <div class="nc-cap-chip"><span>LXC Runtime</span><span class="nc-dot off" id="ncCapLxc"></span></div>
+              <div class="nc-cap-chip"><span>Host PTY</span><span class="nc-dot <%= interactiveEnabled ? 'ok' : 'warn' %>"></span></div>
+            </div>
+          </div>
         </div>
-        <div id="diagOutput" class="v3-code">Select a diagnostic preset above to inspect real host state.</div>
-      </div>
-      <div class="v3-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <h3 style="margin:0;">Interactive Host PTY Shell (<%= interactiveEnabled ? 'ENABLED' : 'DISABLED BY POLICY' %>)</h3>
-          <% if (interactiveEnabled) { %>
-          <button class="btn btn-primary" onclick="connectNodeShell()">Connect Audited xterm.js Shell</button>
+
+        <!-- Safe Diagnostic Workbench (Sidebar + Terminal Output Window) -->
+        <div class="nc-workbench">
+          <div class="nc-preset-panel">
+            <div class="nc-preset-head">
+              <h3>Safe Diagnostic Presets</h3>
+              <span class="v3-pill running" style="font-size:10px;padding:2px 8px;"><%= _ncPresets.length %> ALLOWLISTED</span>
+            </div>
+            <input type="text" id="ncPresetSearch" class="nc-search" placeholder="Filter diagnostics (e.g. ip, lxc, nat, disk)..." oninput="filterNcPresets()">
+            <div class="nc-cat-tabs" role="tablist">
+              <button type="button" class="nc-cat-btn active" data-cat="all" onclick="setNcCategory('all', this)">All</button>
+              <button type="button" class="nc-cat-btn" data-cat="sys" onclick="setNcCategory('sys', this)">System</button>
+              <button type="button" class="nc-cat-btn" data-cat="net" onclick="setNcCategory('net', this)">Network</button>
+              <button type="button" class="nc-cat-btn" data-cat="virt" onclick="setNcCategory('virt', this)">Engines</button>
+            </div>
+            <div class="nc-preset-list" id="ncPresetList">
+              <% _ncPresets.forEach((p, idx) => { %>
+                <button type="button"
+                  class="nc-preset-btn <%= idx === 0 ? 'active' : '' %>"
+                  data-preset="<%= p.id %>"
+                  data-cat="<%= p.cat %>"
+                  data-search="<%= (p.id + ' ' + p.label + ' ' + p.cmd).toLowerCase() %>"
+                  onclick="runDiag('<%= p.id %>')">
+                  <span class="nc-preset-ico <%= p.cat %>">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><%- p.svg %></svg>
+                  </span>
+                  <span class="nc-preset-meta">
+                    <div class="nc-preset-name"><%= p.label %></div>
+                    <div class="nc-preset-cmd">$ <%= p.cmd %></div>
+                  </span>
+                </button>
+              <% }) %>
+            </div>
+          </div>
+
+          <div class="nc-term-card">
+            <div class="nc-term-bar">
+              <div class="nc-term-left">
+                <div class="nc-win-dots" aria-hidden="true">
+                  <span style="background:#ef4444;"></span>
+                  <span style="background:#f59e0b;"></span>
+                  <span style="background:#10b981;"></span>
+                </div>
+                <div class="nc-cmd-badge" id="ncCmdDisplay"><span class="prompt">$</span>uptime</div>
+                <span id="ncExitBadge" class="v3-pill online" style="display:none;font-size:10.5px;">EXIT 0</span>
+                <span id="ncDurationBadge" style="font-size:11px;color:var(--text-muted);font-family:monospace;"></span>
+              </div>
+              <div class="nc-term-tools">
+                <button type="button" class="nc-tool-btn primary" onclick="rerunActiveDiag()" title="Re-run active preset">&#8635; Re-run</button>
+                <button type="button" class="nc-tool-btn" id="ncWrapBtn" onclick="toggleDiagWrap()">Wrap: Off</button>
+                <button type="button" class="nc-tool-btn" onclick="copyDiagOutput()">Copy</button>
+                <button type="button" class="nc-tool-btn" onclick="downloadDiagOutput()">.log</button>
+                <button type="button" class="nc-tool-btn" onclick="clearDiagOutput()">Clear</button>
+              </div>
+            </div>
+            <pre id="diagOutput" class="nc-term-body">Initializing live node diagnostic console...</pre>
+            <div class="nc-term-foot">
+              <div class="nc-history-row">
+                <span style="font-weight:600;color:var(--text-secondary);">Recent runs:</span>
+                <div id="ncHistoryChips" style="display:inline-flex;gap:5px;flex-wrap:wrap;">
+                  <span style="color:var(--text-muted);">None yet</span>
+                </div>
+              </div>
+              <span id="ncExecTimestamp">Zero-shell spawn (<code>shell: false</code>)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Interactive Host PTY Shell Studio -->
+        <div class="nc-pty-card" id="ncPtyCard">
+          <div class="nc-term-bar">
+            <div class="nc-term-left">
+              <div class="nc-win-dots" aria-hidden="true">
+                <span style="background:#ef4444;"></span>
+                <span style="background:#f59e0b;"></span>
+                <span style="background:#10b981;"></span>
+              </div>
+              <strong style="font-size:13.5px;color:#f8fafc;">Interactive Host PTY Shell</strong>
+              <% if (interactiveEnabled) { %>
+                <span class="v3-pill running" style="font-size:10.5px;">ENABLED &bull; LINE-AUDITED</span>
+                <span id="ncPtyStateBadge" class="v3-pill stopped" style="font-size:10.5px;">Idle (Not Connected)</span>
+              <% } else { %>
+                <span class="v3-pill warning" style="font-size:10.5px;gap:5px;">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  LOCKED BY SERVER POLICY
+                </span>
+              <% } %>
+            </div>
+            <% if (interactiveEnabled) { %>
+            <div class="nc-term-tools">
+              <button type="button" class="nc-tool-btn primary" id="ncPtyConnectBtn" onclick="connectNodeShell()">&#9654; Connect Shell</button>
+              <button type="button" class="nc-tool-btn" onclick="clearNodeShell()">Clear</button>
+              <button type="button" class="nc-tool-btn" onclick="adjustNodeShellFont(-1)">A-</button>
+              <button type="button" class="nc-tool-btn" onclick="adjustNodeShellFont(1)">A+</button>
+              <button type="button" class="nc-tool-btn" id="ncPtyFsBtn" onclick="toggleNodeShellFullscreen()">&#9974; Fullscreen</button>
+              <button type="button" class="nc-tool-btn danger" id="ncPtyDisconnectBtn" onclick="disconnectNodeShell()" style="display:none;">Disconnect</button>
+            </div>
+            <% } %>
+          </div>
+
+          <% if (!interactiveEnabled) { %>
+          <div class="nc-pty-locked">
+            <div>
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+                <span style="width:32px;height:32px;border-radius:9px;background:rgba(245,158,11,0.16);border:1px solid rgba(245,158,11,0.35);color:#fbbf24;display:inline-flex;align-items:center;justify-content:center;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                </span>
+                <h4 style="margin:0;font-size:15px;font-weight:700;color:#f8fafc;">Zero-Trust Host PTY Protection Active</h4>
+              </div>
+              <p style="font-size:13px;line-height:1.6;color:#94a3b8;margin:0 0 14px;">
+                Unrestricted root PTY access to the hypervisor host is disabled by default so that all routine troubleshooting runs safely through the <strong>Allowlisted Diagnostic Workbench</strong> above without exposing raw shell execution.
+              </p>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <span class="v3-pill running" style="font-size:11px;">&#10003; 13 Allowlisted Presets Active</span>
+                <span class="v3-pill lxc" style="font-size:11px;">&#10003; Per-Container PTY Available in LXC View</span>
+                <span class="v3-pill kvm" style="font-size:11px;">&#10003; Command-Line Audit Logging</span>
+              </div>
+            </div>
+            <div class="nc-env-snippet">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <span style="font-size:11px;color:#94a3b8;font-weight:600;">Opt-in via server <code>.env</code> &amp; restart HKVM:</span>
+                <button type="button" class="nc-tool-btn primary" style="padding:3px 9px;font-size:11px;" onclick="copyNodeShellEnvFlag()">Copy .env Flag</button>
+              </div>
+              <div style="color:#64748b;margin-bottom:3px;"># Enable audited super-admin host PTY shell</div>
+              <div style="color:#22d3ee;font-weight:700;">HKVM_ENABLE_NODE_SHELL=true</div>
+            </div>
+          </div>
+          <% } else { %>
+          <div id="nodeXtermBox" style="height:430px;background:#06070c;padding:8px;">
+            <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#64748b;gap:10px;text-align:center;">
+              <div style="font-family:monospace;font-size:13px;color:#94a3b8;">root@host:~# <span style="color:#22d3ee;">[Audited node-pty session ready]</span></div>
+              <div style="font-size:12.5px;max-width:440px;">Click <strong>Connect Shell</strong> in the top-right bar to spawn a live WebSocket <code>xterm-256color</code> session on the selected node. Every command line is recorded in the Security Audit Trail.</div>
+              <button type="button" class="btn btn-primary" onclick="connectNodeShell()" style="margin-top:4px;">&#9654; Launch Audited Host Shell</button>
+            </div>
+          </div>
           <% } %>
         </div>
-        <% if (!interactiveEnabled) { %>
-        <p style="font-size:13px;color:var(--text-muted);margin:0;">Interactive root/host PTY shell is disabled by default for security (Part 12 &amp; Part 22). Set <code>HKVM_ENABLE_NODE_SHELL=true</code> in <code>.env</code> if interactive host shell access is required.</p>
-        <% } else { %>
-        <div id="nodeXtermBox" style="height:400px;background:#08080d;border-radius:8px;padding:6px;"></div>
-        <% } %>
       </div>
       <% } %>
 
@@ -2255,35 +2701,424 @@ async function loadAuditLogs() {
   </tr>`).join('');
 }
 
-async function runDiag(preset) {
-  const nodeId = document.getElementById('diagNode').value;
-  const outEl = document.getElementById('diagOutput');
-  outEl.textContent = 'Running ' + preset + '...';
+// --- Node Diagnostic & Host Console Studio Controllers ---
+let _ncActivePreset = 'uptime';
+let _ncActiveCategory = 'all';
+let _ncRawOutput = '';
+let _ncHistory = [];
+let _ncTerm = null;
+let _ncFitAddon = null;
+let _ncWs = null;
+let _ncFontSize = 13;
+let _ncResizeObs = null;
+
+function formatUptimeHuman(sec) {
+  const s = Math.max(0, Number(sec || 0));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m ${Math.floor(s % 60)}s`;
+}
+
+function ansiToSafeHtml(rawText) {
+  const escaped = hkvmEsc(String(rawText || ''));
+  let openSpan = false;
+  const html = escaped.replace(/\x1b\[([0-9;]*)m/g, (_m, codesStr) => {
+    const codes = String(codesStr || '0').split(';').map(Number);
+    let prefix = openSpan ? '</span>' : '';
+    openSpan = false;
+    if (codes.includes(0) && codes.length === 1) return prefix;
+    let cls = '';
+    if (codes.includes(32) || codes.includes(92)) cls = 'nc-ansi-green';
+    else if (codes.includes(33) || codes.includes(93)) cls = 'nc-ansi-yellow';
+    else if (codes.includes(31) || codes.includes(91)) cls = 'nc-ansi-red';
+    else if (codes.includes(36) || codes.includes(96)) cls = 'nc-ansi-cyan';
+    else if (codes.includes(1)) cls = 'nc-ansi-bold';
+    if (cls) {
+      openSpan = true;
+      return `${prefix}<span class="${cls}">`;
+    }
+    return prefix;
+  }).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
+  return openSpan ? html + '</span>' : html;
+}
+
+async function refreshNodeConsoleTelemetry() {
+  const sel = document.getElementById('diagNode');
+  if (!sel || !sel.value) return;
+  const btn = document.getElementById('ncRefreshTelemetryBtn');
+  if (btn) btn.disabled = true;
   try {
-    const res = await hkvmApi('/api/v1/nodes/' + nodeId + '/diagnostics/' + preset, { method: 'POST' });
-    outEl.textContent = `[${res.executedAt}] ${res.description} (exit=${res.exitCode})\n\n${res.output}`;
-  } catch (err) { outEl.textContent = 'Error: ' + err.message; }
+    const rep = await hkvmApi('/api/v1/nodes/' + sel.value + '/check', { method: 'POST' });
+    const st = rep.stats || {};
+    const hl = rep.health || {};
+    const caps = hl.capabilities || {};
+
+    const statePill = document.getElementById('ncNodeStatePill');
+    if (statePill) {
+      const online = hl.status === 'online';
+      statePill.className = 'v3-pill ' + (online ? 'online' : 'warning');
+      statePill.innerHTML = '&bull; ' + (online ? 'ONLINE' : String(hl.status || 'DEGRADED').toUpperCase());
+    }
+    const hostMeta = document.getElementById('ncHostMeta');
+    if (hostMeta) {
+      hostMeta.textContent = `${st.hostname || hl.hostname || 'host'} • ${st.cpuModel || 'Linux Host'}`;
+    }
+    const upMeta = document.getElementById('ncUptimeMeta');
+    if (upMeta) {
+      upMeta.textContent = `Uptime ${formatUptimeHuman(st.uptimeSeconds || hl.uptimeSeconds)}`;
+    }
+    const verEl = document.getElementById('ncAgentVer');
+    if (verEl && hl.agentVersion) verEl.textContent = 'v' + hl.agentVersion;
+
+    const cpuPct = Math.min(100, Math.max(0, Number(st.cpuPercent || 0)));
+    document.getElementById('ncCpuVal').textContent = cpuPct.toFixed(1) + '%';
+    document.getElementById('ncCpuBar').style.width = cpuPct + '%';
+    document.getElementById('ncCpuCores').textContent = (st.cpuCores || 0) + ' vCPU Cores';
+    document.getElementById('ncLoadAvg').textContent =
+      `Load: ${Number(st.loadAvg1 || 0).toFixed(2)} / ${Number(st.loadAvg5 || 0).toFixed(2)}`;
+
+    const ramPct = Math.min(100, Math.max(0, Number(st.ramPercent || 0)));
+    document.getElementById('ncRamVal').textContent = ramPct.toFixed(1) + '%';
+    document.getElementById('ncRamBar').style.width = ramPct + '%';
+    document.getElementById('ncRamDetail').textContent =
+      `${st.ramUsedMb || 0} / ${st.ramTotalMb || 0} MB`;
+    document.getElementById('ncSwapDetail').textContent =
+      `Swap: ${st.swapUsedMb || 0}/${st.swapTotalMb || 0} MB`;
+
+    const diskPct = Math.min(100, Math.max(0, Number(st.diskPercent || 0)));
+    document.getElementById('ncDiskVal').textContent = diskPct.toFixed(1) + '%';
+    document.getElementById('ncDiskBar').style.width = diskPct + '%';
+    document.getElementById('ncDiskDetail').textContent =
+      `${st.diskUsedGb || 0} / ${st.diskTotalGb || 0} GB`;
+    document.getElementById('ncDiskFree').textContent = `${st.diskAvailableGb || 0} GB free`;
+
+    const setDot = (id, state) => {
+      const el = document.getElementById(id);
+      if (el) el.className = 'nc-dot ' + state;
+    };
+    setDot('ncCapKvm', caps.kvmDevicePresent ? 'ok' : (caps.qemuSystemAvailable ? 'warn' : 'off'));
+    setDot('ncCapQemu', caps.qemuSystemAvailable ? 'ok' : 'off');
+    setDot('ncCapLxc', caps.lxcAvailable ? 'ok' : 'off');
+  } catch (err) {
+    const statePill = document.getElementById('ncNodeStatePill');
+    if (statePill) {
+      statePill.className = 'v3-pill offline';
+      statePill.innerHTML = '&bull; UNREACHABLE';
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function setNcCategory(cat, btnEl) {
+  _ncActiveCategory = cat;
+  document.querySelectorAll('.nc-cat-btn').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  filterNcPresets();
+}
+
+function filterNcPresets() {
+  const q = (document.getElementById('ncPresetSearch')?.value || '').trim().toLowerCase();
+  document.querySelectorAll('.nc-preset-btn').forEach(btn => {
+    const catOk = _ncActiveCategory === 'all' || btn.dataset.cat === _ncActiveCategory;
+    const searchOk = !q || (btn.dataset.search || '').includes(q);
+    btn.style.display = (catOk && searchOk) ? 'flex' : 'none';
+  });
+}
+
+function renderNcHistory() {
+  const wrap = document.getElementById('ncHistoryChips');
+  if (!wrap) return;
+  if (!_ncHistory.length) {
+    wrap.innerHTML = '<span style="color:var(--text-muted);">None yet</span>';
+    return;
+  }
+  wrap.innerHTML = _ncHistory.map((item, idx) =>
+    `<button type="button" class="nc-hist-chip" onclick="restoreNcHistory(${idx})" title="${hkvmEsc(item.command)} (${item.exitCode === 0 ? 'OK' : 'exit ' + item.exitCode})">${hkvmEsc(item.preset)} <span style="color:${item.exitCode === 0 ? '#10b981' : '#f59e0b'};">&bull;</span></button>`
+  ).join('');
+}
+
+function restoreNcHistory(idx) {
+  const item = _ncHistory[idx];
+  if (!item) return;
+  applyDiagResultToView(item);
+}
+
+function applyDiagResultToView(res) {
+  _ncActivePreset = res.preset || _ncActivePreset;
+  document.querySelectorAll('.nc-preset-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.preset === _ncActivePreset);
+  });
+
+  const cmdEl = document.getElementById('ncCmdDisplay');
+  if (cmdEl) {
+    cmdEl.innerHTML = `<span class="prompt">$</span>${hkvmEsc(res.command || res.preset)}`;
+  }
+  const exitEl = document.getElementById('ncExitBadge');
+  if (exitEl) {
+    exitEl.style.display = 'inline-flex';
+    exitEl.className = 'v3-pill ' + (res.exitCode === 0 ? 'online' : 'warning');
+    exitEl.textContent = 'EXIT ' + res.exitCode;
+  }
+  const durEl = document.getElementById('ncDurationBadge');
+  if (durEl) {
+    durEl.textContent = typeof res.durationMs === 'number' ? `${res.durationMs} ms` : '';
+  }
+  const tsEl = document.getElementById('ncExecTimestamp');
+  if (tsEl && res.executedAt) {
+    const dt = new Date(res.executedAt);
+    tsEl.textContent = `${res.description || ''} • ${isNaN(dt.getTime()) ? res.executedAt : dt.toLocaleTimeString()}`;
+  }
+
+  _ncRawOutput = `# [${res.executedAt}] ${res.description} ($ ${res.command || res.preset}) [exit=${res.exitCode}]\n\n${res.output || ''}`;
+  const outEl = document.getElementById('diagOutput');
+  if (outEl) {
+    outEl.innerHTML = ansiToSafeHtml(res.output || '');
+    outEl.scrollTop = 0;
+  }
+}
+
+async function runDiag(preset) {
+  const nodeSel = document.getElementById('diagNode');
+  if (!nodeSel || !nodeSel.value) return;
+  _ncActivePreset = preset;
+  document.querySelectorAll('.nc-preset-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.preset === preset);
+  });
+  const outEl = document.getElementById('diagOutput');
+  const cmdEl = document.getElementById('ncCmdDisplay');
+  if (cmdEl) cmdEl.innerHTML = `<span class="prompt">$</span>Running ${hkvmEsc(preset)}...`;
+  if (outEl) outEl.innerHTML = `<span style="color:#94a3b8;">Executing allowlisted diagnostic preset <strong>${hkvmEsc(preset)}</strong>...</span>`;
+
+  try {
+    const res = await hkvmApi('/api/v1/nodes/' + nodeSel.value + '/diagnostics/' + preset, { method: 'POST' });
+    applyDiagResultToView(res);
+    _ncHistory = [res, ..._ncHistory.filter(h => h.preset !== res.preset)].slice(0, 6);
+    renderNcHistory();
+  } catch (err) {
+    _ncRawOutput = 'Error: ' + err.message;
+    if (outEl) outEl.innerHTML = `<span class="nc-ansi-red">Error: ${hkvmEsc(err.message)}</span>`;
+  }
+}
+
+function rerunActiveDiag() {
+  runDiag(_ncActivePreset || 'uptime');
+}
+
+async function runNodeHealthSuite() {
+  const nodeSel = document.getElementById('diagNode');
+  if (!nodeSel || !nodeSel.value) return;
+  const btn = document.getElementById('ncHealthSuiteBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Running Suite...'; }
+  const outEl = document.getElementById('diagOutput');
+  const suitePresets = ['uname', 'uptime', 'memory', 'disk', 'network_links', 'bridges', 'lxc_list'];
+  const sections = [];
+  const started = Date.now();
+  try {
+    if (outEl) outEl.innerHTML = '<span style="color:#22d3ee;">Running 7-point allowlisted host health suite...</span>';
+    for (const p of suitePresets) {
+      const r = await hkvmApi('/api/v1/nodes/' + nodeSel.value + '/diagnostics/' + p, { method: 'POST' });
+      sections.push(`\x1b[1m=== [${p.toUpperCase()}] $ ${r.command || p} (exit=${r.exitCode}) ===\x1b[0m\n${r.output}`);
+    }
+    const combined = {
+      preset: 'health_suite',
+      description: '7-Point Host Health & Network Suite',
+      command: suitePresets.join(' && '),
+      exitCode: 0,
+      durationMs: Date.now() - started,
+      output: sections.join('\n\n'),
+      executedAt: new Date().toISOString()
+    };
+    applyDiagResultToView(combined);
+    _ncHistory = [combined, ..._ncHistory.filter(h => h.preset !== 'health_suite')].slice(0, 6);
+    renderNcHistory();
+    hkvmToast('Full host diagnostic suite completed');
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '&#9654; Run Full Health Check'; }
+  }
+}
+
+function toggleDiagWrap() {
+  const outEl = document.getElementById('diagOutput');
+  const btn = document.getElementById('ncWrapBtn');
+  if (!outEl) return;
+  const wrapped = outEl.classList.toggle('wrap');
+  if (btn) btn.textContent = 'Wrap: ' + (wrapped ? 'On' : 'Off');
+}
+
+async function copyDiagOutput() {
+  const text = _ncRawOutput || document.getElementById('diagOutput')?.innerText || '';
+  if (!text.trim()) return hkvmToast('Nothing to copy yet', 'warning');
+  try {
+    await navigator.clipboard.writeText(text);
+    hkvmToast('Diagnostic output copied to clipboard');
+  } catch {
+    hkvmToast('Clipboard access unavailable in this browser context', 'warning');
+  }
+}
+
+function downloadDiagOutput() {
+  const text = _ncRawOutput || document.getElementById('diagOutput')?.innerText || '';
+  if (!text.trim()) return hkvmToast('Run a diagnostic preset first', 'warning');
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `hkvm-node-diag-${_ncActivePreset || 'report'}-${Date.now()}.log`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function clearDiagOutput() {
+  _ncRawOutput = '';
+  const outEl = document.getElementById('diagOutput');
+  if (outEl) outEl.innerHTML = '<span style="color:#64748b;">Console cleared. Select a preset on the left to inspect live host state.</span>';
+  const exitEl = document.getElementById('ncExitBadge');
+  if (exitEl) exitEl.style.display = 'none';
+}
+
+async function copyNodeShellEnvFlag() {
+  try {
+    await navigator.clipboard.writeText('HKVM_ENABLE_NODE_SHELL=true');
+    hkvmToast('Copied HKVM_ENABLE_NODE_SHELL=true to clipboard');
+  } catch {
+    hkvmToast('Set HKVM_ENABLE_NODE_SHELL=true in .env');
+  }
+}
+
+function onNodeConsoleSwitch() {
+  if (_ncWs) disconnectNodeShell();
+  refreshNodeConsoleTelemetry();
+  runDiag(_ncActivePreset === 'health_suite' ? 'uptime' : (_ncActivePreset || 'uptime'));
+}
+
+function setPtyStateBadge(label, pillClass) {
+  const el = document.getElementById('ncPtyStateBadge');
+  if (!el) return;
+  el.className = 'v3-pill ' + pillClass;
+  el.textContent = label;
 }
 
 function connectNodeShell() {
   const box = document.getElementById('nodeXtermBox');
+  if (!box) return;
+  if (_ncWs) {
+    try { _ncWs.close(); } catch {}
+    _ncWs = null;
+  }
+  if (_ncResizeObs) {
+    try { _ncResizeObs.disconnect(); } catch {}
+    _ncResizeObs = null;
+  }
   box.innerHTML = '';
-  const term = new Terminal({ cursorBlink: true, fontSize: 13, theme: { background: '#08080d' } });
-  const fitAddon = new FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
-  term.open(box);
-  fitAddon.fit();
+  _ncTerm = new Terminal({
+    cursorBlink: true,
+    fontSize: _ncFontSize,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    theme: { background: '#06070c', foreground: '#f1f5f9', cursor: '#22d3ee' }
+  });
+  _ncFitAddon = new FitAddon.FitAddon();
+  _ncTerm.loadAddon(_ncFitAddon);
+  _ncTerm.open(box);
+  _ncFitAddon.fit();
+
   const nodeId = document.getElementById('diagNode').value;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${proto}//${location.host}/ws/nodes/${nodeId}/shell?cols=${term.cols}&rows=${term.rows}`);
-  ws.onmessage = (ev) => {
+  setPtyStateBadge('Connecting...', 'warning');
+  _ncWs = new WebSocket(`${proto}//${location.host}/ws/nodes/${nodeId}/shell?cols=${_ncTerm.cols}&rows=${_ncTerm.rows}`);
+
+  const connBtn = document.getElementById('ncPtyConnectBtn');
+  const discBtn = document.getElementById('ncPtyDisconnectBtn');
+
+  _ncWs.onopen = () => {
+    setPtyStateBadge('Connected • Live PTY', 'online');
+    if (connBtn) connBtn.innerHTML = '&#8635; Reconnect';
+    if (discBtn) discBtn.style.display = 'inline-flex';
+    _ncTerm.focus();
+  };
+
+  _ncWs.onmessage = (ev) => {
     try {
       const m = JSON.parse(ev.data);
-      if (m.type === 'output') term.write(m.data);
-      if (m.type === 'error') term.writeln('\r\n\x1b[31m' + m.message + '\x1b[0m');
-    } catch { term.write(ev.data); }
+      if (m.type === 'output') _ncTerm.write(m.data);
+      else if (m.type === 'error') _ncTerm.writeln('\r\n\x1b[31m[Policy/Error] ' + m.message + '\x1b[0m');
+      else if (m.type === 'exit') _ncTerm.writeln('\r\n\x1b[33m[Host shell exited with code ' + m.exitCode + ']\x1b[0m');
+    } catch {
+      _ncTerm.write(ev.data);
+    }
   };
-  term.onData(d => ws.readyState === 1 && ws.send(JSON.stringify({ type: 'input', data: d })));
+
+  _ncWs.onclose = () => {
+    setPtyStateBadge('Disconnected', 'stopped');
+    if (discBtn) discBtn.style.display = 'none';
+  };
+
+  _ncTerm.onData(d => {
+    if (_ncWs && _ncWs.readyState === WebSocket.OPEN) {
+      _ncWs.send(JSON.stringify({ type: 'input', data: d }));
+    }
+  });
+
+  if (typeof ResizeObserver !== 'undefined') {
+    _ncResizeObs = new ResizeObserver(() => {
+      if (!_ncFitAddon || !_ncTerm) return;
+      try {
+        _ncFitAddon.fit();
+        if (_ncWs && _ncWs.readyState === WebSocket.OPEN) {
+          _ncWs.send(JSON.stringify({ type: 'resize', cols: _ncTerm.cols, rows: _ncTerm.rows }));
+        }
+      } catch {}
+    });
+    _ncResizeObs.observe(box);
+  }
+}
+
+function disconnectNodeShell() {
+  if (_ncWs) {
+    try { _ncWs.close(); } catch {}
+    _ncWs = null;
+  }
+  setPtyStateBadge('Disconnected', 'stopped');
+  const discBtn = document.getElementById('ncPtyDisconnectBtn');
+  if (discBtn) discBtn.style.display = 'none';
+}
+
+function clearNodeShell() {
+  if (_ncTerm) _ncTerm.clear();
+}
+
+function adjustNodeShellFont(delta) {
+  _ncFontSize = Math.min(22, Math.max(10, _ncFontSize + delta));
+  if (_ncTerm) {
+    _ncTerm.options.fontSize = _ncFontSize;
+    if (_ncFitAddon) _ncFitAddon.fit();
+  }
+}
+
+function toggleNodeShellFullscreen() {
+  const card = document.getElementById('ncPtyCard');
+  const btn = document.getElementById('ncPtyFsBtn');
+  if (!card) return;
+  const fs = card.classList.toggle('fullscreen');
+  if (btn) btn.innerHTML = fs ? '&#10005; Exit Fullscreen' : '&#9974; Fullscreen';
+  setTimeout(() => {
+    if (_ncFitAddon && _ncTerm) {
+      _ncFitAddon.fit();
+      if (_ncWs && _ncWs.readyState === WebSocket.OPEN) {
+        _ncWs.send(JSON.stringify({ type: 'resize', cols: _ncTerm.cols, rows: _ncTerm.rows }));
+      }
+    }
+  }, 60);
+}
+
+function initNodeConsoleStudio() {
+  refreshNodeConsoleTelemetry();
+  runDiag('uptime');
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -2303,6 +3138,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (CURRENT_SECTION === 'monitoring') loadMonitoring();
   if (CURRENT_SECTION === 'api-keys') loadApiKeysAndWebhooks();
   if (CURRENT_SECTION === 'audit-logs') loadAuditLogs();
+  if (CURRENT_SECTION === 'node-console') initNodeConsoleStudio();
 });
 </script>
 </body>

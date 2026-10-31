@@ -709,9 +709,21 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       });
       assert.ok(ptyOutput.includes('Linux'), `Expected Linux in PTY output, got: ${ptyOutput}`);
 
-      // Also verify Safe Diagnostic Preset API over allowlisted command runner
+      // Also verify Safe Diagnostic Preset API + redesigned Node Console Studio UI
+      const ncHtmlRes = await adminClient.request('GET', '/admin/node-console');
+      assert.strictEqual(ncHtmlRes.status, 200);
+      assert.ok(ncHtmlRes.text.includes('nc-workbench'), 'Expected redesigned Node Console Workbench');
+      assert.ok(ncHtmlRes.text.includes('nc-telemetry-grid'), 'Expected live 4-card Node Telemetry Strip');
+      assert.ok(ncHtmlRes.text.includes('runNodeHealthSuite'), 'Expected 7-point Full Health Check button');
+
       const diagRes = await adminClient.request('POST', '/api/v1/nodes/1/diagnostics/uname', {});
       assert.strictEqual(diagRes.status, 200, `Diag preset failed: ${diagRes.text}`);
+      assert.strictEqual(diagRes.json.command, 'uname -a');
+      assert.strictEqual(typeof diagRes.json.durationMs, 'number');
+
+      const sysctlDiag = await adminClient.request('POST', '/api/v1/nodes/1/diagnostics/sysctl_net', {});
+      assert.strictEqual(sysctlDiag.status, 200, `sysctl_net diag failed: ${sysctlDiag.text}`);
+      assert.strictEqual(sysctlDiag.json.command, 'sysctl net.ipv4.ip_forward');
     });
 
     // 14. End-to-End LXC VPS Provisioning, Root-Owned Confinement, Lifecycle, Resize, Credentials & Host Sync
