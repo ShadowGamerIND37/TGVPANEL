@@ -1,6 +1,10 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import {
+  canPasswordlessSudo,
+  ensureLxcfsDaemonMounted,
+  findActiveMountSource,
   isBinaryAvailable,
   isRunningAsRoot,
   privilegedFs,
@@ -24,7 +28,7 @@ export interface LxcCreateSpec {
   ramMb: number;
   swapMb?: number;
   diskGb: number;
-  backingStore?: 'dir' | 'lvm' | 'zfs' | 'btrfs';
+  backingStore?: 'dir' | 'loop' | 'lvm' | 'zfs' | 'btrfs';
   privileged?: boolean;
   nesting?: boolean;
   kvmNesting?: boolean;
@@ -77,6 +81,8 @@ export interface LxcContainerRuntimeInfo {
   rxBytes: number;
   txBytes: number;
   diskUsedBytes: number;
+  backingStore?: string;
+  diskQuotaEnforced?: boolean;
   configuredIpv4?: string | null;
   configuredGateway?: string | null;
   startupWarning?: string;
@@ -322,10 +328,147 @@ export function isAppArmorProfileLoadable(): boolean {
   }
 }
 
-function readActiveCgroupV2Controllers(): Set<string> | null {
+/**
+ * Parses Linux CPU list syntax (e.g. `"0-3"`, `"0,2-3,6"`) into sorted unique CPU IDs.
+ */
+export function parseCpuListSpec(spec: string): number[] {
+  const cpus = new Set<number>();
+  for (const part of String(spec || '').trim().split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const rangeMatch = trimmed.match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) {
+      const start = parseInt(rangeMatch[1], 10);
+      const end = parseInt(rangeMatch[2], 10);
+      if (end >= start && end - start <= 1024) {
+        for (let i = start; i <= end; i++) cpus.add(i);
+      }
+    } else if (/^\d+$/.test(trimmed)) {
+      cpus.add(parseInt(trimmed, 10));
+    }
+  }
+  return Array.from(cpus).sort((a, b) => a - b);
+}
+
+export function readEffectiveHostCpuIds(): number[] {
+  try {
+    for (const p of ['/sys/fs/cgroup/cpuset.cpus.effective', '/sys/fs/cgroup/cpuset/cpuset.cpus']) {
+      if (fs.existsSync(p)) {
+        const parsed = parseCpuListSpec(fs.readFileSync(p, 'utf8'));
+        if (parsed.length > 0) return parsed;
+      }
+    }
+  } catch {
+    // fallback to os.cpus()
+  }
+  const n = Math.max(1, os.cpus().length || 1);
+  return Array.from({ length: n }, (_, idx) => idx);
+}
+
+/**
+ * Deterministically assigns `requestedCores` distinct online host CPUs to `containerName`
+ * (or honors `explicitPinning`), ensuring `nproc`, `lscpu`, and `neofetch` inside the guest
+ * report the container's assigned vCPU count while spreading load across host cores.
+ */
+export function selectContainerCpuset(
+  containerName: string,
+  requestedCores: number,
+  availableCpus: number[] = readEffectiveHostCpuIds(),
+  explicitPinning?: string | null
+): string | null {
+  if (explicitPinning && /^[0-9,-]+$/.test(explicitPinning.trim())) {
+    return explicitPinning.trim();
+  }
+  if (!availableCpus || availableCpus.length === 0) return null;
+  const count = Math.max(1, Math.min(availableCpus.length, Math.floor(requestedCores || 1)));
+  let hash = 2166136261;
+  for (let i = 0; i < containerName.length; i++) {
+    hash ^= containerName.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const start = (hash >>> 0) % availableCpus.length;
+  const picked: number[] = [];
+  for (let i = 0; i < count; i++) {
+    picked.push(availableCpus[(start + i) % availableCpus.length]);
+  }
+  picked.sort((a, b) => a - b);
+  return picked.join(',');
+}
+
+/**
+ * Ensures cgroup v2 `cpu`, `cpuset`, `memory`, and `pids` controllers are delegated in
+ * `/sys/fs/cgroup/cgroup.subtree_control`. On Docker / GitHub Codespace cgroup roots where
+ * PID 1 sits directly in `/sys/fs/cgroup/cgroup.procs` ("no internal processes" rule -> EBUSY),
+ * safely evacuates root processes into `/sys/fs/cgroup/hkvm.host` first.
+ */
+function ensureCgroupV2SubtreeDelegation(): void {
+  try {
+    if (
+      !fs.existsSync('/sys/fs/cgroup/cgroup.controllers') ||
+      !fs.existsSync('/sys/fs/cgroup/cgroup.subtree_control')
+    ) {
+      return;
+    }
+    if (!isRunningAsRoot() && !canPasswordlessSudo()) return;
+
+    const rootControllers = new Set(
+      fs.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8').trim().split(/\s+/).filter(Boolean)
+    );
+    const readDelegated = () =>
+      new Set(
+        fs
+          .readFileSync('/sys/fs/cgroup/cgroup.subtree_control', 'utf8')
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean)
+      );
+
+    const desired = ['cpu', 'cpuset', 'memory', 'pids'].filter((c) => rootControllers.has(c));
+    let delegated = readDelegated();
+    let missing = desired.filter((c) => !delegated.has(c));
+    if (missing.length === 0) return;
+
+    const enableControllers = (ctrls: string[]) => {
+      for (const c of ctrls) {
+        try {
+          privilegedFs.writeFileSync('/sys/fs/cgroup/cgroup.subtree_control', `+${c}`);
+        } catch {
+          // ignore individual controller failure
+        }
+      }
+    };
+
+    enableControllers(missing);
+    delegated = readDelegated();
+    missing = desired.filter((c) => !delegated.has(c));
+    if (missing.length === 0) return;
+
+    // EBUSY inside container cgroup root: evacuate internal processes into /sys/fs/cgroup/hkvm.host
+    const leafCgroup = '/sys/fs/cgroup/hkvm.host';
+    privilegedFs.mkdirpSync(leafCgroup);
+    const procsRaw = fs.readFileSync('/sys/fs/cgroup/cgroup.procs', 'utf8');
+    for (const pidLine of procsRaw.split('\n')) {
+      const pid = pidLine.trim();
+      if (!/^\d+$/.test(pid) || pid === '0') continue;
+      try {
+        privilegedFs.writeFileSync(path.join(leafCgroup, 'cgroup.procs'), `${pid}\n`);
+      } catch {
+        // kernel thread or exited process
+      }
+    }
+    enableControllers(missing);
+  } catch {
+    // non-fatal on read-only cgroupfs
+  }
+}
+
+function readActiveCgroupV2Controllers(enableIfSystem = false): Set<string> | null {
   try {
     if (!fs.existsSync('/sys/fs/cgroup/cgroup.controllers')) {
       return null;
+    }
+    if (enableIfSystem) {
+      ensureCgroupV2SubtreeDelegation();
     }
     const raw = fs.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8').trim();
     const rootControllers = new Set(raw.split(/\s+/).filter(Boolean));
@@ -343,11 +486,24 @@ function readActiveCgroupV2Controllers(): Set<string> | null {
 }
 
 function isCgroupV2SwapSupported(): boolean {
-  return (
+  if (
     fs.existsSync('/sys/fs/cgroup/memory.swap.max') ||
     fs.existsSync('/sys/fs/cgroup/init.scope/memory.swap.max') ||
-    fs.existsSync('/sys/fs/cgroup/system.slice/memory.swap.max')
-  );
+    fs.existsSync('/sys/fs/cgroup/system.slice/memory.swap.max') ||
+    fs.existsSync('/sys/fs/cgroup/hkvm.host/memory.swap.max')
+  ) {
+    return true;
+  }
+  try {
+    for (const entry of fs.readdirSync('/sys/fs/cgroup')) {
+      if (fs.existsSync(path.join('/sys/fs/cgroup', entry, 'memory.swap.max'))) {
+        return true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return false;
 }
 
 export class LxcContainerManager {
@@ -1268,17 +1424,20 @@ export class LxcContainerManager {
       }
     }
 
-      const diskUsedBytes = await this.getRootfsUsedBytes(safeName);
+    const diskUsedBytes = await this.getRootfsUsedBytes(safeName);
+    const hasLoopDisk =
+      privilegedFs.existsSync(this.getQuotaDiskImagePath(safeName)) ||
+      Boolean(findActiveMountSource(this.getRootfsDir(safeName)));
 
-      if ((state === 'running' || state === 'frozen') && pid && pid > 0 && memoryBytes === 0) {
-        const procStats = this.measureContainerProcTree(pid);
-        if (procStats.memoryBytes > 0) {
-          memoryBytes = procStats.memoryBytes;
-        }
-        if (cpuUseSeconds === 0 && procStats.cpuUseSeconds > 0) {
-          cpuUseSeconds = procStats.cpuUseSeconds;
-        }
+    if ((state === 'running' || state === 'frozen') && pid && pid > 0 && memoryBytes === 0) {
+      const procStats = this.measureContainerProcTree(pid);
+      if (procStats.memoryBytes > 0) {
+        memoryBytes = procStats.memoryBytes;
       }
+      if (cpuUseSeconds === 0 && procStats.cpuUseSeconds > 0) {
+        cpuUseSeconds = procStats.cpuUseSeconds;
+      }
+    }
 
     return {
       name: safeName,
@@ -1291,6 +1450,8 @@ export class LxcContainerManager {
       rxBytes,
       txBytes,
       diskUsedBytes,
+      backingStore: hasLoopDisk ? 'loop' : 'dir',
+      diskQuotaEnforced: hasLoopDisk,
       configuredIpv4,
       configuredGateway,
     };
@@ -1396,6 +1557,20 @@ export class LxcContainerManager {
   private async getRootfsUsedBytes(containerName: string): Promise<number> {
     const rootfs = this.getRootfsDir(containerName);
     if (!privilegedFs.existsSync(rootfs)) return 0;
+
+    // Fast kernel statfs path when rootfs is a dedicated loop-mounted ext4 quota volume
+    if (findActiveMountSource(rootfs) && isBinaryAvailable('df')) {
+      const dfRes = await runAllowlistedCommand('df', ['-B1', '--output=used', rootfs], {
+        timeoutMs: 4000,
+        asRoot: true,
+      });
+      if (dfRes.exitCode === 0) {
+        const lines = dfRes.stdout.trim().split('\n');
+        const val = parseInt((lines[lines.length - 1] || '').trim(), 10);
+        if (!Number.isNaN(val) && val >= 0) return val;
+      }
+    }
+
     if (isBinaryAvailable('du')) {
       const res = await runAllowlistedCommand('du', ['-sb', rootfs], {
         timeoutMs: 8000,
@@ -1407,6 +1582,256 @@ export class LxcContainerManager {
       }
     }
     return 0;
+  }
+
+  public getQuotaDiskDir(): string {
+    if (this.isSystemLxcStore()) {
+      return '/var/lib/hkvm-lxc-disks';
+    }
+    return path.join(path.dirname(path.resolve(this.lxcBaseDir)), 'hkvm-lxc-disks');
+  }
+
+  public getQuotaDiskImagePath(containerName: string): string {
+    const safeName = SafeValidators.containerName(containerName);
+    return path.join(this.getQuotaDiskDir(), `${safeName}.ext4`);
+  }
+
+  /**
+   * Ensures an existing sparse `.ext4` quota volume is loop-mounted onto `<ctDir>/rootfs`
+   * (for example after a host reboot before `lxc-start`).
+   */
+  public async ensureExistingQuotaDiskMounted(containerName: string): Promise<boolean> {
+    const safeName = SafeValidators.containerName(containerName);
+    const imgPath = this.getQuotaDiskImagePath(safeName);
+    if (!privilegedFs.existsSync(imgPath)) return false;
+
+    const rootfsDir = this.getRootfsDir(safeName);
+    privilegedFs.mkdirpSync(rootfsDir, 0o755);
+    if (findActiveMountSource(rootfsDir)) return true;
+
+    if (!isBinaryAvailable('mount') || (!isRunningAsRoot() && !canPasswordlessSudo())) {
+      return false;
+    }
+
+    let mntRes = await runAllowlistedCommand('mount', ['-o', 'loop', imgPath, rootfsDir], {
+      timeoutMs: 15_000,
+      asRoot: true,
+    });
+    if (mntRes.exitCode !== 0 && isBinaryAvailable('e2fsck')) {
+      await runAllowlistedCommand('e2fsck', ['-fy', imgPath], {
+        timeoutMs: 60_000,
+        asRoot: true,
+      }).catch(() => undefined);
+      mntRes = await runAllowlistedCommand('mount', ['-o', 'loop', imgPath, rootfsDir], {
+        timeoutMs: 15_000,
+        asRoot: true,
+      });
+    }
+    return mntRes.exitCode === 0 && Boolean(findActiveMountSource(rootfsDir));
+  }
+
+  /**
+   * Unmounts `<ctDir>/rootfs` if backed by a loop mount, and optionally deletes the `.ext4` image.
+   */
+  public async unmountQuotaDiskIfMounted(
+    containerName: string,
+    removeImage = false
+  ): Promise<void> {
+    const safeName = SafeValidators.containerName(containerName);
+    const rootfsDir = this.getRootfsDir(safeName);
+    if (findActiveMountSource(rootfsDir) && isBinaryAvailable('umount')) {
+      const uRes = await runAllowlistedCommand('umount', [rootfsDir], {
+        timeoutMs: 10_000,
+        asRoot: true,
+      });
+      if (uRes.exitCode !== 0) {
+        await runAllowlistedCommand('umount', ['-l', rootfsDir], {
+          timeoutMs: 10_000,
+          asRoot: true,
+        }).catch(() => undefined);
+      }
+    }
+    if (removeImage) {
+      const imgPath = this.getQuotaDiskImagePath(safeName);
+      if (privilegedFs.existsSync(imgPath)) {
+        privilegedFs.unlinkSync(imgPath);
+      }
+    }
+  }
+
+  /**
+   * Provisions or resizes a thin-provisioned sparse `ext4` loop quota volume mounted on `<ctDir>/rootfs`
+   * so `df -h` inside the container reports the exact assigned `diskGb` (e.g. `20G`) and the kernel
+   * enforces the hard block limit instead of exposing the entire host partition (`overlay 32G`).
+   *
+   * - Initial conversion is atomic: builds `.ext4.tmp` via `mkfs.ext4 -d <rootfs>`, probe-mounts on
+   *   a temporary directory first to verify kernel loop-mount permission, and rolls back cleanly if
+   *   loop mounting is unavailable.
+   * - Online growth (`diskGb` increased while running) runs `truncate` + `losetup -c` + `resize2fs`
+   *   with zero container downtime.
+   */
+  public async ensureContainerQuotaDisk(
+    containerName: string,
+    diskGb: number,
+    options: { allowNonSystemStore?: boolean } = {}
+  ): Promise<boolean> {
+    if (
+      !options.allowNonSystemStore &&
+      !this.isSystemLxcStore() &&
+      process.env.HKVM_FORCE_LOOP_QUOTA !== 'true'
+    ) {
+      return false;
+    }
+
+    const requiredBins = ['truncate', 'mkfs.ext4', 'mount', 'umount', 'losetup', 'resize2fs'];
+    if (requiredBins.some((b) => !isBinaryAvailable(b))) {
+      return false;
+    }
+    if (!isRunningAsRoot() && !canPasswordlessSudo()) {
+      return false;
+    }
+
+    const safeName = SafeValidators.containerName(containerName);
+    const rootfsDir = this.getRootfsDir(safeName);
+    if (!privilegedFs.existsSync(rootfsDir)) return false;
+
+    const diskDir = this.getQuotaDiskDir();
+    privilegedFs.mkdirpSync(diskDir, 0o700);
+    const imgPath = this.getQuotaDiskImagePath(safeName);
+    const targetBytes = Math.max(1, Math.round(Number(diskGb || 20))) * 1024 * 1024 * 1024;
+
+    // 1. Existing `.ext4` quota volume: ensure mounted & grow online/offline if diskGb increased
+    if (privilegedFs.existsSync(imgPath)) {
+      const mountedOk = await this.ensureExistingQuotaDiskMounted(safeName);
+      if (!mountedOk) return false;
+
+      const meta = privilegedFs.lstatMetaSync(imgPath);
+      if (targetBytes > meta.size + 64 * 1024 * 1024) {
+        const truncRes = await runAllowlistedCommand(
+          'truncate',
+          ['-s', String(targetBytes), imgPath],
+          { timeoutMs: 15_000, asRoot: true }
+        );
+        if (truncRes.exitCode === 0) {
+          const loopSrc = findActiveMountSource(rootfsDir);
+          if (loopSrc && loopSrc.startsWith('/dev/loop')) {
+            await runAllowlistedCommand('losetup', ['-c', loopSrc], {
+              timeoutMs: 10_000,
+              asRoot: true,
+            });
+            await runAllowlistedCommand('resize2fs', [loopSrc], {
+              timeoutMs: 60_000,
+              asRoot: true,
+            });
+          } else {
+            if (isBinaryAvailable('e2fsck')) {
+              await runAllowlistedCommand('e2fsck', ['-fy', imgPath], {
+                timeoutMs: 60_000,
+                asRoot: true,
+              }).catch(() => undefined);
+            }
+            await runAllowlistedCommand('resize2fs', [imgPath], {
+              timeoutMs: 60_000,
+              asRoot: true,
+            });
+          }
+        }
+      }
+      return true;
+    }
+
+    // 2. Convert plain `dir` rootfs into a sparse loop-mounted `ext4` quota volume (container must be stopped)
+    const curState = await this.inspectContainer(safeName);
+    if (curState.state === 'running' || curState.state === 'frozen') {
+      return false;
+    }
+    if (findActiveMountSource(rootfsDir)) {
+      return true;
+    }
+
+    const usedBytes = await this.getRootfsUsedBytes(safeName);
+    const effectiveBytes = Math.max(targetBytes, usedBytes + 512 * 1024 * 1024);
+    const tmpImgPath = `${imgPath}.tmp`;
+    const probeDir = path.join(this.getContainerDir(safeName), '.rootfs-loop-probe');
+
+    if (privilegedFs.existsSync(tmpImgPath)) privilegedFs.unlinkSync(tmpImgPath);
+    if (privilegedFs.existsSync(probeDir)) privilegedFs.rmRecursiveSync(probeDir);
+
+    const truncRes = await runAllowlistedCommand(
+      'truncate',
+      ['-s', String(effectiveBytes), tmpImgPath],
+      { timeoutMs: 15_000, asRoot: true }
+    );
+    if (truncRes.exitCode !== 0) {
+      if (privilegedFs.existsSync(tmpImgPath)) privilegedFs.unlinkSync(tmpImgPath);
+      return false;
+    }
+
+    const mkfsRes = await runAllowlistedCommand(
+      'mkfs.ext4',
+      [
+        '-q',
+        '-F',
+        '-m',
+        '0',
+        '-d',
+        rootfsDir,
+        '-E',
+        'lazy_itable_init=1,lazy_journal_init=1',
+        tmpImgPath,
+      ],
+      { timeoutMs: 300_000, asRoot: true }
+    );
+    if (mkfsRes.exitCode !== 0) {
+      if (privilegedFs.existsSync(tmpImgPath)) privilegedFs.unlinkSync(tmpImgPath);
+      return false;
+    }
+
+    // Probe-mount BEFORE touching `rootfsDir` so restricted kernels never affect guest files
+    privilegedFs.mkdirpSync(probeDir, 0o700);
+    const probeMnt = await runAllowlistedCommand('mount', ['-o', 'loop', tmpImgPath, probeDir], {
+      timeoutMs: 15_000,
+      asRoot: true,
+    });
+    if (probeMnt.exitCode !== 0) {
+      privilegedFs.rmRecursiveSync(probeDir);
+      privilegedFs.unlinkSync(tmpImgPath);
+      return false;
+    }
+    await runAllowlistedCommand('umount', [probeDir], {
+      timeoutMs: 10_000,
+      asRoot: true,
+    }).catch(() =>
+      runAllowlistedCommand('umount', ['-l', probeDir], { timeoutMs: 10_000, asRoot: true })
+    );
+    privilegedFs.rmRecursiveSync(probeDir);
+
+    // Atomic directory swap -> mount `.ext4` onto `rootfsDir`
+    const bakDir = `${rootfsDir}.preloop-bak`;
+    if (privilegedFs.existsSync(bakDir)) privilegedFs.rmRecursiveSync(bakDir);
+
+    privilegedFs.renameSync(rootfsDir, bakDir);
+    privilegedFs.mkdirpSync(rootfsDir, 0o755);
+    privilegedFs.renameSync(tmpImgPath, imgPath);
+
+    const finalMnt = await runAllowlistedCommand('mount', ['-o', 'loop', imgPath, rootfsDir], {
+      timeoutMs: 15_000,
+      asRoot: true,
+    });
+    if (finalMnt.exitCode === 0 && findActiveMountSource(rootfsDir)) {
+      privilegedFs.rmRecursiveSync(bakDir);
+      return true;
+    }
+
+    // Rollback on unexpected mount failure
+    await runAllowlistedCommand('umount', ['-l', rootfsDir], {
+      timeoutMs: 10_000,
+      asRoot: true,
+    }).catch(() => undefined);
+    privilegedFs.rmRecursiveSync(rootfsDir);
+    privilegedFs.renameSync(bakDir, rootfsDir);
+    if (privilegedFs.existsSync(imgPath)) privilegedFs.unlinkSync(imgPath);
+    return false;
   }
 
   private async createFromLocalArchive(safeName: string, archivePath: string): Promise<void> {
@@ -1503,7 +1928,8 @@ export class LxcContainerManager {
 
     this.inFlightCreations.add(lockKey);
     try {
-      const backing = spec.backingStore || 'dir';
+      const requestedBacking = spec.backingStore === 'loop' ? 'dir' : (spec.backingStore || 'dir');
+      const backing = requestedBacking;
       this.ensureHostLxcDirectories();
 
       // Clean up any leftover empty/corrupt/orphan directory if not registered in panel DB
@@ -1641,6 +2067,12 @@ export class LxcContainerManager {
             await this.injectSshPublicKey(safeName, pubKey);
           }
         }
+
+        // Convert plain `dir` rootfs into a dedicated sparse `ext4` loop quota volume so
+        // `df -h` inside the container reports exact `spec.diskGb` (e.g. 20G) instead of host disk
+        if ((!spec.backingStore || spec.backingStore === 'dir' || spec.backingStore === 'loop') && spec.diskGb >= 1) {
+          await this.ensureContainerQuotaDisk(safeName, spec.diskGb).catch(() => false);
+        }
       } catch (cfgErr) {
         await this.destroyContainer(safeName).catch(() => {
           if (privilegedFs.existsSync(ctDir)) privilegedFs.rmRecursiveSync(ctDir);
@@ -1716,7 +2148,12 @@ export class LxcContainerManager {
     stripped = stripped.replace(/^\s*lxc\.apparmor\.(?:profile|allow_nesting)\s*=.*$/gm, '');
     stripped = stripped.replace(/\n{3,}/g, '\n\n');
 
-    const cgroupV2Controllers = readActiveCgroupV2Controllers();
+    const isSystemStore = this.isSystemLxcStore();
+    if (isSystemStore) {
+      await ensureLxcfsDaemonMounted().catch(() => false);
+    }
+
+    const cgroupV2Controllers = readActiveCgroupV2Controllers(isSystemStore);
     const isCgroupV2 = cgroupV2Controllers !== null;
     const apparmorAvailable = isAppArmorProfileLoadable();
     const lines: string[] = [markerStart];
@@ -1736,6 +2173,23 @@ export class LxcContainerManager {
       } else {
         lines.push('lxc.mount.auto =');
         lines.push('lxc.mount.auto = proc:mixed sys:rw cgroup:mixed');
+      }
+    }
+
+    // Bind-mount cgroup-virtualized lxcfs /proc entries so `free -h`, `neofetch`, `top`, and `htop`
+    // inside the container display the container's assigned RAM/Swap/CPU instead of host /proc!
+    if (isSystemStore && fs.existsSync('/var/lib/lxcfs/proc/meminfo')) {
+      const hasCommonLxcfsHook =
+        stripped.includes('/usr/share/lxc/config/common.conf') &&
+        fs.existsSync('/usr/share/lxc/config/common.conf.d/00-lxcfs.conf');
+      if (!hasCommonLxcfsHook) {
+        for (const procEntry of ['cpuinfo', 'diskstats', 'loadavg', 'meminfo', 'stat', 'swaps', 'uptime']) {
+          if (fs.existsSync(`/var/lib/lxcfs/proc/${procEntry}`)) {
+            lines.push(
+              `lxc.mount.entry = /var/lib/lxcfs/proc/${procEntry} proc/${procEntry} none bind,rw,optional 0 0`
+            );
+          }
+        }
       }
     }
 
@@ -1759,6 +2213,12 @@ export class LxcContainerManager {
     const cores = Math.max(1, Number(cfg.cpuCores || 1));
     const pct = Math.min(100, Math.max(5, Number(cfg.cpuLimitPercent || 100)));
     const quotaUs = Math.round(cores * 100_000 * (pct / 100));
+    const effectiveCpuset = selectContainerCpuset(
+      safeName,
+      cores,
+      readEffectiveHostCpuIds(),
+      cfg.cpuPinning
+    );
 
     if (isCgroupV2 && cgroupV2Controllers) {
       if (cgroupV2Controllers.has('cpu')) {
@@ -1768,12 +2228,8 @@ export class LxcContainerManager {
           lines.push(`lxc.cgroup2.cpu.weight = ${weight}`);
         }
       }
-      if (
-        cgroupV2Controllers.has('cpuset') &&
-        cfg.cpuPinning &&
-        /^[0-9,-]+$/.test(cfg.cpuPinning)
-      ) {
-        lines.push(`lxc.cgroup2.cpuset.cpus = ${cfg.cpuPinning}`);
+      if (cgroupV2Controllers.has('cpuset') && effectiveCpuset) {
+        lines.push(`lxc.cgroup2.cpuset.cpus = ${effectiveCpuset}`);
       }
       if (cgroupV2Controllers.has('memory')) {
         if (cfg.ramMb) {
@@ -1789,8 +2245,8 @@ export class LxcContainerManager {
       if (cfg.cpuShares) {
         lines.push(`lxc.cgroup.cpu.shares = ${Math.max(64, cfg.cpuShares)}`);
       }
-      if (cfg.cpuPinning && /^[0-9,-]+$/.test(cfg.cpuPinning)) {
-        lines.push(`lxc.cgroup.cpuset.cpus = ${cfg.cpuPinning}`);
+      if (effectiveCpuset) {
+        lines.push(`lxc.cgroup.cpuset.cpus = ${effectiveCpuset}`);
       }
       if (cfg.ramMb) {
         lines.push(`lxc.cgroup.memory.limit_in_bytes = ${Math.max(64, cfg.ramMb)}M`);
@@ -2247,6 +2703,11 @@ export class LxcContainerManager {
       return;
     }
 
+    if (this.isSystemLxcStore()) {
+      await ensureLxcfsDaemonMounted().catch(() => false);
+      ensureCgroupV2SubtreeDelegation();
+    }
+    await this.ensureExistingQuotaDiskMounted(safeName).catch(() => false);
     const preNet = await this.prepareContainerNetworkPreStart(safeName).catch(() => null);
 
     const logFile = privilegedFs.existsSync('/var/log/lxc')
@@ -2274,17 +2735,43 @@ export class LxcContainerManager {
         }
       }
 
-      // On WSL2 / nested container hosts where cgroup limits cannot be written into child cgroups,
-      // automatically strip lxc.cgroup* lines and retry startup once.
       const combinedDiag = `${res.stderr}\n${res.stdout}\n${logTail}`;
       const configFile = path.join(this.getContainerDir(safeName), 'config');
-      if (/cgroup|limits/i.test(combinedDiag) && privilegedFs.existsSync(configFile)) {
+      if (/cgroup|limits|devices/i.test(combinedDiag) && privilegedFs.existsSync(configFile)) {
         try {
-          const curCfg = privilegedFs.readTextSync(configFile);
-          const nextCfg = curCfg.replace(/^\s*lxc\.cgroup2?\.[a-zA-Z0-9_.-]+\s*=.*$/gm, '');
-          if (nextCfg !== curCfg) {
-            privilegedFs.writeFileSync(configFile, nextCfg, 0o640);
+          let curCfg = privilegedFs.readTextSync(configFile);
+          // Stage 1: Strip ONLY `devices.allow` / `devices.deny` first (eBPF device rules often fail in
+          // nested Docker/Codespace cgroups, and must NEVER wipe out `memory.max` or `cpu.max`!)
+          const withoutDevices = curCfg.replace(
+            /^\s*lxc\.cgroup2?\.devices\.[a-zA-Z0-9_.-]+\s*=.*$/gm,
+            ''
+          );
+          if (withoutDevices !== curCfg) {
+            privilegedFs.writeFileSync(configFile, withoutDevices, 0o640);
+            curCfg = withoutDevices;
             res = await runStart();
+          }
+
+          // Stage 2: If still failing, strip `cpuset.cpus` next while keeping `memory.max` and `cpu.max`
+          if (res.exitCode !== 0) {
+            const withoutCpuset = curCfg.replace(
+              /^\s*lxc\.cgroup2?\.cpuset\.[a-zA-Z0-9_.-]+\s*=.*$/gm,
+              ''
+            );
+            if (withoutCpuset !== curCfg) {
+              privilegedFs.writeFileSync(configFile, withoutCpuset, 0o640);
+              curCfg = withoutCpuset;
+              res = await runStart();
+            }
+          }
+
+          // Stage 3: Last-resort fallback on unprivileged kernels without any cgroup delegation
+          if (res.exitCode !== 0) {
+            const nextCfg = curCfg.replace(/^\s*lxc\.cgroup2?\.[a-zA-Z0-9_.-]+\s*=.*$/gm, '');
+            if (nextCfg !== curCfg) {
+              privilegedFs.writeFileSync(configFile, nextCfg, 0o640);
+              res = await runStart();
+            }
           }
         } catch {
           // ignore config rewrite error and surface original failure
@@ -2385,6 +2872,7 @@ export class LxcContainerManager {
     this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(containerName);
     await this.stopContainer(safeName, true).catch(() => undefined);
+    await this.unmountQuotaDiskIfMounted(safeName, true).catch(() => undefined);
     const res = await runAllowlistedCommand(
       'lxc-destroy',
       [...this.lxcPathArgs(), '-n', safeName, '-f'],
@@ -2405,6 +2893,8 @@ export class LxcContainerManager {
     const info = await this.inspectContainer(safeName);
     if (info.state !== 'missing') {
       await this.destroyContainer(safeName);
+    } else {
+      await this.unmountQuotaDiskIfMounted(safeName, true).catch(() => undefined);
     }
     return this.createContainer(spec);
   }
@@ -2427,7 +2917,14 @@ export class LxcContainerManager {
           'lxc-cgroup',
           [...this.lxcPathArgs(), '-n', safeName, key, `${Math.max(64, update.ramMb)}M`],
           rootOpt
-        );
+        ).catch(() => undefined);
+      }
+      if (update.swapMb !== undefined && isV2 && isCgroupV2SwapSupported()) {
+        await runAllowlistedCommand(
+          'lxc-cgroup',
+          [...this.lxcPathArgs(), '-n', safeName, 'memory.swap.max', `${Math.max(0, update.swapMb)}M`],
+          rootOpt
+        ).catch(() => undefined);
       }
       if (update.cpuCores) {
         const pct = Math.min(100, Math.max(5, Number(update.cpuLimitPercent || 100)));
@@ -2437,13 +2934,45 @@ export class LxcContainerManager {
             'lxc-cgroup',
             [...this.lxcPathArgs(), '-n', safeName, 'cpu.max', `${quotaUs} 100000`],
             rootOpt
-          );
+          ).catch(() => undefined);
         } else {
           await runAllowlistedCommand(
             'lxc-cgroup',
             [...this.lxcPathArgs(), '-n', safeName, 'cpu.cfs_quota_us', `${quotaUs}`],
             rootOpt
-          );
+          ).catch(() => undefined);
+        }
+
+        const cpuset = selectContainerCpuset(
+          safeName,
+          update.cpuCores,
+          readEffectiveHostCpuIds(),
+          update.cpuPinning
+        );
+        if (cpuset) {
+          await runAllowlistedCommand(
+            'lxc-cgroup',
+            [...this.lxcPathArgs(), '-n', safeName, 'cpuset.cpus', cpuset],
+            rootOpt
+          ).catch(() => undefined);
+        }
+      }
+    }
+
+    // Apply disk quota volume provisioning or live online resize (`truncate` + `losetup -c` + `resize2fs`)
+    if (update.diskGb && update.diskGb >= 1 && this.isSystemLxcStore()) {
+      const hasLoopAlready = privilegedFs.existsSync(this.getQuotaDiskImagePath(safeName));
+      if (hasLoopAlready) {
+        await this.ensureContainerQuotaDisk(safeName, update.diskGb).catch(() => false);
+      } else {
+        // Existing plain `dir` container without a quota volume yet: convert cleanly (brief stop/start if running)
+        const wasRunning = info.state === 'running';
+        if (wasRunning) {
+          await this.stopContainer(safeName).catch(() => undefined);
+        }
+        await this.ensureContainerQuotaDisk(safeName, update.diskGb).catch(() => false);
+        if (wasRunning) {
+          await this.startContainer(safeName).catch(() => undefined);
         }
       }
     }

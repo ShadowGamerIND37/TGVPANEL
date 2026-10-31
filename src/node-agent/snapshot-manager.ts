@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import {
+  findActiveMountSource,
   isBinaryAvailable,
   isRunningAsRoot,
   privilegedFs,
@@ -243,7 +244,15 @@ export class LxcSnapshotAndBackupManager {
       const safeName = SafeValidators.containerName(cleanContainerName);
       const existingRootfs = path.join(this.lxcBaseDir, safeName, 'rootfs');
       if (privilegedFs.existsSync(existingRootfs)) {
-        privilegedFs.rmRecursiveSync(existingRootfs);
+        if (findActiveMountSource(existingRootfs)) {
+          // Preserve active loop mountpoint directory; clear only its inner entries
+          for (const child of privilegedFs.readdirNamesSync(existingRootfs)) {
+            if (child === 'lost+found') continue;
+            privilegedFs.rmRecursiveSync(path.join(existingRootfs, child));
+          }
+        } else {
+          privilegedFs.rmRecursiveSync(existingRootfs);
+        }
       }
     }
 

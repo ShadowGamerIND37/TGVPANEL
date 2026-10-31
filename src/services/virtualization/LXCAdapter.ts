@@ -1,3 +1,4 @@
+import path from 'path';
 import { UnifiedDatabase } from '../../db/database';
 import {
   decryptSecret,
@@ -6,6 +7,7 @@ import {
 } from '../../security/crypto-vault';
 import { SafeValidators } from '../../security/middleware';
 import { NodeManager } from '../nodes/NodeClient';
+import { privilegedFs } from '../../node-agent/command-runner';
 import {
   LxcContainerRuntimeInfo,
   LxcCreateSpec,
@@ -344,6 +346,7 @@ export class LXCAdapter implements VirtualizationAdapter {
       let runtimeState = 'stopped';
       let detectedIp = input.ipv4Address || null;
       let detectedGw = spec.ipv4Gateway || null;
+      let effectiveBackingStore: string = spec.backingStore || 'dir';
       let hostProvisioned = false;
       let warning: string | undefined;
 
@@ -351,6 +354,7 @@ export class LXCAdapter implements VirtualizationAdapter {
         if (node.is_local) {
           const info = await this.nodeManager.localRuntime.containerManager.createContainer(spec);
           runtimeState = info.state === 'running' ? 'running' : 'stopped';
+          if (info.backingStore) effectiveBackingStore = info.backingStore;
           if (!detectedIp && (info.ips.length > 0 || info.configuredIpv4)) {
             detectedIp = info.ips[0] || info.configuredIpv4 || null;
           }
@@ -368,6 +372,7 @@ export class LXCAdapter implements VirtualizationAdapter {
             600_000
           );
           runtimeState = info.state === 'running' ? 'running' : 'stopped';
+          if (info.backingStore) effectiveBackingStore = info.backingStore;
           if (!detectedIp && (info.ips?.length > 0 || info.configuredIpv4)) {
             detectedIp = info.ips?.[0] || info.configuredIpv4 || null;
           }
@@ -404,7 +409,7 @@ export class LXCAdapter implements VirtualizationAdapter {
           spec.ramMb,
           spec.swapMb,
           spec.diskGb,
-          spec.backingStore,
+          effectiveBackingStore,
           spec.privileged ? 1 : 0,
           spec.nesting ? 1 : 0,
           spec.kvmNesting ? 1 : 0,
@@ -689,6 +694,15 @@ export class LXCAdapter implements VirtualizationAdapter {
             row.container_name,
             resourcePayload
           );
+          const refreshed = await this.nodeManager.localRuntime.containerManager
+            .inspectContainer(row.container_name)
+            .catch(() => null);
+          if (refreshed?.diskQuotaEnforced && row.rootfs_storage_type !== 'loop') {
+            await this.db.run(
+              `UPDATE lxc_instances SET rootfs_storage_type = 'loop' WHERE id = ?`,
+              [refId]
+            );
+          }
         } catch (err: any) {
           // If container dir exists on disk, surface real error; otherwise allow DB config edit when host is in controller-only mode
           if (!String(err.message).includes('Container config not found') || !cfgFileExists) {
@@ -1134,8 +1148,9 @@ export class LXCAdapter implements VirtualizationAdapter {
   }
 
   /**
-   * Automatically repairs bridge NAT/FORWARD rules, missing IPv4 assignments, and guest
-   * `/etc/resolv.conf` on active local LXC containers during HKVM server startup.
+   * Automatically heals bridge NAT/FORWARD/DNS-relay rules, cgroup RAM/CPU limits, `lxcfs`
+   * `/proc` virtualization, and sparse `ext4` loop disk quotas on active local LXC containers
+   * during HKVM server startup.
    */
   public async healLocalContainersNetworking(): Promise<void> {
     const localNode = await this.db.get<{ id: number }>(
@@ -1143,15 +1158,90 @@ export class LXCAdapter implements VirtualizationAdapter {
     );
     if (!localNode) return;
 
-    const rows = await this.db.all<{ id: number; container_name: string; bridge: string | null }>(
-      `SELECT id, container_name, bridge FROM lxc_instances WHERE node_id = ? AND suspended = 0`,
+    const rows = await this.db.all<{
+      id: number;
+      container_name: string;
+      hostname: string;
+      bridge: string | null;
+      cpu_cores: number;
+      cpu_shares: number;
+      cpu_limit_pct: number;
+      cpu_pinning: string | null;
+      ram_mb: number;
+      swap_mb: number;
+      disk_gb: number;
+      rootfs_storage_type: string;
+      nesting: number;
+      kvm_nesting: number;
+      autostart: number;
+      ip_address: string | null;
+      gateway: string | null;
+      ipv6_address: string | null;
+    }>(
+      `SELECT id, container_name, hostname, bridge, cpu_cores, cpu_shares, cpu_limit_pct, cpu_pinning,
+              ram_mb, swap_mb, disk_gb, rootfs_storage_type, nesting, kvm_nesting, autostart,
+              ip_address, gateway, ipv6_address
+       FROM lxc_instances WHERE node_id = ? AND suspended = 0`,
       [localNode.id]
     );
     const cm = this.nodeManager.localRuntime.containerManager;
+    const isSystemStore = path.resolve(cm.getBaseDir()) === '/var/lib/lxc';
+
     for (const r of rows) {
       try {
-        const info = await cm.inspectContainer(r.container_name);
+        let info = await cm.inspectContainer(r.container_name);
         if (info.state === 'missing') continue;
+
+        if (isSystemStore) {
+          const needsLoopUpgrade = !info.diskQuotaEnforced && r.disk_gb >= 1;
+          const cfgPath = path.join(cm.getContainerDir(r.container_name), 'config');
+          const curCfg = privilegedFs.existsSync(cfgPath) ? privilegedFs.readTextSync(cfgPath) : '';
+          const missingCgroupLimits =
+            !curCfg.includes('memory.max') && !curCfg.includes('memory.limit_in_bytes');
+
+          if (needsLoopUpgrade || missingCgroupLimits) {
+            const wasRunning = info.state === 'running';
+            if (wasRunning && needsLoopUpgrade) {
+              await cm.stopContainer(r.container_name).catch(() => undefined);
+            }
+            await cm.writeManagedConfigSection(r.container_name, {
+              hostname: r.hostname || r.container_name,
+              cpuCores: r.cpu_cores,
+              cpuShares: r.cpu_shares,
+              cpuLimitPercent: r.cpu_limit_pct,
+              cpuPinning: r.cpu_pinning,
+              ramMb: r.ram_mb,
+              swapMb: r.swap_mb,
+              nesting: Boolean(r.nesting),
+              kvmNesting: Boolean(r.kvm_nesting),
+              autostart: Boolean(r.autostart),
+              bridge: r.bridge || 'lxcbr0',
+              ipv4Address: r.ip_address,
+              ipv4Gateway: r.gateway,
+              ipv6Address: r.ipv6_address,
+            });
+            if (needsLoopUpgrade) {
+              const converted = await cm
+                .ensureContainerQuotaDisk(r.container_name, r.disk_gb)
+                .catch(() => false);
+              if (converted) {
+                await this.db.run(
+                  `UPDATE lxc_instances SET rootfs_storage_type = 'loop', updated_at = datetime('now') WHERE id = ?`,
+                  [r.id]
+                );
+              }
+              if (wasRunning) {
+                await cm.startContainer(r.container_name).catch(() => undefined);
+              }
+            } else if (wasRunning && missingCgroupLimits) {
+              await cm.restartContainer(r.container_name).catch(() => undefined);
+            }
+            info = await cm.inspectContainer(r.container_name);
+          } else {
+            await cm.ensureExistingQuotaDiskMounted(r.container_name).catch(() => false);
+          }
+        }
+
         // Ensure bridge NAT/FORWARD/DNS-relay + guest DNS + auto-IP if missing
         const repair = await cm.repairContainerNetworking(r.container_name, r.bridge || 'lxcbr0');
         if (repair.ipv4Address || repair.gateway) {
