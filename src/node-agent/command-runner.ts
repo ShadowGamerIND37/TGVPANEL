@@ -74,12 +74,15 @@ const ALLOWED_BINARIES = new Set([
   'ip',
   'bridge',
   'iptables',
+  'iptables-legacy',
   'iptables-save',
   'iptables-restore',
   'ip6tables',
+  'ip6tables-legacy',
   'nft',
   'tc',
   'sysctl',
+  'modprobe',
   // System inspection tools
   'uname',
   'uptime',
@@ -94,6 +97,10 @@ const ALLOWED_BINARIES = new Set([
  * Binaries that manage system-wide hypervisor/container/network/volume state and require UID 0
  * when targeting host resources.
  */
+export function isAllowlistedBinary(binaryName: string): boolean {
+  return ALLOWED_BINARIES.has(binaryName);
+}
+
 const PRIVILEGED_SYSTEM_BINARIES = new Set([
   'lxc-create',
   'lxc-start',
@@ -108,11 +115,14 @@ const PRIVILEGED_SYSTEM_BINARIES = new Set([
   'lxc-cgroup',
   'lxc-autostart',
   'iptables',
+  'iptables-legacy',
   'iptables-save',
   'iptables-restore',
   'ip6tables',
+  'ip6tables-legacy',
   'nft',
   'tc',
+  'modprobe',
   'lvcreate',
   'lvremove',
   'lvextend',

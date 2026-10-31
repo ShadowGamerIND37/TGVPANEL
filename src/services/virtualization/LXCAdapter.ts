@@ -1099,16 +1099,18 @@ export class LXCAdapter implements VirtualizationAdapter {
     if (!row) throw new Error(`LXC container #${refId} not found.`);
 
     let repair: LxcNetworkRepairResult;
+    const desiredBridge = row.bridge || 'lxcbr0';
     if (row.is_local) {
       repair = await this.nodeManager.localRuntime.containerManager.repairContainerNetworking(
-        row.container_name
+        row.container_name,
+        desiredBridge
       );
     } else {
       const resp = await this.nodeManager.requestRemoteNode<{ repair: LxcNetworkRepairResult }>(
         row.node_id,
         'POST',
         `/api/v1/containers/${encodeURIComponent(row.container_name)}/repair-network`,
-        {}
+        { bridge: desiredBridge }
       );
       repair = resp.repair;
     }
@@ -1141,18 +1143,17 @@ export class LXCAdapter implements VirtualizationAdapter {
     );
     if (!localNode) return;
 
-    const rows = await this.db.all<{ id: number; container_name: string }>(
-      `SELECT id, container_name FROM lxc_instances WHERE node_id = ? AND suspended = 0`,
+    const rows = await this.db.all<{ id: number; container_name: string; bridge: string | null }>(
+      `SELECT id, container_name, bridge FROM lxc_instances WHERE node_id = ? AND suspended = 0`,
       [localNode.id]
     );
     const cm = this.nodeManager.localRuntime.containerManager;
     for (const r of rows) {
       try {
-        const cfgFile = `${cm.getContainerDir(r.container_name)}/config`;
         const info = await cm.inspectContainer(r.container_name);
         if (info.state === 'missing') continue;
-        // Ensure bridge NAT/FORWARD + guest DNS + auto-IP if missing
-        const repair = await cm.repairContainerNetworking(r.container_name);
+        // Ensure bridge NAT/FORWARD/DNS-relay + guest DNS + auto-IP if missing
+        const repair = await cm.repairContainerNetworking(r.container_name, r.bridge || 'lxcbr0');
         if (repair.ipv4Address || repair.gateway) {
           await this.db.run(
             `UPDATE lxc_instances
@@ -1164,7 +1165,6 @@ export class LXCAdapter implements VirtualizationAdapter {
           );
           await this.syncRegistryRow(r.id);
         }
-        void cfgFile;
       } catch {
         // non-fatal per-container self-heal
       }

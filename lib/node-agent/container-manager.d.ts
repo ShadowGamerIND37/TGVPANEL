@@ -79,6 +79,7 @@ export interface LxcBridgeNetworkInfo {
     subnetCidr: string | null;
     hasDhcpServer: boolean;
     natConfigured: boolean;
+    dnsRelayPort: number;
 }
 export interface LxcNetworkRepairResult {
     containerName: string;
@@ -87,8 +88,10 @@ export interface LxcNetworkRepairResult {
     ipv4Address: string | null;
     gateway: string | null;
     dnsServers: string[];
+    dnsRelayPort?: number;
     natConfigured: boolean;
     liveApplied: boolean;
+    restartedForVeth?: boolean;
 }
 export declare function ipv4ToUint32(ip: string): number;
 export declare function uint32ToIpv4(num: number): string;
@@ -130,11 +133,13 @@ export declare class LxcContainerManager {
     private isSystemLxcStore;
     private bridgeHasPhysicalSlave;
     private detectBridgeDhcpServer;
+    private ensureIptablesRule;
     /**
      * Ensures the Linux bridge exists, is UP, has an IPv4 gateway address (when operating as
-     * a virtual NAT bridge such as `lxcbr0`), enables `net.ipv4.ip_forward=1`, and installs
-     * idempotent outbound NAT MASQUERADE + top-priority FORWARD ACCEPT rules so Docker's
-     * `FORWARD DROP` policy or UFW never blocks LXC container internet/DNS access.
+     * a virtual NAT bridge such as `lxcbr0`), starts HKVM's host-side `BridgeDnsRelay`, enables
+     * kernel forwarding/rp_filter sysctls, and installs idempotent MASQUERADE, FORWARD ACCEPT,
+     * INPUT ACCEPT, TCPMSS clamping, and PREROUTING DNS REDIRECT rules across BOTH `iptables`
+     * and `iptables-legacy` (preventing WSL2 / Docker Desktop / UFW split-brain packet drops).
      */
     ensureBridgeNetworkReady(bridgeName: string): Promise<LxcBridgeNetworkInfo>;
     /**
@@ -194,14 +199,21 @@ export declare class LxcContainerManager {
             readOnly?: boolean;
         }>;
     }): Promise<void>;
+    private buildEffectiveGuestDnsList;
     private prepareContainerNetworkPreStart;
+    /**
+     * Ensures a running container's host-side `veth` peer is enslaved to `bridge` and `UP`
+     * (recovers containers whose bridge was recreated or bounced while the container stayed running).
+     */
+    private ensureRunningVethAttachedToBridge;
     private applyLiveGuestNetworkIfNeeded;
     /**
-     * Repairs host bridge/NAT/FORWARD rules, auto-assigns an IPv4 address if the bridge lacks
-     * a DHCP daemon, writes reliable non-loopback `/etc/resolv.conf` + netplan/networkd config,
-     * and applies IP/route/DNS live inside a running container without requiring a reboot.
+     * Repairs host bridge/NAT/FORWARD/DNS-relay rules, upgrades `lxc.net.0.type = none` if needed,
+     * auto-assigns a collision-free IPv4 if the container lacks one, re-enslaves orphaned host
+     * `veth` peers (or restarts the container if `eth0` was never created), and applies IP/route/DNS
+     * live inside the guest.
      */
-    repairContainerNetworking(containerName: string): Promise<LxcNetworkRepairResult>;
+    repairContainerNetworking(containerName: string, fallbackBridge?: string): Promise<LxcNetworkRepairResult>;
     startContainer(containerName: string): Promise<void>;
     stopContainer(containerName: string, force?: boolean): Promise<void>;
     restartContainer(containerName: string): Promise<void>;
