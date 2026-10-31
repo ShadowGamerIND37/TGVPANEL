@@ -2,7 +2,9 @@ import WebSocket from 'ws';
 export interface HostDiagnosticResult {
     preset: string;
     description: string;
+    command: string;
     exitCode: number;
+    durationMs: number;
     output: string;
     executedAt: string;
 }
