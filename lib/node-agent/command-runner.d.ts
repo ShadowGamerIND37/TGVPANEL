@@ -55,6 +55,7 @@ export declare const privilegedFs: {
     readTextSync(targetPath: string): string;
     writeFileSync(targetPath: string, data: Buffer | string, mode?: number): void;
     unlinkSync(targetPath: string): void;
+    renameSync(srcPath: string, destPath: string): void;
     lstatMetaSync(targetPath: string): {
         isFile: boolean;
         isDirectory: boolean;
@@ -75,6 +76,8 @@ export interface HostCapabilities {
     lxcStartAvailable: boolean;
     lxcInfoAvailable: boolean;
     lxcAvailable: boolean;
+    lxcfsAvailable?: boolean;
+    lxcfsMounted?: boolean;
     cgroupVersion: 1 | 2 | 0;
     storageBackends: string[];
     networkBackends: string[];
@@ -84,4 +87,10 @@ export interface HostCapabilities {
     architecture: string;
 }
 export declare function detectHostCapabilities(): Promise<HostCapabilities>;
+/**
+ * Parses `/proc/mounts` to locate an active mountpoint matching `targetDir`.
+ * Returns the mounted device/source (e.g. `/dev/loop0`) or `null` if not mounted.
+ */
+export declare function findActiveMountSource(targetDir: string): string | null;
+export declare function ensureLxcfsDaemonMounted(mountPoint?: string): Promise<boolean>;
 export { execFile };

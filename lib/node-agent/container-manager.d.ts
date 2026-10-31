@@ -13,7 +13,7 @@ export interface LxcCreateSpec {
     ramMb: number;
     swapMb?: number;
     diskGb: number;
-    backingStore?: 'dir' | 'lvm' | 'zfs' | 'btrfs';
+    backingStore?: 'dir' | 'loop' | 'lvm' | 'zfs' | 'btrfs';
     privileged?: boolean;
     nesting?: boolean;
     kvmNesting?: boolean;
@@ -68,6 +68,8 @@ export interface LxcContainerRuntimeInfo {
     rxBytes: number;
     txBytes: number;
     diskUsedBytes: number;
+    backingStore?: string;
+    diskQuotaEnforced?: boolean;
     configuredIpv4?: string | null;
     configuredGateway?: string | null;
     startupWarning?: string;
@@ -114,6 +116,17 @@ export declare function resolveDownloadReleaseCandidates(rawDistro: string, rawR
     archMapper: (arch: string) => string;
 };
 export declare function isAppArmorProfileLoadable(): boolean;
+/**
+ * Parses Linux CPU list syntax (e.g. `"0-3"`, `"0,2-3,6"`) into sorted unique CPU IDs.
+ */
+export declare function parseCpuListSpec(spec: string): number[];
+export declare function readEffectiveHostCpuIds(): number[];
+/**
+ * Deterministically assigns `requestedCores` distinct online host CPUs to `containerName`
+ * (or honors `explicitPinning`), ensuring `nproc`, `lscpu`, and `neofetch` inside the guest
+ * report the container's assigned vCPU count while spreading load across host cores.
+ */
+export declare function selectContainerCpuset(containerName: string, requestedCores: number, availableCpus?: number[], explicitPinning?: string | null): string | null;
 export declare class LxcContainerManager {
     private lxcBaseDir;
     private inFlightCreations;
@@ -172,6 +185,31 @@ export declare class LxcContainerManager {
     private parseHumanSizeToBytes;
     private measureDirBytesFast;
     private getRootfsUsedBytes;
+    getQuotaDiskDir(): string;
+    getQuotaDiskImagePath(containerName: string): string;
+    /**
+     * Ensures an existing sparse `.ext4` quota volume is loop-mounted onto `<ctDir>/rootfs`
+     * (for example after a host reboot before `lxc-start`).
+     */
+    ensureExistingQuotaDiskMounted(containerName: string): Promise<boolean>;
+    /**
+     * Unmounts `<ctDir>/rootfs` if backed by a loop mount, and optionally deletes the `.ext4` image.
+     */
+    unmountQuotaDiskIfMounted(containerName: string, removeImage?: boolean): Promise<void>;
+    /**
+     * Provisions or resizes a thin-provisioned sparse `ext4` loop quota volume mounted on `<ctDir>/rootfs`
+     * so `df -h` inside the container reports the exact assigned `diskGb` (e.g. `20G`) and the kernel
+     * enforces the hard block limit instead of exposing the entire host partition (`overlay 32G`).
+     *
+     * - Initial conversion is atomic: builds `.ext4.tmp` via `mkfs.ext4 -d <rootfs>`, probe-mounts on
+     *   a temporary directory first to verify kernel loop-mount permission, and rolls back cleanly if
+     *   loop mounting is unavailable.
+     * - Online growth (`diskGb` increased while running) runs `truncate` + `losetup -c` + `resize2fs`
+     *   with zero container downtime.
+     */
+    ensureContainerQuotaDisk(containerName: string, diskGb: number, options?: {
+        allowNonSystemStore?: boolean;
+    }): Promise<boolean>;
     private createFromLocalArchive;
     private applyOfflineRootPasswordHash;
     createContainer(spec: LxcCreateSpec): Promise<LxcContainerRuntimeInfo>;

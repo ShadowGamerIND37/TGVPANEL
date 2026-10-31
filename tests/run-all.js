@@ -2043,6 +2043,89 @@ exec "$@"
       assert.ok(tcpReply.readUInt16BE(6) >= 1, 'Expected TCP DNS relay to return >=1 A record for localhost');
       relay.stop();
     });
+
+    await runStep('T18: LXC hard disk quota (sparse ext4 loop volume + live resize), cpuset isolation & cgroup preservation', async () => {
+      const { execFileSync } = require('child_process');
+      const {
+        LxcContainerManager,
+        parseCpuListSpec,
+        selectContainerCpuset,
+      } = require('../lib/node-agent/container-manager');
+      const { findActiveMountSource, privilegedFs, canPasswordlessSudo, isRunningAsRoot } =
+        require('../lib/node-agent/command-runner');
+
+      // 1. Verify CPU list parser & deterministic vCPU pinning
+      assert.deepStrictEqual(parseCpuListSpec('0-2,5'), [0, 1, 2, 5]);
+      const pin1 = selectContainerCpuset('test', 1, [0, 1, 2, 3]);
+      assert.strictEqual(pin1.split(',').length, 1, '1 vCPU must pin to 1 CPU');
+      const pin2 = selectContainerCpuset('test', 2, [0, 1, 2, 3]);
+      assert.strictEqual(pin2.split(',').length, 2, '2 vCPUs must pin to 2 distinct CPUs');
+      assert.strictEqual(selectContainerCpuset('test', 2, [0, 1, 2, 3], '1-2'), '1-2');
+
+      // 2. Verify writeManagedConfigSection writes memory.max, cpu.max, and cpuset.cpus
+      const quotaStore = path.join(tmpRoot, 'quota-lxc-store');
+      const ctName = 'quota-disk-e2e';
+      const ctDir = path.join(quotaStore, ctName);
+      const rootfsDir = path.join(ctDir, 'rootfs');
+      fs.mkdirSync(path.join(rootfsDir, 'etc'), { recursive: true });
+      fs.mkdirSync(path.join(rootfsDir, 'root'), { recursive: true });
+      fs.writeFileSync(path.join(rootfsDir, 'etc', 'hostname'), `${ctName}\n`);
+      fs.writeFileSync(path.join(rootfsDir, 'root', 'keep.txt'), 'HKVM_QUOTA_PRESERVED_DATA\n');
+      fs.writeFileSync(
+        path.join(ctDir, 'config'),
+        `lxc.rootfs.path = dir:${rootfsDir}\nlxc.uts.name = ${ctName}\n`
+      );
+
+      const qCm = new LxcContainerManager(quotaStore);
+      await qCm.writeManagedConfigSection(ctName, {
+        hostname: ctName,
+        cpuCores: 1,
+        ramMb: 1024,
+        swapMb: 512,
+        nesting: true,
+        kvmNesting: true,
+        bridge: 'lxcbr0',
+      });
+      const cfgWritten = privilegedFs.readTextSync(path.join(ctDir, 'config'));
+      assert.ok(cfgWritten.includes('memory.max = 1024M') || cfgWritten.includes('memory.limit_in_bytes = 1024M'));
+      assert.ok(cfgWritten.includes('cpuset.cpus ='));
+
+      // 3. Test real sparse ext4 loop quota volume creation (1 GB) + live online resize (2 GB)
+      if (isRunningAsRoot() || canPasswordlessSudo()) {
+        try {
+          const mounted1G = await qCm.ensureContainerQuotaDisk(ctName, 1, { allowNonSystemStore: true });
+          assert.strictEqual(mounted1G, true, 'Expected 1 GB sparse ext4 loop quota disk to mount');
+          assert.ok(findActiveMountSource(rootfsDir), 'Expected active /dev/loopX mount on rootfs');
+
+          const preserved = privilegedFs.readTextSync(path.join(rootfsDir, 'root', 'keep.txt'));
+          assert.strictEqual(preserved.trim(), 'HKVM_QUOTA_PRESERVED_DATA');
+
+          const df1Out = execFileSync('df', ['-B1', '--output=size', rootfsDir], { encoding: 'utf8' });
+          const size1Bytes = parseInt(df1Out.trim().split('\n').pop().trim(), 10);
+          assert.ok(
+            size1Bytes > 850 * 1024 * 1024 && size1Bytes < 1150 * 1024 * 1024,
+            `Expected ~1 GB filesystem in df (not host 32G!), got ${size1Bytes} bytes`
+          );
+
+          // Live online resize from 1 GB -> 2 GB while mounted!
+          const resized2G = await qCm.ensureContainerQuotaDisk(ctName, 2, { allowNonSystemStore: true });
+          assert.strictEqual(resized2G, true, 'Expected online live resize to 2 GB to succeed');
+          const df2Out = execFileSync('df', ['-B1', '--output=size', rootfsDir], { encoding: 'utf8' });
+          const size2Bytes = parseInt(df2Out.trim().split('\n').pop().trim(), 10);
+          assert.ok(
+            size2Bytes > 1800 * 1024 * 1024 && size2Bytes < 2200 * 1024 * 1024,
+            `Expected ~2 GB filesystem after live resize, got ${size2Bytes} bytes`
+          );
+          assert.strictEqual(
+            privilegedFs.readTextSync(path.join(rootfsDir, 'root', 'keep.txt')).trim(),
+            'HKVM_QUOTA_PRESERVED_DATA'
+          );
+        } finally {
+          await qCm.unmountQuotaDiskIfMounted(ctName, true);
+          assert.strictEqual(findActiveMountSource(rootfsDir), null, 'Expected loop mount cleanly detached');
+        }
+      }
+    });
   } finally {
     const { execFileSync } = require('child_process');
     for (const storeDir of [path.join(tmpRoot, 'local-lxc'), path.join(tmpRoot, 'agent-lxc')]) {

@@ -116,8 +116,9 @@ export declare class LXCAdapter implements VirtualizationAdapter {
         instance: UnifiedInstanceRecord;
     }>;
     /**
-     * Automatically repairs bridge NAT/FORWARD rules, missing IPv4 assignments, and guest
-     * `/etc/resolv.conf` on active local LXC containers during HKVM server startup.
+     * Automatically heals bridge NAT/FORWARD/DNS-relay rules, cgroup RAM/CPU limits, `lxcfs`
+     * `/proc` virtualization, and sparse `ext4` loop disk quotas on active local LXC containers
+     * during HKVM server startup.
      */
     healLocalContainersNetworking(): Promise<void>;
 }

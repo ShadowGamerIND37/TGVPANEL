@@ -69,7 +69,12 @@ const ALLOWED_BINARIES = new Set([
   'btrfs',
   'truncate',
   'mkfs.ext4',
+  'e2fsck',
   'resize2fs',
+  'losetup',
+  'mount',
+  'umount',
+  'lxcfs',
   // Linux networking & firewall tools
   'ip',
   'bridge',
@@ -131,6 +136,14 @@ const PRIVILEGED_SYSTEM_BINARIES = new Set([
   'zfs',
   'zpool',
   'btrfs',
+  'truncate',
+  'mkfs.ext4',
+  'e2fsck',
+  'resize2fs',
+  'losetup',
+  'mount',
+  'umount',
+  'lxcfs',
 ]);
 
 const SEARCH_DIRS = [
@@ -545,6 +558,17 @@ export const privilegedFs = {
     }
   },
 
+  renameSync(srcPath: string, destPath: string): void {
+    const srcResolved = assertSafeFsPath(srcPath);
+    const destResolved = assertSafeFsPath(destPath);
+    try {
+      fs.renameSync(srcResolved, destResolved);
+    } catch (err) {
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      runSudoHelperSync('mv', ['-T', '--', srcResolved, destResolved]);
+    }
+  },
+
   lstatMetaSync(targetPath: string): {
     isFile: boolean;
     isDirectory: boolean;
@@ -628,6 +652,8 @@ export interface HostCapabilities {
   lxcStartAvailable: boolean;
   lxcInfoAvailable: boolean;
   lxcAvailable: boolean;
+  lxcfsAvailable?: boolean;
+  lxcfsMounted?: boolean;
   cgroupVersion: 1 | 2 | 0;
   storageBackends: string[];
   networkBackends: string[];
@@ -654,6 +680,7 @@ export async function detectHostCapabilities(): Promise<HostCapabilities> {
   }
 
   const storageBackends: string[] = ['dir', 'raw'];
+  if (isBinaryAvailable('mkfs.ext4') && isBinaryAvailable('mount')) storageBackends.push('loop');
   if (qemuImgAvailable) storageBackends.push('qcow2');
   if (isBinaryAvailable('lvs')) storageBackends.push('lvm', 'lvm-thin');
   if (isBinaryAvailable('zfs')) storageBackends.push('zfs');
@@ -684,6 +711,14 @@ export async function detectHostCapabilities(): Promise<HostCapabilities> {
   const unameRes = await runAllowlistedCommand('uname', ['-r'], { timeoutMs: 3000 });
   const archRes = await runAllowlistedCommand('uname', ['-m'], { timeoutMs: 3000 });
 
+  const lxcfsAvailable = isBinaryAvailable('lxcfs');
+  let lxcfsMounted = false;
+  try {
+    lxcfsMounted = fs.existsSync('/var/lib/lxcfs/proc/meminfo');
+  } catch {
+    lxcfsMounted = false;
+  }
+
   return {
     kvmDevicePresent,
     qemuSystemAvailable,
@@ -693,6 +728,8 @@ export async function detectHostCapabilities(): Promise<HostCapabilities> {
     lxcStartAvailable,
     lxcInfoAvailable,
     lxcAvailable: lxcCreateAvailable && lxcStartAvailable && lxcInfoAvailable,
+    lxcfsAvailable,
+    lxcfsMounted,
     cgroupVersion,
     storageBackends,
     networkBackends,
@@ -701,6 +738,116 @@ export async function detectHostCapabilities(): Promise<HostCapabilities> {
     kernelVersion: unameRes.stdout.trim() || process.platform,
     architecture: archRes.stdout.trim() || process.arch,
   };
+}
+
+/**
+ * Parses `/proc/mounts` to locate an active mountpoint matching `targetDir`.
+ * Returns the mounted device/source (e.g. `/dev/loop0`) or `null` if not mounted.
+ */
+export function findActiveMountSource(targetDir: string): string | null {
+  try {
+    if (!fs.existsSync('/proc/mounts')) return null;
+    const normalized = path.resolve(targetDir);
+    let realTarget = normalized;
+    try {
+      realTarget = fs.realpathSync(normalized);
+    } catch {
+      // target may require root or not exist yet
+    }
+    const raw = fs.readFileSync('/proc/mounts', 'utf8');
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      const cols = line.split(' ');
+      if (cols.length < 2) continue;
+      const mntTarget = cols[1].replace(/\\040/g, ' ').replace(/\\011/g, '\t');
+      if (mntTarget === normalized || mntTarget === realTarget) {
+        return cols[0].replace(/\\040/g, ' ');
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * Ensures the `lxcfs` FUSE daemon is mounted at `/var/lib/lxcfs` so guest `/proc/meminfo`,
+ * `/proc/cpuinfo`, `/proc/stat`, `/proc/swaps`, and `/proc/uptime` accurately reflect
+ * each LXC container's assigned cgroup RAM, Swap, and CPU cores (`free -h`, `neofetch`, `htop`).
+ */
+let lxcfsInitPromise: Promise<boolean> | null = null;
+
+export async function ensureLxcfsDaemonMounted(mountPoint = '/var/lib/lxcfs'): Promise<boolean> {
+  const probeFile = path.join(mountPoint, 'proc', 'meminfo');
+  try {
+    fs.statSync(probeFile);
+    return true;
+  } catch (err: any) {
+    // Recover stale dead FUSE mount ("Transport endpoint is not connected" / ENOTCONN)
+    if (err?.code === 'ENOTCONN' || findActiveMountSource(mountPoint)) {
+      await runAllowlistedCommand('umount', ['-l', mountPoint], {
+        timeoutMs: 5000,
+        asRoot: true,
+      }).catch(() => undefined);
+    }
+  }
+
+  if (lxcfsInitPromise) return lxcfsInitPromise;
+
+  lxcfsInitPromise = (async () => {
+    try {
+      const lxcfsBin = resolveBinaryPath('lxcfs');
+      if (!lxcfsBin || !fs.existsSync('/dev/fuse')) {
+        return false;
+      }
+      const rootOk = isRunningAsRoot() || canPasswordlessSudo();
+      if (!rootOk) return false;
+
+      privilegedFs.mkdirpSync(mountPoint, 0o755);
+
+      const trySpawnDaemon = async (flagVariant: string[]): Promise<boolean> => {
+        const spawnCmd = isRunningAsRoot() ? lxcfsBin : (resolveSudoBinary() || 'sudo');
+        const spawnArgs = isRunningAsRoot()
+          ? [...flagVariant, mountPoint]
+          : ['-n', lxcfsBin, ...flagVariant, mountPoint];
+        try {
+          const child = spawn(spawnCmd, spawnArgs, {
+            detached: true,
+            stdio: 'ignore',
+            env: buildSafeSpawnEnv(true),
+          });
+          child.on('error', () => undefined);
+          child.unref();
+        } catch {
+          return false;
+        }
+
+        for (let i = 0; i < 16; i++) {
+          await new Promise((r) => setTimeout(r, 100));
+          try {
+            fs.statSync(probeFile);
+            return true;
+          } catch {
+            // keep polling
+          }
+        }
+        return false;
+      };
+
+      if (await trySpawnDaemon(['--enable-cfs', '-l'])) {
+        return true;
+      }
+      await runAllowlistedCommand('umount', ['-l', mountPoint], {
+        timeoutMs: 3000,
+        asRoot: true,
+      }).catch(() => undefined);
+      return await trySpawnDaemon([]);
+    } finally {
+      lxcfsInitPromise = null;
+    }
+  })();
+
+  return lxcfsInitPromise;
 }
 
 // Keep unused execFile imported cleanly if needed by callers
