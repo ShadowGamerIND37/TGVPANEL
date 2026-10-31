@@ -26,6 +26,7 @@ export interface LxcCreateSpec {
   backingStore?: 'dir' | 'lvm' | 'zfs' | 'btrfs';
   privileged?: boolean;
   nesting?: boolean;
+  kvmNesting?: boolean;
   apparmorProfile?: string;
   bridge?: string;
   ipv4Address?: string | null;
@@ -54,6 +55,7 @@ export interface LxcResourceUpdateSpec {
   swapMb?: number;
   diskGb?: number;
   nesting?: boolean;
+  kvmNesting?: boolean;
   privileged?: boolean;
   apparmorProfile?: string;
   autostart?: boolean;
@@ -427,7 +429,17 @@ export class LxcContainerManager {
       }
     }
 
-    const diskUsedBytes = await this.getRootfsUsedBytes(safeName);
+      const diskUsedBytes = await this.getRootfsUsedBytes(safeName);
+
+      if ((state === 'running' || state === 'frozen') && pid && pid > 0 && memoryBytes === 0) {
+        const procStats = this.measureContainerProcTree(pid);
+        if (procStats.memoryBytes > 0) {
+          memoryBytes = procStats.memoryBytes;
+        }
+        if (cpuUseSeconds === 0 && procStats.cpuUseSeconds > 0) {
+          cpuUseSeconds = procStats.cpuUseSeconds;
+        }
+      }
 
     return {
       name: safeName,
@@ -441,6 +453,83 @@ export class LxcContainerManager {
       txBytes,
       diskUsedBytes,
     };
+  }
+
+  /**
+   * Fallback live memory (VmRSS) & CPU time aggregator across `<initPid>` and all its
+   * descendant processes in `/proc` for hosts (e.g. WSL2 / un-delegated cgroup v2) where
+   * `lxc-info` does not emit `Memory use:` / `CPU use:`.
+   */
+  private measureContainerProcTree(rootPid: number): {
+    memoryBytes: number;
+    cpuUseSeconds: number;
+  } {
+    try {
+      if (!fs.existsSync('/proc')) return { memoryBytes: 0, cpuUseSeconds: 0 };
+      const entries = fs.readdirSync('/proc');
+      const childrenByPpid = new Map<number, number[]>();
+      const ticksByPid = new Map<number, number>();
+
+      for (const ent of entries) {
+        if (!/^\d+$/.test(ent)) continue;
+        const p = parseInt(ent, 10);
+        try {
+          const statRaw = fs.readFileSync(`/proc/${p}/stat`, 'utf8');
+          const closeParen = statRaw.lastIndexOf(')');
+          if (closeParen === -1) continue;
+          const rest = statRaw.slice(closeParen + 2).trim().split(/\s+/);
+          const ppid = parseInt(rest[1] || '0', 10);
+          const utime = parseInt(rest[11] || '0', 10) || 0;
+          const stime = parseInt(rest[12] || '0', 10) || 0;
+          ticksByPid.set(p, utime + stime);
+          if (ppid > 0) {
+            const arr = childrenByPpid.get(ppid) || [];
+            arr.push(p);
+            childrenByPpid.set(ppid, arr);
+          }
+        } catch {
+          // process exited between readdir and readFile
+        }
+      }
+
+      const treePids: number[] = [];
+      const visited = new Set<number>();
+      const queue = [rootPid];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        if (visited.has(cur)) continue;
+        visited.add(cur);
+        treePids.push(cur);
+        const kids = childrenByPpid.get(cur);
+        if (kids) {
+          for (const k of kids) {
+            if (!visited.has(k)) queue.push(k);
+          }
+        }
+      }
+
+      let totalRssBytes = 0;
+      let totalTicks = 0;
+      for (const tp of treePids) {
+        totalTicks += ticksByPid.get(tp) || 0;
+        try {
+          const statusTxt = fs.readFileSync(`/proc/${tp}/status`, 'utf8');
+          const m = statusTxt.match(/^VmRSS:\s*(\d+)\s*kB/m);
+          if (m) {
+            totalRssBytes += (parseInt(m[1], 10) || 0) * 1024;
+          }
+        } catch {
+          // ignore exited child
+        }
+      }
+
+      return {
+        memoryBytes: totalRssBytes,
+        cpuUseSeconds: Number((totalTicks / 100).toFixed(2)),
+      };
+    } catch {
+      return { memoryBytes: 0, cpuUseSeconds: 0 };
+    }
   }
 
   private parseHumanSizeToBytes(text: string): number {
@@ -690,6 +779,7 @@ export class LxcContainerManager {
           ramMb: spec.ramMb,
           swapMb: spec.swapMb ?? 512,
           nesting: spec.nesting !== false,
+          kvmNesting: Boolean(spec.kvmNesting),
           privileged: spec.privileged !== false,
           apparmorProfile: spec.apparmorProfile || 'generated',
           autostart: Boolean(spec.autostart),
@@ -751,6 +841,7 @@ export class LxcContainerManager {
       ramMb?: number;
       swapMb?: number;
       nesting?: boolean;
+      kvmNesting?: boolean;
       privileged?: boolean;
       apparmorProfile?: string;
       autostart?: boolean;
@@ -808,8 +899,21 @@ export class LxcContainerManager {
     }
 
     const requestedProfile = (cfg.apparmorProfile || 'generated').replace(/[^a-zA-Z0-9_.-]/g, '');
-    const effectiveAppArmor = apparmorAvailable ? requestedProfile || 'generated' : 'unconfined';
+    const effectiveAppArmor =
+      apparmorAvailable && !cfg.kvmNesting ? requestedProfile || 'generated' : 'unconfined';
     lines.push(`lxc.apparmor.profile = ${effectiveAppArmor}`);
+
+    if (cfg.kvmNesting) {
+      if (isCgroupV2) {
+        lines.push('lxc.cgroup2.devices.allow = c 10:232 rwm');
+        lines.push('lxc.cgroup2.devices.allow = c 10:200 rwm');
+      } else {
+        lines.push('lxc.cgroup.devices.allow = c 10:232 rwm');
+        lines.push('lxc.cgroup.devices.allow = c 10:200 rwm');
+      }
+      lines.push('lxc.mount.entry = /dev/kvm dev/kvm none bind,optional,create=file 0 0');
+      lines.push('lxc.mount.entry = /dev/net/tun dev/net/tun none bind,optional,create=file 0 0');
+    }
 
     const cores = Math.max(1, Number(cfg.cpuCores || 1));
     const pct = Math.min(100, Math.max(5, Number(cfg.cpuLimitPercent || 100)));

@@ -20,6 +20,7 @@ export interface CreateLxcInstanceInput {
     backingStore?: 'dir' | 'lvm' | 'zfs' | 'btrfs';
     privileged?: boolean;
     nesting?: boolean;
+    kvmNesting?: boolean;
     bridge?: string;
     ipv4Address?: string | null;
     ipv4Gateway?: string | null;
@@ -82,6 +83,7 @@ export declare class LXCAdapter implements VirtualizationAdapter {
         swapMb?: number;
         diskGb?: number;
         nesting?: boolean;
+        kvmNesting?: boolean;
         autostart?: boolean;
         bridge?: string;
         ipAddress?: string | null;

@@ -709,6 +709,21 @@
 
                 <label class="lxc-toggle-item">
                   <div>
+                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                      <span style="font-size:13px;font-weight:600;color:var(--text-primary);">KVM Nesting (<code>/dev/kvm</code> Passthrough)</span>
+                      <% if (capabilities && capabilities.kvmDevicePresent) { %>
+                        <span class="v3-pill running" style="font-size:10px;padding:1px 6px;">Host /dev/kvm Ready</span>
+                      <% } else { %>
+                        <span class="v3-pill warning" style="font-size:10px;padding:1px 6px;">No Host /dev/kvm</span>
+                      <% } %>
+                    </div>
+                    <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Passes <code>/dev/kvm</code> &amp; <code>/dev/net/tun</code> into LXC for hardware-accelerated QEMU/KVM VMs.</div>
+                  </div>
+                  <input type="checkbox" id="cKvmNest" onchange="updateLxcBlueprint()">
+                </label>
+
+                <label class="lxc-toggle-item">
+                  <div>
                     <div style="font-size:13px;font-weight:600;color:var(--text-primary);">Boot Automatically with Host</div>
                     <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Sets <code>lxc.start.auto = 1</code> so container starts after node reboot.</div>
                   </div>
@@ -1584,6 +1599,7 @@ function updateLxcBlueprint() {
 
   const flags = [];
   if (document.getElementById('cNest')?.checked) flags.push('Nesting');
+  if (document.getElementById('cKvmNest')?.checked) flags.push('KVM (/dev/kvm)');
   if (document.getElementById('cAutostart')?.checked) flags.push('Autostart');
   if (document.getElementById('cPriv')?.checked) flags.push('Privileged');
   if (!document.getElementById('cProv')?.checked) flags.push('DB-Only');
@@ -1683,6 +1699,7 @@ async function submitCreateLxc(e) {
         rootPassword: customRootPw || undefined,
         sshPublicKeys: sshKeys,
         nesting: document.getElementById('cNest').checked,
+        kvmNesting: Boolean(document.getElementById('cKvmNest')?.checked),
         autostart: Boolean(document.getElementById('cAutostart')?.checked),
         privileged: document.getElementById('cPriv') ? document.getElementById('cPriv').checked : true,
         notes: (document.getElementById('cNotes')?.value || '').trim() || undefined,

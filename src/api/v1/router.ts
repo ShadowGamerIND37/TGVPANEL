@@ -520,6 +520,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
           backingStore: b.backingStore || 'dir',
           privileged: b.privileged !== false,
           nesting: b.nesting !== false,
+          kvmNesting: Boolean(b.kvmNesting),
           bridge: b.bridge ? String(b.bridge) : 'lxcbr0',
           ipv4Address: b.ipv4Address ? String(b.ipv4Address) : null,
           ipv4Gateway: b.ipv4Gateway ? String(b.ipv4Gateway) : null,
