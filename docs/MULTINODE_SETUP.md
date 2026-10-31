@@ -117,7 +117,14 @@ Once started (`sudo systemctl status tgvpanel`), open `http://<SERVER_IP>:8080`,
 
 ## 4. Multi-Node Setup — Adding a Remote Compute Node (Step-by-Step)
 
-Follow these 6 steps for each additional compute server you want to attach to your TGVPANEL Controller.
+> **Fastest Interactive Setup (`menu.sh` Option 2):**
+> On any fresh remote server, you can automate Steps 2–6 below with one command:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && sudo bash menu.sh
+> ```
+> Choose **`2) Auto Configure Node`** — it installs Git, Node.js 20+, LXC/LXCFS, clones TGVPANEL, asks for your Node credentials (or auto-registers via Controller URL + Admin API token), generates TLS certificates, configures UFW/Firewalld, and keeps `tgvpanel-node-agent` online **24/7**!
+
+Below is the complete step-by-step reference for what happens under the hood (or if configuring manually).
 
 ---
 

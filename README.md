@@ -74,7 +74,22 @@ You only need the hypervisor pieces for the modes you plan to use. The installer
 
 ## Quick Start
 
-### Option 1: Automated installer (recommended)
+### Option 1: All-in-One Interactive Menu (`menu.sh` — easiest)
+
+Run directly on any clean Ubuntu / Debian / AlmaLinux / Rocky Linux server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && sudo bash menu.sh
+```
+
+`menu.sh` provides a single interactive menu (and installs the global `sudo tgvpanel` command):
+
+1. **Auto Install & Setup Panel** — Clones TGVPANEL from GitHub, installs Node.js 20+ & hypervisor dependencies, configures admin credentials, and runs the panel **24/7** (`systemd` or auto-restart supervisor).
+2. **Auto Configure Node** — Interactively prompts for all remote node settings (or auto-registers via Controller API token), generates TLS certs, opens firewall rules, and starts the Node Agent **online 24/7**.
+3. **Migration** — Run DB schema migrations, import legacy HVM/SQLite databases, trigger 7-stage SHA-256 verified cross-node LXC migrations, or export/import a full Panel migration bundle.
+4. **Auto Update** — Creates a verified SQLite backup, pulls the latest GitHub release, rebuilds TypeScript, runs migrations, and restarts active 24/7 services.
+
+### Option 2: Automated script installer
 
 ```bash
 git clone https://github.com/ShadowGamerIND37/TGVPANEL.git
@@ -93,7 +108,7 @@ The installer will:
 
 To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB backup included).
 
-### Option 2: Manual setup
+### Option 3: Manual setup
 
 ```bash
 npm install            # see note below if building offline
