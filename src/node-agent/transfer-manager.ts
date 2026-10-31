@@ -28,7 +28,10 @@ export class LxcTransferManager {
   constructor(
     containerManager: LxcContainerManager,
     snapshotManager: LxcSnapshotAndBackupManager,
-    stagingDir = path.resolve(process.cwd(), 'data', 'migration-staging')
+    stagingDir = path.join(
+      process.env.HKVM_DATA_DIR || path.resolve(process.cwd(), 'data'),
+      'migration-staging'
+    )
   ) {
     this.containerManager = containerManager;
     this.snapshotManager = snapshotManager;
@@ -77,9 +80,11 @@ export class LxcTransferManager {
     }
 
     let archivePath: string;
+    let tempStagedFile = false;
     if (Buffer.isBuffer(params.archiveBufferOrPath)) {
       archivePath = path.join(this.stagingDir, `${safeName}_import_${Date.now()}.tar.gz`);
       fs.writeFileSync(archivePath, params.archiveBufferOrPath);
+      tempStagedFile = true;
     } else {
       archivePath = path.resolve(params.archiveBufferOrPath);
     }
@@ -115,6 +120,14 @@ export class LxcTransferManager {
       // Automatic target cleanup on failed verification so rollback leaves no orphan
       await this.containerManager.destroyContainer(safeName).catch(() => undefined);
       throw err;
+    } finally {
+      if (tempStagedFile && fs.existsSync(archivePath)) {
+        try {
+          fs.unlinkSync(archivePath);
+        } catch {
+          // ignore
+        }
+      }
     }
   }
 

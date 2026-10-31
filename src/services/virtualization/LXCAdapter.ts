@@ -220,6 +220,20 @@ export class LXCAdapter implements VirtualizationAdapter {
     );
   }
 
+  private async resolveCatalogTemplate(rawIdentifier: string): Promise<any | undefined> {
+    const trimmed = String(rawIdentifier || '').trim();
+    if (!trimmed) return undefined;
+    const normalizedSlug = trimmed.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+    return this.db.get<any>(
+      `SELECT * FROM lxc_templates
+       WHERE (LOWER(slug) = LOWER(?) OR slug = ? OR LOWER(COALESCE(image_alias, '')) = LOWER(?))
+         AND COALESCE(enabled, is_active, 1) = 1
+       ORDER BY COALESCE(is_custom, 0) DESC, id ASC
+       LIMIT 1`,
+      [trimmed, normalizedSlug, trimmed]
+    );
+  }
+
   public async createLxcInstance(input: CreateLxcInstanceInput): Promise<{
     instance: UnifiedInstanceRecord;
     generatedRootPassword: string;
@@ -262,10 +276,10 @@ export class LXCAdapter implements VirtualizationAdapter {
       let osFamily = 'debian';
 
       if (input.templateSlug) {
-        const tpl = await this.db.get<any>(
-          `SELECT * FROM lxc_templates WHERE slug = ? AND enabled = 1`,
-          [input.templateSlug]
-        );
+        const tpl = await this.resolveCatalogTemplate(input.templateSlug);
+        if (!tpl && !input.distro) {
+          throw new Error(`Enabled LXC template "${input.templateSlug}" not found in catalog.`);
+        }
         if (tpl) {
           distro = tpl.distro;
           release = tpl.release;
@@ -544,6 +558,9 @@ export class LXCAdapter implements VirtualizationAdapter {
         [refId]
       );
     } else if (action === 'unfreeze') {
+      if (row.suspended) {
+        throw new Error('This LXC VPS is suspended and cannot be unfrozen until unsuspended.');
+      }
       await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'unfreeze');
       await this.db.run(
         `UPDATE lxc_instances SET status = 'running', updated_at = datetime('now') WHERE id = ?`,
@@ -724,11 +741,14 @@ export class LXCAdapter implements VirtualizationAdapter {
   ): Promise<{ instance: UnifiedInstanceRecord; rootPassword: string }> {
     const row = await this.getRawLxcRow(refId);
     if (!row) throw new Error(`LXC container #${refId} not found.`);
+    if (row.suspended) {
+      throw Object.assign(
+        new Error('This LXC VPS is suspended and cannot be reinstalled until unsuspended.'),
+        { statusCode: 400 }
+      );
+    }
 
-    const tpl = await this.db.get<any>(
-      `SELECT * FROM lxc_templates WHERE slug = ? AND enabled = 1`,
-      [templateSlug]
-    );
+    const tpl = await this.resolveCatalogTemplate(templateSlug);
     if (!tpl) throw new Error(`Enabled LXC template "${templateSlug}" not found.`);
 
     const plainPassword = newRootPassword?.trim() || generateStrongPassword(18);
@@ -760,13 +780,16 @@ export class LXCAdapter implements VirtualizationAdapter {
       const info = await this.nodeManager.localRuntime.containerManager.reinstallContainer(reinstallSpec);
       reinstallState = info.state === 'running' ? 'running' : 'stopped';
     } else {
-      const info = await this.nodeManager.requestRemoteNode<LxcContainerRuntimeInfo>(
+      const resp = await this.nodeManager.requestRemoteNode<
+        LxcContainerRuntimeInfo | { success?: boolean; container?: LxcContainerRuntimeInfo }
+      >(
         row.node_id,
         'POST',
         `/api/v1/containers/${encodeURIComponent(row.container_name)}/reinstall`,
         reinstallSpec,
         600_000
       );
+      const info = (resp as any)?.container || resp;
       reinstallState = info?.state === 'running' ? 'running' : 'stopped';
     }
 

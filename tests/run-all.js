@@ -27,6 +27,8 @@ const AGENT_PORT = 19540 + Math.floor(Math.random() * 500);
 
 process.env.HKVM_DATA_DIR = tmpRoot;
 process.env.HKVM_DB_PATH = testDbPath;
+process.env.HKVM_LXC_PATH = path.join(tmpRoot, 'local-lxc');
+process.env.HKVM_BACKUP_DIR = path.join(tmpRoot, 'local-backups');
 process.env.PORT = String(TEST_PORT);
 process.env.HKVM_DISABLE_BACKGROUND_POLLER = 'true';
 process.env.HKVM_ENABLE_NODE_SHELL = 'true';
@@ -79,9 +81,14 @@ class SessionClient {
     }
     let payload;
     if (body !== undefined) {
-      payload = typeof body === 'string' ? body : JSON.stringify(body);
-      headers['Content-Type'] = headers['Content-Type'] || 'application/json';
-      headers['Content-Length'] = Buffer.byteLength(payload);
+      if (Buffer.isBuffer(body)) {
+        payload = body;
+        headers['Content-Length'] = payload.length;
+      } else {
+        payload = typeof body === 'string' ? body : JSON.stringify(body);
+        headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+        headers['Content-Length'] = Buffer.byteLength(payload);
+      }
     }
 
     return new Promise((resolve, reject) => {
@@ -132,6 +139,9 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   let agentServer = null;
   let app = null;
+  let remoteNodeId = null;
+  const installedLxcShims = [];
+  const rootOwnedCleanupDirs = [];
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
@@ -368,7 +378,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         verifySsl: false,
       });
       assert.strictEqual(regRes.status, 201, `Node register failed: ${regRes.text}`);
-      const remoteNodeId = regRes.json.node.id;
+      remoteNodeId = regRes.json.node.id;
       const { apiKey, hmacSecret } = regRes.json.bootstrapCredentials;
 
       const agentInst = createNodeAgentServer({
@@ -695,7 +705,988 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const diagRes = await adminClient.request('POST', '/api/v1/nodes/1/diagnostics/uname', {});
       assert.strictEqual(diagRes.status, 200, `Diag preset failed: ${diagRes.text}`);
     });
+
+    // 14. End-to-End LXC VPS Provisioning, Root-Owned Confinement, Lifecycle, Resize, Credentials & Host Sync
+    let e2eUbuntuId = null;
+    let e2eCustomId = null;
+    let e2eOrphanId = null;
+    await runStep('T13: End-to-end LXC VPS creation (template + custom archive + orphan/cgroup/GPG + sync-host), 0700 rootfs & full operations', async () => {
+      const { execFileSync } = require('child_process');
+      const { canPasswordlessSudo, privilegedFs } = require('../lib/node-agent/command-runner');
+
+      // 13a. Honest host guard BEFORE LXC binaries exist on host: must fail cleanly AND roll back DB row
+      const nativeLxcPresent =
+        fs.existsSync('/usr/bin/lxc-create') || fs.existsSync('/usr/local/bin/lxc-create');
+      if (!nativeLxcPresent) {
+        const failProv = await adminClient.request('POST', '/api/v1/lxc', {
+          containerName: 'unshimmed-guard-ct',
+          templateSlug: 'ubuntu:24.04',
+          cpuCores: 1,
+          ramMb: 512,
+          diskGb: 10,
+          provisionOnHost: true,
+        });
+        assert.strictEqual(failProv.status, 500, 'Expected honest 500 when lxc-* is absent');
+        assert.match(failProv.json.error, /not installed/i);
+        const zombieRow = await ctx.db.get(
+          `SELECT id FROM lxc_instances WHERE container_name = 'unshimmed-guard-ct'`
+        );
+        assert.strictEqual(zombieRow, undefined, 'Failed host provisioning must roll back DB row');
+
+        const metaOnly = await adminClient.request('POST', '/api/v1/lxc', {
+          containerName: 'meta-only-ct',
+          templateSlug: 'ubuntu:24.04',
+          cpuCores: 1,
+          ramMb: 512,
+          diskGb: 10,
+          provisionOnHost: false,
+        });
+        assert.strictEqual(metaOnly.status, 201, `Meta-only LXC failed: ${metaOnly.text}`);
+        assert.strictEqual(metaOnly.json.instance.status, 'stopped');
+        const delMeta = await adminClient.request(
+          'POST',
+          `/api/v1/instances/lxc/${metaOnly.json.instance.refId}/action`,
+          { action: 'delete' }
+        );
+        assert.strictEqual(delMeta.status, 200);
+      }
+
+      // 13b. Real 0700 root:root container directory confinement + multi-level & broken symlink escape blocking
+      if (canPasswordlessSudo() && process.getuid && process.getuid() !== 0) {
+        const rootJail = path.join(tmpRoot, 'root-owned-lxc-0700');
+        rootOwnedCleanupDirs.push(rootJail);
+        const ctRootfs = path.join(rootJail, 'ct-root-jail', 'rootfs');
+        execFileSync('sudo', ['-n', 'mkdir', '-p', `${ctRootfs}/etc`, `${ctRootfs}/root`, `${ctRootfs}/tmp`]);
+        execFileSync('sudo', ['-n', 'tee', `${ctRootfs}/etc/hostname`], { input: 'ct-root-jail\n' });
+        execFileSync('sudo', ['-n', 'tee', `${ctRootfs}/etc/shadow`], {
+          input: 'root:*:19000:0:99999:7:::\n',
+        });
+        execFileSync('sudo', ['-n', 'tee', `${rootJail}/ct-root-jail/config`], {
+          input: `lxc.rootfs.path = dir:${ctRootfs}\nlxc.uts.name = ct-root-jail\n`,
+        });
+        execFileSync('sudo', ['-n', 'ln', '-s', '/etc', `${ctRootfs}/tmp/escape_dir`]);
+        execFileSync('sudo', ['-n', 'ln', '-s', '/etc/nonexistent_host_secret_xyz', `${ctRootfs}/tmp/broken_sym`]);
+        execFileSync('sudo', ['-n', 'chmod', '0700', rootJail]);
+
+        assert.throws(() => fs.readdirSync(rootJail), /EACCES|EPERM/);
+
+        const rootCm = new LxcContainerManager(rootJail);
+        const etcList = rootCm.listRootfsDirectory('ct-root-jail', '/etc');
+        assert.ok(etcList.some((e) => e.name === 'hostname'), 'privilegedFs listed 0700 root:root /etc');
+        assert.strictEqual(
+          rootCm.readRootfsFile('ct-root-jail', '/etc/hostname').toString('utf8').trim(),
+          'ct-root-jail'
+        );
+
+        await rootCm.setRootPassword('ct-root-jail', 'RootOfflinePass!88');
+        const shadowAfter = rootCm.readRootfsFile('ct-root-jail', '/etc/shadow').toString('utf8');
+        assert.match(shadowAfter, /^root:\$6\$/m, 'Offline SHA-512 password written into 0700 /etc/shadow');
+
+        await rootCm.injectSshPublicKey(
+          'ct-root-jail',
+          'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRootJailKeyTest00001 root@hkvm'
+        );
+        const authKeys = rootCm
+          .readRootfsFile('ct-root-jail', '/root/.ssh/authorized_keys')
+          .toString('utf8');
+        assert.ok(authKeys.includes('IRootJailKeyTest00001'));
+
+        // Multi-level intermediate symlink escape (<rootfs>/tmp/escape_dir -> /etc + nested new subdir) MUST fail!
+        assert.throws(
+          () => rootCm.writeRootfsFile('ct-root-jail', '/tmp/escape_dir/hkvm_never_create/pwn', 'x'),
+          /Symlink escape/i
+        );
+        // Broken symlink escape MUST fail!
+        assert.throws(
+          () => rootCm.readRootfsFile('ct-root-jail', '/tmp/broken_sym'),
+          /Symlink escape|not a regular file/i
+        );
+      }
+
+      // 13c. Install stateful POSIX LXC test harness for any missing lxc-* binaries on sandbox host
+      const shims = {
+        'lxc-create': `#!/bin/sh
+set -e
+BASE="/var/lib/lxc"; NAME=""; DISTRO="ubuntu"; REL="noble"; NOVAL="0"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -P) BASE="$2"; shift 2 ;;
+    -n) NAME="$2"; shift 2 ;;
+    --) shift; break ;;
+    *) shift ;;
+  esac
+done
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -d) DISTRO="$2"; shift 2 ;;
+    -r) REL="$2"; shift 2 ;;
+    --no-validate) NOVAL="1"; shift ;;
+    *) shift ;;
+  esac
+done
+if [ "$DISTRO" = "gpgtest" ] && [ "$NOVAL" = "0" ]; then
+  echo "ERROR: Unable to fetch GPG key from keyserver" >&2
+  exit 1
+fi
+CT="$BASE/$NAME"
+mkdir -p "$CT/rootfs/etc" "$CT/rootfs/root" "$CT/rootfs/var/log" "$CT/rootfs/tmp"
+printf '%s\\n' "$NAME" > "$CT/rootfs/etc/hostname"
+printf 'ID=%s\\nVERSION_ID="%s"\\n' "$DISTRO" "$REL" > "$CT/rootfs/etc/os-release"
+printf 'root:*:19000:0:99999:7:::\\n' > "$CT/rootfs/etc/shadow"
+chmod 0640 "$CT/rootfs/etc/shadow"
+cat > "$CT/config" <<EOF
+lxc.rootfs.path = dir:$CT/rootfs
+lxc.uts.name = $NAME
+lxc.net.0.type = veth
+lxc.net.0.link = lxcbr0
+lxc.apparmor.profile = generated
+EOF
+printf 'STOPPED\\n' > "$CT/.state"
+`,
+        'lxc-start': `#!/bin/sh
+set -e
+BASE="/var/lib/lxc"; NAME=""; LOG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -P) BASE="$2"; shift 2 ;;
+    -n) NAME="$2"; shift 2 ;;
+    -o) LOG="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+CT="$BASE/$NAME"
+[ -f "$CT/config" ] || { echo "Container $NAME config missing" >&2; exit 1; }
+if [ -f "$CT/.fail_cgroup_once" ] && grep -q "lxc.cgroup" "$CT/config"; then
+  rm -f "$CT/.fail_cgroup_once"
+  [ -n "$LOG" ] && printf 'lxc-start %s ERROR cgfsng - Failed to setup cgroup limits\\n' "$NAME" >> "$LOG"
+  echo "lxc-start: $NAME: Failed to setup cgroup limits" >&2
+  exit 1
+fi
+nohup sleep 300 >/dev/null 2>&1 </dev/null &
+echo $! > "$CT/.pid"
+printf 'RUNNING\\n' > "$CT/.state"
+[ -n "$LOG" ] && printf 'lxc-start %s NOTICE start - Container started (pid=%s)\\n' "$NAME" "$(cat "$CT/.pid")" >> "$LOG"
+exit 0
+`,
+        'lxc-stop': `#!/bin/sh
+BASE="/var/lib/lxc"; NAME=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -P) BASE="$2"; shift 2 ;;
+    -n) NAME="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+CT="$BASE/$NAME"
+if [ -f "$CT/.pid" ]; then
+  PID="$(cat "$CT/.pid" 2>/dev/null || true)"
+  [ -n "$PID" ] && kill -TERM "$PID" 2>/dev/null || true
+  rm -f "$CT/.pid"
+fi
+[ -d "$CT" ] && printf 'STOPPED\\n' > "$CT/.state"
+exit 0
+`,
+        'lxc-freeze': `#!/bin/sh
+BASE="/var/lib/lxc"; NAME=""
+while [ $# -gt 0 ]; do
+  case "$1" in -P) BASE="$2"; shift 2 ;; -n) NAME="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -f "$BASE/$NAME/config" ] || exit 1
+printf 'FROZEN\\n' > "$BASE/$NAME/.state"
+`,
+        'lxc-unfreeze': `#!/bin/sh
+BASE="/var/lib/lxc"; NAME=""
+while [ $# -gt 0 ]; do
+  case "$1" in -P) BASE="$2"; shift 2 ;; -n) NAME="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -f "$BASE/$NAME/config" ] || exit 1
+printf 'RUNNING\\n' > "$BASE/$NAME/.state"
+`,
+        'lxc-destroy': `#!/bin/sh
+BASE="/var/lib/lxc"; NAME=""
+while [ $# -gt 0 ]; do
+  case "$1" in -P) BASE="$2"; shift 2 ;; -n) NAME="$2"; shift 2 ;; *) shift ;; esac
+done
+CT="$BASE/$NAME"
+if [ -f "$CT/.pid" ]; then
+  PID="$(cat "$CT/.pid" 2>/dev/null || true)"
+  [ -n "$PID" ] && kill -KILL "$PID" 2>/dev/null || true
+fi
+[ -n "$NAME" ] && rm -rf "$CT"
+exit 0
+`,
+        'lxc-ls': `#!/bin/sh
+BASE="/var/lib/lxc"
+while [ $# -gt 0 ]; do
+  case "$1" in -P) BASE="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -d "$BASE" ] || exit 0
+for d in "$BASE"/*; do
+  [ -f "$d/config" ] && basename "$d"
+done
+exit 0
+`,
+        'lxc-info': `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "5.0.3"; exit 0; fi
+BASE="/var/lib/lxc"; NAME=""
+while [ $# -gt 0 ]; do
+  case "$1" in -P) BASE="$2"; shift 2 ;; -n) NAME="$2"; shift 2 ;; *) shift ;; esac
+done
+CT="$BASE/$NAME"
+[ -f "$CT/config" ] || exit 1
+STATE="STOPPED"
+[ -f "$CT/.state" ] && STATE="$(cat "$CT/.state" | tr -d '\\r\\n')"
+PID=""
+[ -f "$CT/.pid" ] && PID="$(cat "$CT/.pid" | tr -d '\\r\\n')"
+if [ "$STATE" = "RUNNING" ] || [ "$STATE" = "FROZEN" ]; then
+  if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+    STATE="STOPPED"
+    PID=""
+  fi
+fi
+echo "Name:           $NAME"
+echo "State:          $STATE"
+if [ "$STATE" = "RUNNING" ] || [ "$STATE" = "FROZEN" ]; then
+  echo "PID:            $PID"
+  CFG_IP="$(grep -E '^[[:space:]]*lxc\\.net\\.0\\.ipv4\\.address' "$CT/config" 2>/dev/null | tail -n 1 | awk -F= '{print $2}' | tr -d ' ' | cut -d/ -f1)"
+  echo "IP:             \${CFG_IP:-10.88.10.200}"
+  echo "CPU use:        1.35 seconds"
+  echo "Memory use:     64.25 MiB"
+  echo "TX bytes:       18.00 KiB"
+  echo "RX bytes:       42.00 KiB"
+fi
+exit 0
+`,
+        'lxc-cgroup': `#!/bin/sh
+BASE="/var/lib/lxc"; NAME=""; KEY=""; VAL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -P) BASE="$2"; shift 2 ;;
+    -n) NAME="$2"; shift 2 ;;
+    *) if [ -z "$KEY" ]; then KEY="$1"; else VAL="$1"; fi; shift ;;
+  esac
+done
+printf '%s=%s\\n' "$KEY" "$VAL" >> "$BASE/$NAME/.live_cgroup"
+exit 0
+`,
+        'lxc-snapshot': `#!/bin/sh
+set -e
+BASE="/var/lib/lxc"; NAME=""; MODE="create"; TARGET=""; CFILE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -P) BASE="$2"; shift 2 ;;
+    -n) NAME="$2"; shift 2 ;;
+    -L) MODE="list"; shift ;;
+    -C) shift ;;
+    -c) CFILE="$2"; shift 2 ;;
+    -r) MODE="restore"; TARGET="$2"; shift 2 ;;
+    -d) MODE="delete"; TARGET="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+CT="$BASE/$NAME"
+mkdir -p "$CT/.snaps"
+META="$CT/.snaps/meta.txt"
+touch "$META"
+if [ "$MODE" = "list" ]; then
+  cat "$META"
+  exit 0
+elif [ "$MODE" = "create" ]; then
+  IDX="$(wc -l < "$META" | tr -d ' ')"
+  SNAME="snap$IDX"
+  COMMENT=""
+  [ -n "$CFILE" ] && [ -f "$CFILE" ] && COMMENT="$(tr '\\n' ' ' < "$CFILE")"
+  tar --numeric-owner -czpf "$CT/.snaps/$SNAME.tar.gz" -C "$CT" rootfs
+  printf '%s - 2026:10:31 12:00:00 %s\\n' "$SNAME" "$COMMENT" >> "$META"
+  exit 0
+elif [ "$MODE" = "restore" ]; then
+  [ -f "$CT/.snaps/$TARGET.tar.gz" ] || exit 1
+  rm -rf "$CT/rootfs"
+  tar --numeric-owner -xzpf "$CT/.snaps/$TARGET.tar.gz" -C "$CT"
+  exit 0
+elif [ "$MODE" = "delete" ]; then
+  rm -f "$CT/.snaps/$TARGET.tar.gz"
+  grep -v "^$TARGET " "$META" > "$META.tmp" || true
+  mv "$META.tmp" "$META"
+  exit 0
+fi
+`,
+        'lxc-attach': `#!/bin/sh
+set -e
+BASE="/var/lib/lxc"; NAME=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -P) BASE="$2"; shift 2 ;;
+    -n) NAME="$2"; shift 2 ;;
+    --clear-env) shift ;;
+    --) shift; break ;;
+    *) shift ;;
+  esac
+done
+CT="$BASE/$NAME"
+[ -f "$CT/config" ] || { echo "Container $NAME does not exist" >&2; exit 1; }
+if [ "$1" = "chpasswd" ]; then
+  IFS=: read -r USR PW
+  HASH="$(printf '%s\\n' "$PW" | openssl passwd -6 -stdin)"
+  awk -F: -v OFS=: -v h="$HASH" '$1=="root"{$2=h}{print}' "$CT/rootfs/etc/shadow" > "$CT/rootfs/etc/shadow.new"
+  mv "$CT/rootfs/etc/shadow.new" "$CT/rootfs/etc/shadow"
+  chmod 0640 "$CT/rootfs/etc/shadow"
+  exit 0
+fi
+if [ "$1" = "ps" ]; then
+  printf '1 root 0.1 0.5 /sbin/init\\n48 www-data 0.4 1.8 nginx\\n'
+  exit 0
+fi
+export CONTAINER_NAME="$NAME"
+exec "$@"
+`,
+      };
+
+      for (const [bin, script] of Object.entries(shims)) {
+        const usrBin = `/usr/bin/${bin}`;
+        const localBin = `/usr/local/bin/${bin}`;
+        if (!fs.existsSync(usrBin) && !fs.existsSync(localBin)) {
+          execFileSync('sudo', ['-n', 'tee', localBin], { input: script, stdio: ['pipe', 'ignore', 'pipe'] });
+          execFileSync('sudo', ['-n', 'chmod', '0755', localBin]);
+          installedLxcShims.push(localBin);
+        }
+      }
+
+      // Re-sync node #1 (localhost) and remoteNodeId capabilities now that LXC runtime is active
+      const checkLocal = await adminClient.request('POST', '/api/v1/nodes/1/check', {});
+      assert.strictEqual(checkLocal.status, 200);
+      assert.strictEqual(checkLocal.json.health.capabilities.lxcAvailable, true);
+      const checkRemote = await adminClient.request('POST', `/api/v1/nodes/${remoteNodeId}/check`, {});
+      assert.strictEqual(checkRemote.status, 200);
+      assert.strictEqual(checkRemote.json.health.capabilities.lxcAvailable, true);
+
+      // 13d. Provision LXC VPS #1 from Ubuntu 24.04 template (codename 'noble', SSH key, static IP, encrypted password)
+      const createRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'e2e-ubuntu-01',
+        hostname: 'e2e-ubuntu-01.hkvm.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 2,
+        cpuShares: 1024,
+        cpuLimitPercent: 90,
+        ramMb: 2048,
+        swapMb: 512,
+        diskGb: 25,
+        bridge: 'lxcbr0',
+        ipv4Address: '10.88.10.25/24',
+        ipv4Gateway: '10.88.10.1',
+        sshPublicKeys: ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHkvmE2ePubKey00001 admin@hkvm'],
+        autostart: true,
+        nesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(createRes.status, 201, `LXC create #1 failed: ${createRes.text}`);
+      assert.strictEqual(createRes.json.instance.status, 'running');
+      assert.ok(createRes.json.generatedRootPassword.length >= 16);
+      e2eUbuntuId = createRes.json.instance.refId;
+
+      const dbRow1 = await ctx.db.get(`SELECT * FROM lxc_instances WHERE id = ?`, [e2eUbuntuId]);
+      assert.ok(isEncryptedSecret(dbRow1.root_password_enc), 'Root password encrypted with AES-256-GCM');
+      assert.strictEqual(decryptSecret(dbRow1.root_password_enc), createRes.json.generatedRootPassword);
+      const regRow1 = await ctx.db.get(
+        `SELECT * FROM instances WHERE engine = 'lxc' AND ref_id = ?`,
+        [e2eUbuntuId]
+      );
+      assert.ok(regRow1 && regRow1.status === 'running', 'Unified instances registry synced');
+
+      const ct1Shadow = privilegedFs.readTextSync(
+        path.join(process.env.HKVM_LXC_PATH, 'e2e-ubuntu-01', 'rootfs', 'etc', 'shadow')
+      );
+      assert.match(ct1Shadow, /^root:\$6\$/m, 'Container /etc/shadow updated with SHA-512 hash');
+
+      // Duplicate name rejection
+      const dupRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'e2e-ubuntu-01',
+        templateSlug: 'ubuntu:24.04',
+        provisionOnHost: true,
+      });
+      assert.ok(dupRes.status >= 400, 'Duplicate container name must be rejected');
+
+      // 13e. Upload a real custom .tar.gz LXC rootfs archive via multipart/form-data & provision LXC VPS #2
+      const customBuildDir = path.join(tmpRoot, 'custom-rootfs-src');
+      fs.mkdirSync(path.join(customBuildDir, 'etc'), { recursive: true });
+      fs.mkdirSync(path.join(customBuildDir, 'root'), { recursive: true });
+      fs.writeFileSync(path.join(customBuildDir, 'etc', 'custom-release'), 'HKVM-Custom-OS-3.0\n');
+      fs.writeFileSync(path.join(customBuildDir, 'etc', 'shadow'), 'root:*:19000:0:99999:7:::\n');
+      const customTarPath = path.join(tmpRoot, 'hkvm-custom-os.tar.gz');
+      execFileSync('tar', ['-czf', customTarPath, '-C', customBuildDir, '.']);
+      const tarBytes = fs.readFileSync(customTarPath);
+
+      const boundary = '----HkvmMultipartBoundary' + Date.now();
+      const mpParts = [];
+      const addField = (k, v) => {
+        mpParts.push(
+          Buffer.from(
+            `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`
+          )
+        );
+      };
+      addField('slug', 'custom:hkvm-os-3');
+      addField('name', 'HKVM Custom OS 3.0');
+      addField('distro', 'debian');
+      addField('release', 'bookworm');
+      mpParts.push(
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="archive"; filename="hkvm-custom-os.tar.gz"\r\nContent-Type: application/gzip\r\n\r\n`
+        )
+      );
+      mpParts.push(tarBytes);
+      mpParts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+      const mpBody = Buffer.concat(mpParts);
+
+      const uploadTpl = await adminClient.request('POST', '/api/v1/lxc/templates', mpBody, {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      });
+      assert.strictEqual(uploadTpl.status, 201, `Custom archive upload failed: ${uploadTpl.text}`);
+      assert.strictEqual(uploadTpl.json.template.checksum_sha256.length, 64);
+
+      const createCustom = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'e2e-custom-02',
+        templateSlug: 'custom:hkvm-os-3',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 10,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(createCustom.status, 201, `Custom archive LXC failed: ${createCustom.text}`);
+      e2eCustomId = createCustom.json.instance.refId;
+
+      const customStamp = await adminClient.request(
+        'GET',
+        `/api/v1/lxc/${e2eCustomId}/files/content?path=${encodeURIComponent('/etc/custom-release')}`
+      );
+      assert.strictEqual(customStamp.status, 200);
+      assert.strictEqual(customStamp.json.content.trim(), 'HKVM-Custom-OS-3.0');
+
+      // 13f. Orphan host directory auto-recovery + GPG --no-validate fallback + WSL2 cgroup retry + sync-host
+      const orphanDir = path.join(process.env.HKVM_LXC_PATH, 'e2e-orphan-03');
+      fs.mkdirSync(path.join(orphanDir, 'rootfs'), { recursive: true });
+      fs.writeFileSync(path.join(orphanDir, 'config'), 'lxc.uts.name = e2e-orphan-03\n');
+
+      const gpgTpl = await adminClient.request('POST', '/api/v1/lxc/templates', {
+        slug: 'gpgtest:1.0',
+        name: 'GPG Fallback Test Template',
+        distro: 'gpgtest',
+        release: 'current',
+      });
+      assert.strictEqual(gpgTpl.status, 201);
+
+      const createOrphanAndGpg = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'e2e-orphan-03',
+        templateSlug: 'gpgtest:1.0',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 8,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(
+        createOrphanAndGpg.status,
+        201,
+        `Orphan replacement + GPG fallback failed: ${createOrphanAndGpg.text}`
+      );
+      e2eOrphanId = createOrphanAndGpg.json.instance.refId;
+
+      // Test automatic WSL2 cgroup failure strip-and-retry during startContainer
+      await adminClient.request('POST', `/api/v1/instances/lxc/${e2eOrphanId}/action`, {
+        action: 'stop',
+      });
+      privilegedFs.writeFileSync(
+        path.join(process.env.HKVM_LXC_PATH, 'e2e-orphan-03', '.fail_cgroup_once'),
+        '1'
+      );
+      const retryStart = await adminClient.request(
+        'POST',
+        `/api/v1/instances/lxc/${e2eOrphanId}/action`,
+        { action: 'start' }
+      );
+      assert.strictEqual(retryStart.status, 200, `WSL2 cgroup retry failed: ${retryStart.text}`);
+      assert.strictEqual(retryStart.json.instance.status, 'running');
+
+      // Create an unmanaged container directly via lxc-create and import via POST /api/v1/lxc/sync-host
+      execFileSync('sudo', [
+        '-n',
+        '/usr/local/bin/lxc-create',
+        '-P',
+        process.env.HKVM_LXC_PATH,
+        '-n',
+        'ext-host-ct-04',
+        '--',
+        '-d',
+        'debian',
+        '-r',
+        'bookworm',
+      ]);
+      const syncHostRes = await adminClient.request('POST', '/api/v1/lxc/sync-host', {});
+      assert.strictEqual(syncHostRes.status, 200, `sync-host failed: ${syncHostRes.text}`);
+      assert.ok(
+        syncHostRes.json.imported.includes('ext-host-ct-04'),
+        `Expected ext-host-ct-04 in imported: ${JSON.stringify(syncHostRes.json)}`
+      );
+
+      // 13g. Full Lifecycle + Suspension Bypass Protection + Live Resize + Password + SSH + File Manager + Logs/Processes/Telemetry/Renew + UI Contrast Check
+      for (const [act, expectedStatus] of [
+        ['freeze', 'frozen'],
+        ['unfreeze', 'running'],
+        ['stop', 'stopped'],
+        ['start', 'running'],
+        ['restart', 'running'],
+        ['suspend', 'suspended'],
+      ]) {
+        const r = await adminClient.request(
+          'POST',
+          `/api/v1/instances/lxc/${e2eUbuntuId}/action`,
+          { action: act, reason: 'E2E test' }
+        );
+        assert.strictEqual(r.status, 200, `Action ${act} failed: ${r.text}`);
+        assert.strictEqual(r.json.instance.status, expectedStatus);
+      }
+
+      // Starting OR reinstalling while suspended MUST be blocked with HTTP 400!
+      const startWhileSusp = await adminClient.request(
+        'POST',
+        `/api/v1/instances/lxc/${e2eUbuntuId}/action`,
+        { action: 'start' }
+      );
+      assert.strictEqual(startWhileSusp.status, 400, 'Cannot start suspended LXC');
+      const reinstallWhileSusp = await adminClient.request(
+        'POST',
+        `/api/v1/lxc/${e2eUbuntuId}/reinstall`,
+        { templateSlug: 'ubuntu:24.04' }
+      );
+      assert.strictEqual(reinstallWhileSusp.status, 400, 'Cannot bypass suspension via reinstall');
+
+      // Unsuspend & start back up
+      await adminClient.request('POST', `/api/v1/instances/lxc/${e2eUbuntuId}/action`, {
+        action: 'unsuspend',
+      });
+      const afterUnsusp = await adminClient.request(
+        'POST',
+        `/api/v1/instances/lxc/${e2eUbuntuId}/action`,
+        { action: 'start' }
+      );
+      assert.strictEqual(afterUnsusp.status, 200);
+      assert.strictEqual(afterUnsusp.json.instance.status, 'running');
+
+      // Live resize & network update via PATCH /api/v1/lxc/:id
+      const patchRes = await adminClient.request('PATCH', `/api/v1/lxc/${e2eUbuntuId}`, {
+        cpuCores: 4,
+        cpuLimitPercent: 80,
+        cpuShares: 2048,
+        ramMb: 4096,
+        swapMb: 1024,
+        diskGb: 40,
+        bridge: 'lxcbr0',
+        ipAddress: '10.88.10.26/24',
+        gateway: '10.88.10.1',
+        nesting: true,
+        autostart: true,
+      });
+      assert.strictEqual(patchRes.status, 200, `Resize PATCH failed: ${patchRes.text}`);
+      assert.strictEqual(patchRes.json.instance.cpuCores, 4);
+      assert.strictEqual(patchRes.json.instance.ramMb, 4096);
+      const liveCg = privilegedFs.readTextSync(
+        path.join(process.env.HKVM_LXC_PATH, 'e2e-ubuntu-01', '.live_cgroup')
+      );
+      assert.ok(liveCg.includes('4096M'), 'Live lxc-cgroup memory limit applied while running');
+
+      // Root password reset (online via lxc-attach chpasswd) & SSH key injection
+      const pwRes = await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/password`, {
+        password: 'UpdatedLivePass!2026',
+      });
+      assert.strictEqual(pwRes.status, 200, `Password reset failed: ${pwRes.text}`);
+      assert.strictEqual(pwRes.json.rootPassword, 'UpdatedLivePass!2026');
+
+      const sshRes = await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/ssh-key`, {
+        publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISecondKeyInjected99999 ops@hkvm',
+      });
+      assert.strictEqual(sshRes.status, 200, `SSH key inject failed: ${sshRes.text}`);
+
+      // Confined Rootfs File Manager CRUD + traversal block
+      const writeF = await adminClient.request(
+        'POST',
+        `/api/v1/lxc/${e2eUbuntuId}/files/content`,
+        { path: '/var/www/index.html', content: '<h1>HKVM LXC OK</h1>' }
+      );
+      assert.strictEqual(writeF.status, 200);
+      const listF = await adminClient.request('GET', `/api/v1/lxc/${e2eUbuntuId}/files?path=/var/www`);
+      assert.strictEqual(listF.status, 200);
+      assert.ok(listF.json.entries.some((e) => e.name === 'index.html'));
+      const readF = await adminClient.request(
+        'GET',
+        `/api/v1/lxc/${e2eUbuntuId}/files/content?path=/var/www/index.html`
+      );
+      assert.strictEqual(readF.json.content, '<h1>HKVM LXC OK</h1>');
+      const delF = await adminClient.request(
+        'DELETE',
+        `/api/v1/lxc/${e2eUbuntuId}/files?path=/var/www/index.html`
+      );
+      assert.strictEqual(delF.status, 200);
+      const travF = await adminClient.request(
+        'GET',
+        `/api/v1/lxc/${e2eUbuntuId}/files/content?path=${encodeURIComponent('/../../etc/passwd')}`
+      );
+      assert.strictEqual(travF.status, 400);
+
+      // Processes, Logs, Telemetry, Expiration Renewal & Detail EJS Regression Check
+      const procRes = await adminClient.request('GET', `/api/v1/lxc/${e2eUbuntuId}/processes`);
+      assert.strictEqual(procRes.status, 200);
+      assert.ok(procRes.json.processes.some((p) => p.command.includes('nginx')));
+
+      const logRes = await adminClient.request('GET', `/api/v1/lxc/${e2eUbuntuId}/logs`);
+      assert.strictEqual(logRes.status, 200);
+      assert.match(logRes.json.logs, /Container started/);
+
+      const telRes = await adminClient.request(
+        'GET',
+        `/api/v1/instances/lxc/${e2eUbuntuId}/telemetry`
+      );
+      assert.strictEqual(telRes.status, 200);
+      assert.strictEqual(telRes.json.telemetry.status, 'running');
+      assert.ok(telRes.json.telemetry.ramUsedMb >= 60);
+
+      const renewRes = await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/renew`, {
+        days: 30,
+      });
+      assert.strictEqual(renewRes.status, 200);
+      assert.ok(renewRes.json.instance.expiresAt);
+
+      const detailPage = await adminClient.request('GET', `/lxc/${e2eUbuntuId}`);
+      assert.strictEqual(detailPage.status, 200);
+      assert.ok(
+        !detailPage.text.includes('background: var(--accent-primary'),
+        'Regression guard: .lxc-tab.active must not use white --accent-primary background'
+      );
+      assert.ok(detailPage.text.includes('id="pane-resources"'), 'Staff resize pane rendered');
+    });
+
+    // 15. LXC Snapshots, SHA-256 Archive Backup + Clean Restore, 7-Stage Offline Migration (+ Rollback) & Local/Remote WebSocket PTY Console
+    await runStep('T14: LXC snapshots, SHA-256 backup + clean restore, 7-stage offline migration + rollback & WebSocket PTY console', async () => {
+      // 14a. LXC Snapshots (create, list, mutate, restore, limit enforcement, delete)
+      await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/files/content`, {
+        path: '/etc/app-version.txt',
+        content: 'release-v1.0-stable\n',
+      });
+      const snapCreate = await adminClient.request(
+        'POST',
+        `/api/v1/snapshots/lxc/${e2eUbuntuId}`,
+        { description: 'Before risky upgrade' }
+      );
+      assert.strictEqual(snapCreate.status, 201, `Snapshot create failed: ${snapCreate.text}`);
+      const snapId = snapCreate.json.snapshot.id;
+
+      await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/files/content`, {
+        path: '/etc/app-version.txt',
+        content: 'release-v2.0-broken\n',
+      });
+      const snapRestore = await adminClient.request(
+        'POST',
+        `/api/v1/snapshots/lxc/${e2eUbuntuId}/${snapId}/restore`,
+        {}
+      );
+      assert.strictEqual(snapRestore.status, 200, `Snapshot restore failed: ${snapRestore.text}`);
+      const revertedVer = await adminClient.request(
+        'GET',
+        `/api/v1/lxc/${e2eUbuntuId}/files/content?path=/etc/app-version.txt`
+      );
+      assert.strictEqual(revertedVer.json.content.trim(), 'release-v1.0-stable');
+
+      // Enforce snapshot_limit
+      await ctx.db.run(`UPDATE lxc_instances SET snapshot_limit = 1 WHERE id = ?`, [e2eUbuntuId]);
+      const overLimit = await adminClient.request(
+        'POST',
+        `/api/v1/snapshots/lxc/${e2eUbuntuId}`,
+        { description: 'Should hit limit' }
+      );
+      assert.ok(overLimit.status >= 400 && /Snapshot limit reached/i.test(overLimit.json.error));
+      const snapDel = await adminClient.request(
+        'DELETE',
+        `/api/v1/snapshots/lxc/${e2eUbuntuId}/${snapId}`
+      );
+      assert.strictEqual(snapDel.status, 200);
+
+      // 14b. SHA-256 Archive Backup + Integrity Verify + Clean Rootfs Restore
+      const bkpCreate = await adminClient.request('POST', '/api/v1/backups', {
+        engine: 'lxc',
+        refId: e2eUbuntuId,
+        label: 'pre_mig_gold',
+      });
+      assert.strictEqual(bkpCreate.status, 201, `LXC backup failed: ${bkpCreate.text}`);
+      const lxcBkpId = bkpCreate.json.backup.backupId;
+      assert.strictEqual(bkpCreate.json.backup.checksumSha256.length, 64);
+
+      const bkpVerify = await adminClient.request('POST', `/api/v1/backups/${lxcBkpId}/verify`, {});
+      assert.strictEqual(bkpVerify.status, 200);
+      assert.strictEqual(bkpVerify.json.valid, true);
+
+      // Mutate existing file AND add post-backup junk file, then restore archive backup!
+      await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/files/content`, {
+        path: '/etc/app-version.txt',
+        content: 'corrupted-state\n',
+      });
+      await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/files/content`, {
+        path: '/etc/post-backup-stale.txt',
+        content: 'should-be-wiped-on-restore\n',
+      });
+
+      const bkpRestore = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${lxcBkpId}/restore`,
+        {}
+      );
+      assert.strictEqual(bkpRestore.status, 200, `LXC backup restore failed: ${bkpRestore.text}`);
+      assert.strictEqual(bkpRestore.json.restored, true);
+      assert.strictEqual(bkpRestore.json.status, 'running');
+
+      const afterBkpVer = await adminClient.request(
+        'GET',
+        `/api/v1/lxc/${e2eUbuntuId}/files/content?path=/etc/app-version.txt`
+      );
+      assert.strictEqual(afterBkpVer.json.content.trim(), 'release-v1.0-stable');
+      const staleCheck = await adminClient.request(
+        'GET',
+        `/api/v1/lxc/${e2eUbuntuId}/files/content?path=/etc/post-backup-stale.txt`
+      );
+      assert.strictEqual(staleCheck.status, 400, 'Post-backup stale file must be wiped by clean restore');
+
+      // 14c. Local WebSocket LXC PTY Console (/ws/lxc/:id/console) + Unauth Rejection
+      await new Promise((resolve, reject) => {
+        const unauthWs = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws/lxc/${e2eCustomId}/console`);
+        unauthWs.on('unexpected-response', (_req, res) => {
+          assert.strictEqual(res.statusCode, 401);
+          resolve();
+        });
+        unauthWs.on('open', () => reject(new Error('Unauthenticated LXC console WS must not open')));
+        unauthWs.on('error', () => resolve());
+      });
+
+      const localConsoleOut = await new Promise((resolve, reject) => {
+        let out = '';
+        const ws = new WebSocket(
+          `ws://127.0.0.1:${TEST_PORT}/ws/lxc/${e2eCustomId}/console?cols=110&rows=32`,
+          { headers: { Cookie: adminClient.cookie } }
+        );
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error(`Timed out waiting for local LXC PTY output. Got: ${out}`));
+        }, 6000);
+        ws.on('open', () => {
+          ws.send(JSON.stringify({ type: 'resize', cols: 120, rows: 36 }));
+          setTimeout(() => {
+            ws.send(
+              JSON.stringify({
+                type: 'input',
+                data: 'echo LXC_LOCAL_PTY_$CONTAINER_NAME:$((19+23))\n',
+              })
+            );
+          }, 200);
+        });
+        ws.on('message', (raw) => {
+          try {
+            const msg = JSON.parse(raw.toString());
+            if (msg.type === 'output') {
+              out += msg.data;
+              if (out.includes('LXC_LOCAL_PTY_e2e-custom-02:42')) {
+                clearTimeout(timer);
+                ws.close();
+                resolve(out);
+              }
+            }
+          } catch (_) {}
+        });
+        ws.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+      assert.ok(localConsoleOut.includes('LXC_LOCAL_PTY_e2e-custom-02:42'));
+
+      // 14d. Reinstall LXC Container (#2 custom -> ubuntu:24.04)
+      const reinstRes = await adminClient.request('POST', `/api/v1/lxc/${e2eCustomId}/reinstall`, {
+        templateSlug: 'ubuntu:24.04',
+      });
+      assert.strictEqual(reinstRes.status, 200, `Reinstall failed: ${reinstRes.text}`);
+      assert.strictEqual(reinstRes.json.instance.status, 'running');
+      assert.ok(reinstRes.json.rootPassword.length >= 16);
+
+      // 14e. 7-Stage Verified Offline Migration: First test automatic pre-commit ROLLBACK on target conflict!
+      const conflictDir = path.join(tmpRoot, 'agent-lxc', 'e2e-ubuntu-01');
+      fs.mkdirSync(conflictDir, { recursive: true });
+      fs.writeFileSync(path.join(conflictDir, 'config'), 'lxc.uts.name = e2e-ubuntu-01\n');
+
+      const failedMig = await adminClient.request('POST', '/api/v1/migrations', {
+        lxcId: e2eUbuntuId,
+        targetNodeId: remoteNodeId,
+      });
+      assert.strictEqual(failedMig.status, 500, 'Expected migration conflict failure');
+      assert.match(failedMig.json.error, /safely rolled back/i);
+
+      const migJobsAfterRollback = await adminClient.request('GET', '/api/v1/migrations');
+      assert.strictEqual(migJobsAfterRollback.json.migrations[0].status, 'rolled_back');
+      assert.strictEqual(migJobsAfterRollback.json.migrations[0].rollback_performed, 1);
+
+      // Verify source container on localhost is STILL running and intact after rollback!
+      const postRollbackTel = await adminClient.request(
+        'GET',
+        `/api/v1/instances/lxc/${e2eUbuntuId}/telemetry`
+      );
+      assert.strictEqual(postRollbackTel.json.telemetry.status, 'running');
+      fs.rmSync(conflictDir, { recursive: true, force: true });
+
+      // Now execute full 7-stage verified offline migration (localhost -> local-loopback-agent)!
+      const okMig = await adminClient.request('POST', '/api/v1/migrations', {
+        lxcId: e2eUbuntuId,
+        targetNodeId: remoteNodeId,
+        targetBridge: 'lxcbr0',
+        targetIpv4: '10.88.20.50/24',
+        targetGateway: '10.88.20.1',
+      });
+      assert.strictEqual(okMig.status, 201, `Offline migration failed: ${okMig.text}`);
+      assert.strictEqual(okMig.json.migration.status, 'completed');
+      assert.strictEqual(okMig.json.migration.progress, 100);
+      assert.strictEqual(okMig.json.migration.checksum_sha256.length, 64);
+
+      assert.ok(
+        !fs.existsSync(path.join(process.env.HKVM_LXC_PATH, 'e2e-ubuntu-01')),
+        'Source container cleaned up after verified target cutover'
+      );
+      assert.ok(
+        fs.existsSync(path.join(tmpRoot, 'agent-lxc', 'e2e-ubuntu-01', 'config')),
+        'Target container active on remote Node Agent'
+      );
+
+      // Verify remote Node Agent file read, remote backup + SHA-256 verify + restore, remote reinstall & remote proxied WebSocket PTY console!
+      const remoteFile = await adminClient.request(
+        'GET',
+        `/api/v1/lxc/${e2eUbuntuId}/files/content?path=/etc/app-version.txt`
+      );
+      assert.strictEqual(remoteFile.status, 200);
+      assert.strictEqual(remoteFile.json.content.trim(), 'release-v1.0-stable');
+
+      const remoteBkp = await adminClient.request('POST', '/api/v1/backups', {
+        engine: 'lxc',
+        refId: e2eUbuntuId,
+        label: 'remote_agent_bkp',
+      });
+      assert.strictEqual(remoteBkp.status, 201, `Remote node backup failed: ${remoteBkp.text}`);
+      const remoteBkpId = remoteBkp.json.backup.backupId;
+
+      const remoteBkpVer = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${remoteBkpId}/verify`,
+        {}
+      );
+      assert.strictEqual(remoteBkpVer.status, 200);
+      assert.strictEqual(remoteBkpVer.json.valid, true);
+
+      const remoteBkpRestore = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${remoteBkpId}/restore`,
+        {}
+      );
+      assert.strictEqual(remoteBkpRestore.status, 200, `Remote restore failed: ${remoteBkpRestore.text}`);
+      assert.strictEqual(remoteBkpRestore.json.status, 'running');
+
+      // Remote Node Agent proxied WebSocket LXC PTY Console (testing early buffered frames on CONNECTING!)
+      const remoteConsoleOut = await new Promise((resolve, reject) => {
+        let out = '';
+        const ws = new WebSocket(
+          `ws://127.0.0.1:${TEST_PORT}/ws/lxc/${e2eUbuntuId}/console?cols=100&rows=30`,
+          { headers: { Cookie: adminClient.cookie } }
+        );
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error(`Timed out waiting for remote proxied LXC PTY output. Got: ${out}`));
+        }, 6000);
+        ws.on('open', () => {
+          // Immediately send input frame to exercise bridgeWebSockets CONNECTING queue!
+          ws.send(
+            JSON.stringify({
+              type: 'input',
+              data: 'echo REMOTE_AGENT_PTY_$CONTAINER_NAME:$((50+49))\n',
+            })
+          );
+        });
+        ws.on('message', (raw) => {
+          try {
+            const msg = JSON.parse(raw.toString());
+            if (msg.type === 'output') {
+              out += msg.data;
+              if (out.includes('REMOTE_AGENT_PTY_e2e-ubuntu-01:99')) {
+                clearTimeout(timer);
+                ws.close();
+                resolve(out);
+              }
+            }
+          } catch (_) {}
+        });
+        ws.on('error', (err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+      assert.ok(remoteConsoleOut.includes('REMOTE_AGENT_PTY_e2e-ubuntu-01:99'));
+
+      // Remote Node Agent Reinstall -> must preserve 'running' state cleanly
+      const remoteReinst = await adminClient.request(
+        'POST',
+        `/api/v1/lxc/${e2eUbuntuId}/reinstall`,
+        { templateSlug: 'ubuntu:24.04' }
+      );
+      assert.strictEqual(remoteReinst.status, 200, `Remote reinstall failed: ${remoteReinst.text}`);
+      assert.strictEqual(
+        remoteReinst.json.instance.status,
+        'running',
+        'Remote reinstalled container must accurately report running status'
+      );
+
+      // Cleanly delete backups & all E2E LXC containers via API and verify DB + disk cleanup
+      await adminClient.request('DELETE', `/api/v1/backups/${lxcBkpId}`);
+      await adminClient.request('DELETE', `/api/v1/backups/${remoteBkpId}`);
+      for (const id of [e2eUbuntuId, e2eCustomId, e2eOrphanId]) {
+        const del = await adminClient.request('POST', `/api/v1/instances/lxc/${id}/action`, {
+          action: 'delete',
+        });
+        assert.strictEqual(del.status, 200, `Delete LXC #${id} failed: ${del.text}`);
+        const gone = await ctx.db.get(`SELECT id FROM lxc_instances WHERE id = ?`, [id]);
+        assert.strictEqual(gone, undefined);
+      }
+      const extRow = await ctx.db.get(`SELECT id FROM lxc_instances WHERE container_name = 'ext-host-ct-04'`);
+      if (extRow) {
+        await adminClient.request('POST', `/api/v1/instances/lxc/${extRow.id}/action`, {
+          action: 'delete',
+        });
+      }
+    });
   } finally {
+    const { execFileSync } = require('child_process');
+    for (const storeDir of [path.join(tmpRoot, 'local-lxc'), path.join(tmpRoot, 'agent-lxc')]) {
+      try {
+        if (fs.existsSync(storeDir)) {
+          for (const entry of fs.readdirSync(storeDir)) {
+            const pidFile = path.join(storeDir, entry, '.pid');
+            if (fs.existsSync(pidFile)) {
+              const p = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+              if (p > 0) {
+                try { execFileSync('sudo', ['-n', 'kill', '-KILL', String(p)]); } catch (_) {}
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    for (const d of rootOwnedCleanupDirs) {
+      try { execFileSync('sudo', ['-n', 'rm', '-rf', d]); } catch (_) {}
+    }
+    for (const shimPath of installedLxcShims) {
+      try { execFileSync('sudo', ['-n', 'rm', '-f', shimPath]); } catch (_) {}
+    }
     if (agentServer) await new Promise((r) => agentServer.close(() => r()));
     if (app && app.getHkvmV3Context()) {
       app.getHkvmV3Context().monitoringService.stopBackgroundLoop();
@@ -704,7 +1695,11 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
     if (app && app.server) {
       await new Promise((r) => app.server.close(() => r()));
     }
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    try {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {
+      try { execFileSync('sudo', ['-n', 'rm', '-rf', tmpRoot]); } catch (_) {}
+    }
   }
 
   const failed = results.filter((r) => r.status === 'FAIL');

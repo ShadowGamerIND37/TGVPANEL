@@ -2050,10 +2050,19 @@ async function loadBackups() {
         <td>${hkvmEsc(b.created_at)}</td>
         <td class="v3-btn-row">
           <button class="btn btn-outline" onclick="verifyBackup(${b.id})">Verify SHA-256</button>
+          ${b.instance_type === 'lxc' ? `<button class="btn btn-outline" onclick="restoreAdminBackup(${b.id})">Restore</button>` : ''}
           <button class="btn btn-outline" style="color:#ef4444;" onclick="delBackup(${b.id})">Delete</button>
         </td>
       </tr>`).join('')
     : '<tr><td colspan="8" style="color:var(--text-muted);">No archive backups yet.</td></tr>';
+}
+
+async function restoreAdminBackup(id) {
+  if (!confirm('Verify SHA-256 checksum and restore LXC container from backup #' + id + '?')) return;
+  try {
+    await hkvmApi('/api/v1/backups/' + id + '/restore', { method: 'POST' });
+    hkvmToast('LXC container restored from verified backup');
+  } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
 async function createAdminBackup() {

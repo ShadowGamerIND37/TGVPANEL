@@ -332,10 +332,14 @@ export class NodeManager {
       let stats: HostResourceStats;
 
       if (node.is_local) {
-        health = await getNodeHealthReport();
+        health = await getNodeHealthReport(true);
         stats = await this.localRuntime.statsCollector.collect();
       } else {
-        health = await this.requestRemoteNode<NodeHealthReport>(nodeId, 'GET', '/api/v1/health');
+        health = await this.requestRemoteNode<NodeHealthReport>(
+          nodeId,
+          'GET',
+          '/api/v1/health?refresh=1'
+        );
         stats = await this.requestRemoteNode<HostResourceStats>(nodeId, 'GET', '/api/v1/stats');
       }
 

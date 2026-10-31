@@ -9,8 +9,12 @@
   <style>
     .lxc-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
     .lxc-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-    .lxc-tab { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border-card); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-size: 13px; font-weight: 600; }
-    .lxc-tab.active { background: var(--accent-primary, #6366f1); color: #fff; border-color: transparent; }
+    .lxc-tab { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border-card); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.16s ease; }
+    .lxc-tab:hover { color: var(--text-primary); border-color: rgba(6, 182, 212, 0.45); }
+    .lxc-tab.active { background: linear-gradient(135deg, #06b6d4, #6366f1); color: #ffffff; border-color: transparent; box-shadow: 0 4px 12px rgba(6, 182, 212, 0.22); }
+    .lxc-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+    .lxc-field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 5px; }
+    .lxc-field input, .lxc-field select { width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary); font-size: 13px; }
     .lxc-pane { display: none; }
     .lxc-pane.active { display: block; }
     .lxc-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
@@ -64,6 +68,9 @@
         <button class="lxc-tab" onclick="switchPane('snapshots', this); loadSnapsAndBackups()">Snapshots &amp; Backups</button>
         <button class="lxc-tab" onclick="switchPane('processes', this); loadProcsAndLogs()">Processes &amp; Logs</button>
         <button class="lxc-tab" onclick="switchPane('sharing', this)">Access Sharing</button>
+        <% if (isStaff) { %>
+        <button class="lxc-tab" onclick="switchPane('resources', this)">Resources &amp; Network</button>
+        <% } %>
       </div>
 
       <!-- PANE: Credentials & Reinstall -->
@@ -137,7 +144,7 @@
             <h3 style="margin:0;color:var(--text-primary);">SHA-256 Archive Backups</h3>
             <button class="btn btn-outline" onclick="createBkp()">+ Create Archive Backup</button>
           </div>
-          <table class="lxc-table"><thead><tr><th>Name</th><th>Size</th><th>SHA-256</th><th>Created</th></tr></thead><tbody id="lxcBkpsBody"></tbody></table>
+          <table class="lxc-table"><thead><tr><th>Name</th><th>Size</th><th>SHA-256</th><th>Created</th><th>Actions</th></tr></thead><tbody id="lxcBkpsBody"></tbody></table>
         </div>
       </div>
 
@@ -164,6 +171,40 @@
           </div>
         </div>
       </div>
+
+      <% if (isStaff) { const _cfg = lxcConfig || {}; %>
+      <!-- PANE: Resources & Network (Staff Only) -->
+      <div id="pane-resources" class="lxc-pane">
+        <div class="lxc-card">
+          <h3 style="margin-top:0;color:var(--text-primary);">Live Resource &amp; Network Configuration</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">Updates LXC managed configuration and applies live cgroup limits immediately when the container is running.</p>
+          <form onsubmit="saveResources(event)">
+            <div class="lxc-form-grid">
+              <div class="lxc-field"><label>vCPU Cores</label><input id="resCpu" type="number" min="1" max="128" value="<%= instance.cpuCores %>" required></div>
+              <div class="lxc-field"><label>CPU Limit (%)</label><input id="resCpuPct" type="number" min="5" max="100" value="<%= _cfg.cpuLimitPercent || 100 %>" required></div>
+              <div class="lxc-field"><label>CPU Shares</label><input id="resCpuShares" type="number" min="64" max="65536" value="<%= _cfg.cpuShares || 1024 %>" required></div>
+              <div class="lxc-field"><label>RAM (MB)</label><input id="resRam" type="number" min="64" step="64" value="<%= instance.ramMb %>" required></div>
+              <div class="lxc-field"><label>Swap (MB)</label><input id="resSwap" type="number" min="0" step="64" value="<%= instance.swapMb %>" required></div>
+              <div class="lxc-field"><label>Rootfs Disk Quota (GB)</label><input id="resDisk" type="number" min="1" value="<%= instance.diskGb %>" required></div>
+              <div class="lxc-field"><label>Linux Bridge</label><input id="resBridge" value="<%= _cfg.bridge || 'lxcbr0' %>" required></div>
+              <div class="lxc-field"><label>Static IPv4 / CIDR (blank for DHCP)</label><input id="resIp" value="<%= _cfg.ipAddress || '' %>" placeholder="e.g. 10.0.3.25/24"></div>
+              <div class="lxc-field"><label>IPv4 Gateway</label><input id="resGw" value="<%= _cfg.gateway || '' %>" placeholder="e.g. 10.0.3.1"></div>
+            </div>
+            <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;align-items:center;">
+              <label style="display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--text-primary);cursor:pointer;">
+                <input type="checkbox" id="resNesting" <%= _cfg.nesting !== false ? 'checked' : '' %>> Enable Container Nesting (Docker/Podman)
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--text-primary);cursor:pointer;">
+                <input type="checkbox" id="resAutostart" <%= _cfg.autostart ? 'checked' : '' %>> Start Automatically on Host Boot
+              </label>
+            </div>
+            <div style="margin-top:16px;">
+              <button type="submit" class="btn btn-primary">Apply Resource &amp; Network Limits</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <% } %>
 
     </div>
     <%- include('../partials/admin/footer') %>
@@ -304,8 +345,14 @@ async function loadSnapsAndBackups() {
         <td><button class="btn btn-outline" onclick="revertLxcSnap(${s.id})">Restore</button> <button class="btn btn-outline" onclick="deleteLxcSnap(${s.id})">Delete</button></td></tr>`).join('')
     : '<tr><td colspan="4" style="color:var(--text-muted);">No snapshots created.</td></tr>';
   document.getElementById('lxcBkpsBody').innerHTML = bRes.backups.length
-    ? bRes.backups.map(b => `<tr><td>${hkvmEsc(b.backup_name)}</td><td>${(b.size_bytes/1048576).toFixed(2)} MB</td><td><code>${hkvmEsc((b.checksum_sha256||'').slice(0,16))}...</code></td><td>${hkvmEsc(b.created_at)}</td></tr>`).join('')
-    : '<tr><td colspan="4" style="color:var(--text-muted);">No backups created.</td></tr>';
+    ? bRes.backups.map(b => `<tr>
+        <td>${hkvmEsc(b.backup_name)}</td>
+        <td>${(b.size_bytes/1048576).toFixed(2)} MB</td>
+        <td><code>${hkvmEsc((b.checksum_sha256||'').slice(0,16))}...</code></td>
+        <td>${hkvmEsc(b.created_at)}</td>
+        <td><button class="btn btn-outline" onclick="restoreLxcBkp(${b.id})">Restore</button></td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" style="color:var(--text-muted);">No backups created.</td></tr>';
 }
 
 async function createSnap() {
@@ -334,6 +381,39 @@ async function createBkp() {
     hkvmToast('Backup archive created');
     loadSnapsAndBackups();
   } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function restoreLxcBkp(backupId) {
+  if (!confirm('Verify SHA-256 checksum and restore container rootfs from backup #' + backupId + '?')) return;
+  try {
+    await hkvmApi('/api/v1/backups/' + backupId + '/restore', { method: 'POST' });
+    hkvmToast('Container restored from verified backup archive');
+    refreshTelemetry();
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function saveResources(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi(`/api/v1/lxc/${LXC_ID}`, {
+      method: 'PATCH',
+      body: {
+        cpuCores: Number(document.getElementById('resCpu').value),
+        cpuLimitPercent: Number(document.getElementById('resCpuPct').value),
+        cpuShares: Number(document.getElementById('resCpuShares').value),
+        ramMb: Number(document.getElementById('resRam').value),
+        swapMb: Number(document.getElementById('resSwap').value),
+        diskGb: Number(document.getElementById('resDisk').value),
+        bridge: document.getElementById('resBridge').value.trim(),
+        ipAddress: document.getElementById('resIp').value.trim() || null,
+        gateway: document.getElementById('resGw').value.trim() || null,
+        nesting: document.getElementById('resNesting').checked,
+        autostart: document.getElementById('resAutostart').checked
+      }
+    });
+    hkvmToast('Container resource & network limits updated');
+    setTimeout(() => location.reload(), 600);
+  } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
 async function loadProcsAndLogs() {

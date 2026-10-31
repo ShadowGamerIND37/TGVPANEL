@@ -30,4 +30,5 @@ npm-debug.log*
 /data/backups/
 /data/instance-backups/
 /data/lxc-templates/
+/data/migration-staging/
 /data/node-agent-credentials.json

@@ -181,6 +181,12 @@ export function attachUnifiedWebSockets(
           }
 
           wss.handleUpgrade(req, socket, head, async (clientWs: WebSocket) => {
+            const earlyFrames: string[] = [];
+            const captureEarly = (raw: WebSocket.RawData) => {
+              if (earlyFrames.length < 64) earlyFrames.push(raw.toString());
+            };
+            clientWs.on('message', captureEarly);
+
             await ctx.db.logActivity({
               userId: principal.userId,
               action: 'lxc_console_opened',
@@ -190,12 +196,16 @@ export function attachUnifiedWebSockets(
             });
 
             if (rawRow.is_local) {
+              clientWs.off('message', captureEarly);
               try {
                 ctx.nodeManager.localRuntime.consoleManager.attachWebSocket(
                   clientWs,
                   rawRow.container_name,
                   { cols, rows }
                 );
+                for (const frame of earlyFrames) {
+                  clientWs.emit('message', Buffer.from(frame, 'utf8'), false);
+                }
               } catch {
                 // error message already sent on clientWs
               }
@@ -206,8 +216,10 @@ export function attachUnifiedWebSockets(
                   `/ws/containers/${encodeURIComponent(rawRow.container_name)}/console`,
                   { cols, rows }
                 );
-                bridgeWebSockets(clientWs, agentWs);
+                clientWs.off('message', captureEarly);
+                bridgeWebSockets(clientWs, agentWs, earlyFrames);
               } catch (err: any) {
+                clientWs.off('message', captureEarly);
                 if (clientWs.readyState === WebSocket.OPEN) {
                   clientWs.send(JSON.stringify({ type: 'error', message: err.message }));
                   clientWs.close();
@@ -240,14 +252,21 @@ export function attachUnifiedWebSockets(
                 { cols, rows }
               );
             } else {
+              const earlyFrames: string[] = [];
+              const captureEarly = (raw: WebSocket.RawData) => {
+                if (earlyFrames.length < 64) earlyFrames.push(raw.toString());
+              };
+              clientWs.on('message', captureEarly);
               try {
                 const agentWs = await ctx.nodeManager.openRemoteAgentWebSocket(
                   nodeId,
                   `/ws/host/shell`,
                   { cols, rows }
                 );
-                bridgeWebSockets(clientWs, agentWs);
+                clientWs.off('message', captureEarly);
+                bridgeWebSockets(clientWs, agentWs, earlyFrames);
               } catch (err: any) {
+                clientWs.off('message', captureEarly);
                 if (clientWs.readyState === WebSocket.OPEN) {
                   clientWs.send(JSON.stringify({ type: 'error', message: err.message }));
                   clientWs.close();
@@ -264,10 +283,32 @@ export function attachUnifiedWebSockets(
   });
 }
 
-function bridgeWebSockets(clientWs: WebSocket, upstreamWs: WebSocket): void {
+function bridgeWebSockets(
+  clientWs: WebSocket,
+  upstreamWs: WebSocket,
+  initialFrames: string[] = []
+): void {
+  const pendingToUpstream: string[] = [...initialFrames];
+
+  const flushUpstream = () => {
+    while (pendingToUpstream.length > 0 && upstreamWs.readyState === WebSocket.OPEN) {
+      const next = pendingToUpstream.shift();
+      if (next !== undefined) upstreamWs.send(next);
+    }
+  };
+
+  if (upstreamWs.readyState === WebSocket.OPEN) {
+    flushUpstream();
+  } else {
+    upstreamWs.once('open', flushUpstream);
+  }
+
   clientWs.on('message', (data) => {
+    const str = data.toString();
     if (upstreamWs.readyState === WebSocket.OPEN) {
-      upstreamWs.send(data.toString());
+      upstreamWs.send(str);
+    } else if (upstreamWs.readyState === WebSocket.CONNECTING && pendingToUpstream.length < 64) {
+      pendingToUpstream.push(str);
     }
   });
   upstreamWs.on('message', (data) => {
