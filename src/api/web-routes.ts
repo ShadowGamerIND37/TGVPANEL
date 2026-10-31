@@ -201,20 +201,22 @@ export function createUnifiedWebRouter(
     requirePrincipal,
     requireRole(['admin', 'subadmin']),
     async (req: Request, res: Response) => {
-      const [nodes, templates, users, health] = await Promise.all([
+      const [nodes, templates, users, health, networkPools] = await Promise.all([
         ctx.nodeManager.listNodes(),
         ctx.storageManager.listLxcTemplates(false),
         ctx.db.all<any>(`SELECT id, username FROM users ORDER BY username ASC`),
         getNodeHealthReport(),
+        ctx.networkManager.listNetworkPools().catch(() => []),
       ]);
       res.render('admin/unified-page', {
-        title: 'Create Instance - HKVM',
+        title: 'Deploy LXC Container - HKVM',
         currentPage: 'instances-create',
         section: 'instances-create',
         user: res.locals.user || (req as any).session?.user,
         nodes,
         templates,
         users,
+        networkPools,
         capabilities: health.capabilities,
       });
     }

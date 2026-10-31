@@ -34,6 +34,188 @@
     .v3-pill.frozen, .v3-pill.suspended, .v3-pill.warning { background: rgba(245,158,11,0.18); color: #f59e0b; }
     .v3-btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
     .v3-code { font-family: monospace; font-size: 12px; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px; white-space: pre-wrap; max-height: 360px; overflow-y: auto; color: var(--text-primary); }
+
+    /* --- LXC Provisioning Studio --- */
+    .lxc-studio-header {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+      margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);
+    }
+    .lxc-engine-switch {
+      display: inline-flex; padding: 4px; border-radius: 12px; background: var(--bg-card);
+      border: 1px solid var(--border-card); gap: 4px; align-items: center;
+    }
+    .lxc-engine-tab {
+      display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 9px;
+      font-size: 12.5px; font-weight: 600; text-decoration: none; color: var(--text-secondary);
+      transition: all 0.18s ease; border: 1px solid transparent; cursor: pointer;
+    }
+    .lxc-engine-tab:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+    .lxc-engine-tab.active {
+      background: rgba(6, 182, 212, 0.14); color: #22d3ee; border-color: rgba(6, 182, 212, 0.35);
+      box-shadow: 0 2px 12px rgba(6, 182, 212, 0.12);
+    }
+    .lxc-studio-layout {
+      display: grid; grid-template-columns: minmax(0, 1fr) 365px; gap: 20px; align-items: start;
+    }
+    @media (max-width: 1120px) {
+      .lxc-studio-layout { grid-template-columns: 1fr; }
+    }
+    .lxc-step-card {
+      background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 14px;
+      padding: 20px 22px; margin-bottom: 18px; transition: border-color 0.2s ease;
+    }
+    .lxc-step-card:hover { border-color: var(--border-color-hover, rgba(255,255,255,0.2)); }
+    .lxc-step-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-subtle);
+      flex-wrap: wrap;
+    }
+    .lxc-step-title-wrap { display: flex; align-items: center; gap: 11px; }
+    .lxc-step-badge {
+      width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center;
+      justify-content: center; font-size: 12px; font-weight: 800;
+      background: rgba(6, 182, 212, 0.15); color: #22d3ee; border: 1px solid rgba(6, 182, 212, 0.3);
+      flex-shrink: 0;
+    }
+    .lxc-step-title { margin: 0; font-size: 15px; font-weight: 700; color: var(--text-primary); }
+    .lxc-step-sub { margin: 2px 0 0; font-size: 12px; color: var(--text-muted); }
+
+    .lxc-node-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 6px;
+    }
+    .lxc-node-card {
+      padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border-color);
+      background: var(--bg-secondary, rgba(255,255,255,0.02)); cursor: pointer;
+      transition: all 0.16s ease; position: relative;
+    }
+    .lxc-node-card:hover { border-color: rgba(6,182,212,0.45); transform: translateY(-1px); }
+    .lxc-node-card.selected {
+      border-color: #06b6d4; background: rgba(6, 182, 212, 0.08);
+      box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.28);
+    }
+
+    .lxc-cat-bar {
+      display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px;
+    }
+    .lxc-cat-pill {
+      padding: 5px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+      border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary);
+      cursor: pointer; transition: all 0.15s ease;
+    }
+    .lxc-cat-pill:hover { color: var(--text-primary); border-color: rgba(6,182,212,0.4); }
+    .lxc-cat-pill.active {
+      background: rgba(6, 182, 212, 0.16); color: #22d3ee; border-color: rgba(6, 182, 212, 0.45);
+    }
+    .lxc-os-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(195px, 1fr)); gap: 10px;
+      max-height: 330px; overflow-y: auto; padding-right: 4px;
+    }
+    .lxc-os-card {
+      padding: 12px 13px; border-radius: 11px; border: 1px solid var(--border-color);
+      background: var(--bg-secondary, rgba(255,255,255,0.02)); cursor: pointer;
+      transition: all 0.16s ease; display: flex; flex-direction: column; gap: 8px; position: relative;
+    }
+    .lxc-os-card:hover { border-color: rgba(6, 182, 212, 0.45); transform: translateY(-1px); }
+    .lxc-os-card.selected {
+      border-color: #06b6d4; background: rgba(6, 182, 212, 0.09);
+      box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.3);
+    }
+    .lxc-os-top { display: flex; align-items: center; gap: 10px; }
+    .lxc-os-icon {
+      width: 34px; height: 34px; border-radius: 9px; display: inline-flex; align-items: center;
+      justify-content: center; flex-shrink: 0; font-weight: 800; font-size: 13px;
+    }
+    .lxc-os-name { font-size: 13px; font-weight: 700; color: var(--text-primary); line-height: 1.25; }
+    .lxc-os-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .lxc-os-check {
+      position: absolute; top: 9px; right: 9px; width: 18px; height: 18px; border-radius: 50%;
+      background: #06b6d4; color: #001018; display: none; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 900;
+    }
+    .lxc-os-card.selected .lxc-os-check { display: inline-flex; }
+
+    .lxc-preset-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 9px; margin-bottom: 18px;
+    }
+    .lxc-preset-card {
+      padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border-color);
+      background: var(--bg-secondary, rgba(255,255,255,0.02)); cursor: pointer; text-align: left;
+      transition: all 0.15s ease;
+    }
+    .lxc-preset-card:hover { border-color: rgba(99, 102, 241, 0.5); transform: translateY(-1px); }
+    .lxc-preset-card.active {
+      border-color: #6366f1; background: rgba(99, 102, 241, 0.11);
+      box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.3);
+    }
+    .lxc-preset-tier { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #818cf8; }
+    .lxc-preset-main { font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin-top: 3px; }
+    .lxc-preset-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+    .lxc-chip-row { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+    .lxc-chip {
+      padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;
+      border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary);
+      cursor: pointer; transition: all 0.14s ease;
+    }
+    .lxc-chip:hover, .lxc-chip.active {
+      border-color: #06b6d4; color: #22d3ee; background: rgba(6, 182, 212, 0.12);
+    }
+
+    .lxc-seg-group {
+      display: inline-flex; padding: 3px; border-radius: 9px; border: 1px solid var(--border-color);
+      background: var(--bg-secondary, rgba(255,255,255,0.02)); gap: 3px;
+    }
+    .lxc-seg-btn {
+      padding: 6px 12px; border-radius: 7px; border: none; background: transparent;
+      color: var(--text-secondary); font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .lxc-seg-btn.active { background: rgba(6, 182, 212, 0.16); color: #22d3ee; }
+
+    .lxc-toggle-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+    .lxc-toggle-item {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+      padding: 11px 13px; border-radius: 10px; border: 1px solid var(--border-subtle);
+      background: var(--bg-secondary, rgba(255,255,255,0.02)); cursor: pointer;
+    }
+    .lxc-toggle-item:hover { border-color: var(--border-color); }
+    .lxc-toggle-item input[type="checkbox"] {
+      width: 18px; height: 18px; accent-color: #06b6d4; cursor: pointer; margin-top: 2px; flex-shrink: 0;
+    }
+
+    .lxc-summary-sticky { position: sticky; top: 82px; }
+    .lxc-blueprint-card {
+      background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 14px;
+      padding: 20px; box-shadow: var(--shadow-card);
+    }
+    .lxc-bp-row {
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+      padding: 7px 0; border-bottom: 1px dashed var(--border-subtle); font-size: 12.5px;
+    }
+    .lxc-bp-row:last-child { border-bottom: none; }
+    .lxc-bp-k { color: var(--text-muted); font-weight: 500; }
+    .lxc-bp-v { color: var(--text-primary); font-weight: 600; text-align: right; word-break: break-all; }
+    .lxc-deploy-btn {
+      width: 100%; margin-top: 16px; padding: 12px 18px; border-radius: 10px; font-size: 14px;
+      font-weight: 700; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      cursor: pointer; border: 1px solid rgba(6, 182, 212, 0.45);
+      background: linear-gradient(135deg, #0891b2 0%, #4f46e5 100%); color: #ffffff;
+      box-shadow: 0 6px 20px rgba(6, 182, 212, 0.25); transition: all 0.18s ease;
+    }
+    .lxc-deploy-btn:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
+    .lxc-deploy-btn:disabled { opacity: 0.68; cursor: not-allowed; }
+    @keyframes lxcIndeterminate {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(250%); }
+    }
+    .lxc-prog-track {
+      width: 100%; height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08);
+      overflow: hidden; margin: 10px 0;
+    }
+    .lxc-prog-bar {
+      width: 42%; height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, #06b6d4, #818cf8, #22d3ee);
+      animation: lxcIndeterminate 1.4s infinite ease-in-out;
+    }
   </style>
 </head>
 <body>
@@ -99,50 +281,500 @@
 
       <!-- SECTION: CREATE UNIFIED INSTANCE -->
       <% if (section === 'instances-create') { %>
-      <div class="v3-toolbar">
+      <%
+        const _tplList = Array.isArray(templates) ? templates : [];
+        const _nodeList = Array.isArray(nodes) ? nodes : [];
+        const _userList = Array.isArray(users) ? users : [];
+        const _netPoolList = typeof networkPools !== 'undefined' && Array.isArray(networkPools) ? networkPools : [];
+        const _defaultTpl = _tplList.find(t => t.slug === 'ubuntu-24.04') || _tplList[0] || { slug: 'ubuntu-24.04', name: 'Ubuntu 24.04 LTS' };
+        const _lxcOk = !(capabilities && !capabilities.lxcAvailable);
+      %>
+      <script id="lxcCatalogJson" type="application/json"><%- JSON.stringify(_tplList).replace(/</g, '\\u003c') %></script>
+      <script id="lxcNodesJson" type="application/json"><%- JSON.stringify(_nodeList).replace(/</g, '\\u003c') %></script>
+      <script id="lxcNetPoolsJson" type="application/json"><%- JSON.stringify(_netPoolList).replace(/</g, '\\u003c') %></script>
+
+      <div class="lxc-studio-header">
         <div>
-          <h2 style="margin:0;color:var(--text-primary);">Create Compute Instance</h2>
-          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Select native LXC Container provisioning here or switch to QEMU/KVM Virtual Machine wizard.</p>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap;">
+            <a href="/admin/lxc" style="color:var(--text-muted);text-decoration:none;font-size:12.5px;display:inline-flex;align-items:center;gap:5px;">
+              &larr; Back to LXC Containers
+            </a>
+            <% if (_lxcOk) { %>
+              <span class="v3-pill running" style="font-size:11px;">LXC Host Runtime Ready<% if (capabilities && capabilities.cgroupVersion) { %> &bull; cgroup v<%= capabilities.cgroupVersion %><% } %></span>
+            <% } else { %>
+              <span class="v3-pill warning" style="font-size:11px;">Controller Mode (No Local LXC Binary)</span>
+            <% } %>
+          </div>
+          <h2 style="margin:0;font-size:22px;font-weight:800;color:var(--text-primary);letter-spacing:-0.3px;">Deploy Native LXC Container</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Lightweight OS-level Linux virtual server with instant boot, cgroup resource isolation, and WebSocket PTY console.</p>
         </div>
-        <a href="/admin/vm-create" class="btn btn-outline">Open Dedicated QEMU/KVM Wizard &rarr;</a>
+
+        <div class="lxc-engine-switch" role="tablist" aria-label="Virtualization engine selector">
+          <span class="lxc-engine-tab active">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+            Native LXC Container
+          </span>
+          <a href="/admin/vm-create" class="lxc-engine-tab">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>
+            QEMU/KVM Virtual Machine &rarr;
+          </a>
+        </div>
       </div>
-      <% if (capabilities && !capabilities.lxcAvailable) { %>
-      <div class="v3-card" style="border-color:rgba(245,158,11,0.45);">
-        <strong style="color:#f59e0b;">Host Capability Notice:</strong>
-        <span style="font-size:13px;color:var(--text-secondary);">Native <code>lxc-create</code> / <code>lxc-start</code> binaries were not detected on localhost. Select a remote LXC-capable node, or uncheck "Provision immediately on host" to register metadata in controller mode.</span>
+
+      <% if (!_lxcOk) { %>
+      <div class="v3-card" style="border-color:rgba(245,158,11,0.45);background:rgba(245,158,11,0.06);margin-bottom:18px;">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <span style="color:#f59e0b;font-size:16px;line-height:1;">&#9888;</span>
+          <div>
+            <strong style="color:#f59e0b;font-size:13px;">Local LXC Utilities Not Detected</strong>
+            <div style="font-size:12.5px;color:var(--text-secondary);margin-top:3px;">
+              Install <code>sudo apt install -y lxc lxc-templates uidmap bridge-utils</code> on this Linux host, select a remote LXC-capable Node Agent below, or uncheck <em>Provision immediately on host</em> to pre-register container metadata.
+            </div>
+          </div>
+        </div>
       </div>
       <% } %>
-      <div class="v3-card">
-        <h3>Provision Native LXC Container</h3>
-        <form onsubmit="submitCreateLxc(event)">
-          <div class="v3-form-grid">
-            <div class="v3-field"><label>Container Name</label><input id="cName" required placeholder="vps-prod-01"></div>
-            <div class="v3-field"><label>Hostname</label><input id="cHost" placeholder="vps-prod-01.local"></div>
-            <div class="v3-field"><label>Owner Account</label>
-              <select id="cUser"><% (users||[]).forEach(u => { %><option value="<%= u.id %>"><%= u.username %> (#<%= u.id %>)</option><% }) %></select>
+
+      <form id="lxcCreateStudioForm" onsubmit="submitCreateLxc(event)">
+        <div class="lxc-studio-layout">
+          <!-- LEFT COLUMN: CONFIGURATION STEPS -->
+          <div>
+
+            <!-- STEP 1: IDENTITY, OWNER & NODE -->
+            <div class="lxc-step-card">
+              <div class="lxc-step-head">
+                <div class="lxc-step-title-wrap">
+                  <span class="lxc-step-badge">1</span>
+                  <div>
+                    <h3 class="lxc-step-title">Identity, Placement &amp; Ownership</h3>
+                    <p class="lxc-step-sub">Choose a unique container name, guest hostname, owner account, and target compute node.</p>
+                  </div>
+                </div>
+                <button type="button" class="btn btn-outline" style="padding:5px 11px;font-size:11.5px;" onclick="genRandomLxcName()">
+                  &#8635; Randomize Name
+                </button>
+              </div>
+
+              <div class="v3-form-grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));">
+                <div class="v3-field">
+                  <label>Container Name <span style="color:#ef4444;">*</span></label>
+                  <input id="cName" required maxlength="63" placeholder="vps-prod-01" autocomplete="off" oninput="onLxcNameInput()">
+                  <div id="cNameHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;">Letters, digits, hyphens, underscores (e.g. <code>web-node-01</code>).</div>
+                </div>
+                <div class="v3-field">
+                  <label>Guest Hostname</label>
+                  <input id="cHost" maxlength="63" placeholder="vps-prod-01.local" oninput="onLxcHostInput()">
+                  <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Defaults to container name if left blank.</div>
+                </div>
+                <div class="v3-field">
+                  <label>Owner Account</label>
+                  <select id="cUser" onchange="updateLxcBlueprint()">
+                    <% _userList.forEach(u => { %>
+                      <option value="<%= u.id %>"><%= u.username %> (#<%= u.id %>)</option>
+                    <% }) %>
+                  </select>
+                  <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">User receives full dashboard &amp; console access.</div>
+                </div>
+              </div>
+
+              <div style="margin-top:16px;">
+                <label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:6px;font-weight:600;">Target Compute Node</label>
+                <select id="cNode" style="display:none;" onchange="updateLxcBlueprint()">
+                  <% _nodeList.forEach(n => { %>
+                    <option value="<%= n.id %>"><%= n.name %> (<%= n.ip_address %>)</option>
+                  <% }) %>
+                </select>
+                <div class="lxc-node-grid" id="lxcNodeCards">
+                  <% _nodeList.forEach((n, idx) => { %>
+                    <div class="lxc-node-card <%= idx === 0 ? 'selected' : '' %>" data-node-id="<%= n.id %>" onclick="selectLxcNode(<%= n.id %>)">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">
+                        <strong style="font-size:13px;color:var(--text-primary);"><%= n.name %></strong>
+                        <% if (n.is_local) { %>
+                          <span class="v3-pill lxc" style="font-size:10px;padding:1px 7px;">LOCAL</span>
+                        <% } else { %>
+                          <span class="v3-pill kvm" style="font-size:10px;padding:1px 7px;">REMOTE</span>
+                        <% } %>
+                      </div>
+                      <div style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
+                        <code><%= n.ip_address %></code> &bull; <%= n.location || 'Datacenter' %>
+                      </div>
+                      <div style="font-size:11px;color:var(--text-secondary);margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
+                        <span><%= n.cpu_cores || '—' %> Cores</span>
+                        <span>&bull;</span>
+                        <span><%= n.ram_total_mb ? Math.round(n.ram_total_mb / 1024 * 10) / 10 + ' GB RAM' : 'RAM Auto' %></span>
+                      </div>
+                    </div>
+                  <% }) %>
+                </div>
+              </div>
             </div>
-            <div class="v3-field"><label>Target Node</label>
-              <select id="cNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %> (<%= n.ip_address %>)</option><% }) %></select>
+
+            <!-- STEP 2: OS DISTRIBUTION IMAGE -->
+            <div class="lxc-step-card">
+              <div class="lxc-step-head">
+                <div class="lxc-step-title-wrap">
+                  <span class="lxc-step-badge">2</span>
+                  <div>
+                    <h3 class="lxc-step-title">Operating System Template</h3>
+                    <p class="lxc-step-sub">Official LinuxContainers rootfs images &amp; custom uploaded templates.</p>
+                  </div>
+                </div>
+                <input id="lxcTplSearch" type="search" placeholder="Search distro or release..." oninput="renderLxcOsGrid()"
+                  style="width:210px;padding:6px 11px;border-radius:8px;border:1px solid var(--border-color);background:var(--bg-secondary,rgba(255,255,255,0.03));color:var(--text-primary);font-size:12px;">
+              </div>
+
+              <select id="cTpl" style="display:none;" onchange="updateLxcBlueprint()">
+                <% _tplList.forEach(t => { %>
+                  <option value="<%= t.slug %>" <%= t.slug === _defaultTpl.slug ? 'selected' : '' %>><%= t.name %> (<%= t.slug %>)</option>
+                <% }) %>
+              </select>
+
+              <div class="lxc-cat-bar" id="lxcCatBar">
+                <button type="button" class="lxc-cat-pill active" data-cat="all" onclick="setLxcCat('all', this)">All Images (<%= _tplList.length %>)</button>
+                <button type="button" class="lxc-cat-pill" data-cat="ubuntu" onclick="setLxcCat('ubuntu', this)">Ubuntu</button>
+                <button type="button" class="lxc-cat-pill" data-cat="debian" onclick="setLxcCat('debian', this)">Debian</button>
+                <button type="button" class="lxc-cat-pill" data-cat="rhel" onclick="setLxcCat('rhel', this)">Alma / Rocky / CentOS</button>
+                <button type="button" class="lxc-cat-pill" data-cat="fedora" onclick="setLxcCat('fedora', this)">Fedora</button>
+                <button type="button" class="lxc-cat-pill" data-cat="security" onclick="setLxcCat('security', this)">Kali &amp; Other</button>
+                <button type="button" class="lxc-cat-pill" data-cat="custom" onclick="setLxcCat('custom', this)">Custom</button>
+              </div>
+
+              <div class="lxc-os-grid" id="lxcOsGrid"></div>
+
+              <div id="lxcSelectedOsBanner" style="margin-top:12px;padding:10px 13px;border-radius:9px;background:rgba(6,182,212,0.06);border:1px solid rgba(6,182,212,0.2);font-size:12px;color:var(--text-secondary);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;"></div>
             </div>
-            <div class="v3-field"><label>LXC OS Template</label>
-              <select id="cTpl"><% (templates||[]).forEach(t => { %><option value="<%= t.slug %>"><%= t.name %> (<%= t.slug %>)</option><% }) %></select>
+
+            <!-- STEP 3: COMPUTE, MEMORY & STORAGE -->
+            <div class="lxc-step-card">
+              <div class="lxc-step-head">
+                <div class="lxc-step-title-wrap">
+                  <span class="lxc-step-badge">3</span>
+                  <div>
+                    <h3 class="lxc-step-title">Compute, Memory &amp; Root Storage</h3>
+                    <p class="lxc-step-sub">Pick a quick cloud sizing profile or customize exact cgroup limits.</p>
+                  </div>
+                </div>
+                <span style="font-size:11.5px;color:var(--text-muted);">Live resizable anytime</span>
+              </div>
+
+              <div class="lxc-preset-grid" id="lxcPresetGrid">
+                <button type="button" class="lxc-preset-card" data-preset="nano" onclick="applyLxcPreset('nano', 1, 512, 256, 10, this)">
+                  <div class="lxc-preset-tier">Nano</div>
+                  <div class="lxc-preset-main">1 vCPU &bull; 512 MB</div>
+                  <div class="lxc-preset-sub">10 GB SSD &bull; 256 MB Swap</div>
+                </button>
+                <button type="button" class="lxc-preset-card" data-preset="starter" onclick="applyLxcPreset('starter', 1, 1024, 512, 20, this)">
+                  <div class="lxc-preset-tier">Starter</div>
+                  <div class="lxc-preset-main">1 vCPU &bull; 1 GB</div>
+                  <div class="lxc-preset-sub">20 GB SSD &bull; 512 MB Swap</div>
+                </button>
+                <button type="button" class="lxc-preset-card active" data-preset="standard" onclick="applyLxcPreset('standard', 2, 2048, 512, 20, this)">
+                  <div class="lxc-preset-tier">Standard</div>
+                  <div class="lxc-preset-main">2 vCPU &bull; 2 GB</div>
+                  <div class="lxc-preset-sub">20 GB SSD &bull; 512 MB Swap</div>
+                </button>
+                <button type="button" class="lxc-preset-card" data-preset="performance" onclick="applyLxcPreset('performance', 4, 4096, 1024, 60, this)">
+                  <div class="lxc-preset-tier">Performance</div>
+                  <div class="lxc-preset-main">4 vCPU &bull; 4 GB</div>
+                  <div class="lxc-preset-sub">60 GB SSD &bull; 1 GB Swap</div>
+                </button>
+                <button type="button" class="lxc-preset-card" data-preset="pro" onclick="applyLxcPreset('pro', 8, 8192, 2048, 120, this)">
+                  <div class="lxc-preset-tier">Pro</div>
+                  <div class="lxc-preset-main">8 vCPU &bull; 8 GB</div>
+                  <div class="lxc-preset-sub">120 GB SSD &bull; 2 GB Swap</div>
+                </button>
+                <button type="button" class="lxc-preset-card" data-preset="heavy" onclick="applyLxcPreset('heavy', 16, 16384, 4096, 240, this)">
+                  <div class="lxc-preset-tier">Dedicated</div>
+                  <div class="lxc-preset-main">16 vCPU &bull; 16 GB</div>
+                  <div class="lxc-preset-sub">240 GB SSD &bull; 4 GB Swap</div>
+                </button>
+              </div>
+
+              <div class="v3-form-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
+                <div class="v3-field">
+                  <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <label style="margin-bottom:0;">vCPU Cores</label>
+                    <span id="cCpuBadge" style="font-size:12px;font-weight:700;color:#22d3ee;">2 Cores</span>
+                  </div>
+                  <div style="display:flex;gap:10px;align-items:center;margin-top:6px;">
+                    <input type="range" id="cCpuRange" min="1" max="32" value="2" oninput="syncLxcCpu(this.value, 'range')" style="flex:1;accent-color:#06b6d4;padding:0;border:none;">
+                    <input id="cCpu" type="number" min="1" max="128" value="2" oninput="syncLxcCpu(this.value, 'num')" style="width:78px;text-align:center;">
+                  </div>
+                  <div class="lxc-chip-row">
+                    <button type="button" class="lxc-chip" onclick="syncLxcCpu(1,'chip')">1c</button>
+                    <button type="button" class="lxc-chip active" onclick="syncLxcCpu(2,'chip')">2c</button>
+                    <button type="button" class="lxc-chip" onclick="syncLxcCpu(4,'chip')">4c</button>
+                    <button type="button" class="lxc-chip" onclick="syncLxcCpu(8,'chip')">8c</button>
+                    <button type="button" class="lxc-chip" onclick="syncLxcCpu(16,'chip')">16c</button>
+                  </div>
+                </div>
+
+                <div class="v3-field">
+                  <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <label style="margin-bottom:0;">Memory (MB)</label>
+                    <span id="cRamBadge" style="font-size:12px;font-weight:700;color:#22d3ee;">2.0 GB</span>
+                  </div>
+                  <input id="cRam" type="number" min="128" step="128" value="2048" style="margin-top:6px;" oninput="clearActivePreset();updateLxcBlueprint()">
+                  <div class="lxc-chip-row">
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cRam',512)">512M</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cRam',1024)">1G</button>
+                    <button type="button" class="lxc-chip active" onclick="setNumericField('cRam',2048)">2G</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cRam',4096)">4G</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cRam',8192)">8G</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cRam',16384)">16G</button>
+                  </div>
+                </div>
+
+                <div class="v3-field">
+                  <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <label style="margin-bottom:0;">Swap Memory (MB)</label>
+                    <span id="cSwapBadge" style="font-size:12px;font-weight:700;color:var(--text-secondary);">512 MB</span>
+                  </div>
+                  <input id="cSwap" type="number" min="0" step="128" value="512" style="margin-top:6px;" oninput="clearActivePreset();updateLxcBlueprint()">
+                  <div class="lxc-chip-row">
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cSwap',0)">Off (0)</button>
+                    <button type="button" class="lxc-chip active" onclick="setNumericField('cSwap',512)">512M</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cSwap',1024)">1G</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cSwap',2048)">2G</button>
+                  </div>
+                </div>
+
+                <div class="v3-field">
+                  <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <label style="margin-bottom:0;">Root Disk (GB)</label>
+                    <span id="cDiskBadge" style="font-size:12px;font-weight:700;color:#22d3ee;">20 GB</span>
+                  </div>
+                  <input id="cDisk" type="number" min="2" max="4096" value="20" style="margin-top:6px;" oninput="clearActivePreset();updateLxcBlueprint()">
+                  <div class="lxc-chip-row">
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cDisk',10)">10G</button>
+                    <button type="button" class="lxc-chip active" onclick="setNumericField('cDisk',20)">20G</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cDisk',40)">40G</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cDisk',80)">80G</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cDisk',160)">160G</button>
+                  </div>
+                </div>
+              </div>
+
+              <details style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border-subtle);">
+                <summary style="cursor:pointer;font-size:12.5px;font-weight:600;color:var(--text-secondary);user-select:none;">
+                  Advanced CPU Scheduler, Storage Backend &amp; Traffic Limits
+                </summary>
+                <div class="v3-form-grid" style="margin-top:12px;">
+                  <div class="v3-field">
+                    <label>Rootfs Backing Store</label>
+                    <select id="cBacking" onchange="updateLxcBlueprint()">
+                      <option value="dir">Directory Rootfs (dir &mdash; Default)</option>
+                      <option value="btrfs">Btrfs Subvolume (btrfs)</option>
+                      <option value="zfs">ZFS Dataset (zfs)</option>
+                      <option value="lvm">LVM Logical Volume (lvm)</option>
+                    </select>
+                  </div>
+                  <div class="v3-field">
+                    <label>CPU Throttle Cap (%)</label>
+                    <input id="cCpuLimit" type="number" min="5" max="100" value="100" oninput="updateLxcBlueprint()">
+                  </div>
+                  <div class="v3-field">
+                    <label>CPU Scheduler Weight (Shares)</label>
+                    <input id="cCpuShares" type="number" min="64" max="10240" value="1024">
+                  </div>
+                  <div class="v3-field">
+                    <label>CPU Core Pinning (Optional)</label>
+                    <input id="cCpuPin" placeholder="e.g. 0-1 or 0,2">
+                  </div>
+                  <div class="v3-field">
+                    <label>Bandwidth Quota (GB, 0 = Unlimited)</label>
+                    <input id="cBwQuota" type="number" min="0" value="0" oninput="updateLxcBlueprint()">
+                  </div>
+                </div>
+              </details>
             </div>
-            <div class="v3-field"><label>vCPU Cores</label><input id="cCpu" type="number" min="1" max="128" value="2"></div>
-            <div class="v3-field"><label>Memory (MB)</label><input id="cRam" type="number" min="128" step="128" value="2048"></div>
-            <div class="v3-field"><label>Swap (MB)</label><input id="cSwap" type="number" min="0" step="128" value="512"></div>
-            <div class="v3-field"><label>Root Disk (GB)</label><input id="cDisk" type="number" min="2" value="20"></div>
-            <div class="v3-field"><label>Linux Bridge</label><input id="cBridge" value="lxcbr0"></div>
-            <div class="v3-field"><label>Static IPv4 (Optional)</label><input id="cIp" placeholder="10.0.3.50"></div>
-            <div class="v3-field"><label>Expiration Days (0 = Never)</label><input id="cExp" type="number" min="0" value="0"></div>
+
+            <!-- STEP 4: NETWORKING -->
+            <div class="lxc-step-card">
+              <div class="lxc-step-head">
+                <div class="lxc-step-title-wrap">
+                  <span class="lxc-step-badge">4</span>
+                  <div>
+                    <h3 class="lxc-step-title">Networking &amp; IP Allocation</h3>
+                    <p class="lxc-step-sub">Attach to a host Linux bridge via automatic DHCP or static IPv4/IPv6 addressing.</p>
+                  </div>
+                </div>
+                <div class="lxc-seg-group">
+                  <button type="button" class="lxc-seg-btn active" id="ipModeDhcpBtn" onclick="setLxcIpMode('dhcp')">DHCP / Auto</button>
+                  <button type="button" class="lxc-seg-btn" id="ipModeStaticBtn" onclick="setLxcIpMode('static')">Static IP</button>
+                </div>
+              </div>
+
+              <div class="v3-form-grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));">
+                <div class="v3-field">
+                  <label>Linux Bridge Interface</label>
+                  <input id="cBridge" value="lxcbr0" oninput="updateLxcBlueprint()">
+                  <div class="lxc-chip-row">
+                    <button type="button" class="lxc-chip active" onclick="document.getElementById('cBridge').value='lxcbr0';updateLxcBlueprint()">lxcbr0</button>
+                    <button type="button" class="lxc-chip" onclick="document.getElementById('cBridge').value='br0';updateLxcBlueprint()">br0</button>
+                    <button type="button" class="lxc-chip" onclick="document.getElementById('cBridge').value='vmbr0';updateLxcBlueprint()">vmbr0</button>
+                  </div>
+                </div>
+
+                <% if (_netPoolList.length > 0) { %>
+                <div class="v3-field">
+                  <label>Quick-Fill from Network Pool</label>
+                  <select id="cNetPoolSelect" onchange="applyLxcNetworkPool(this.value)">
+                    <option value="">&mdash; Custom Bridge Settings &mdash;</option>
+                    <% _netPoolList.forEach(p => { %>
+                      <option value="<%= p.id %>"><%= p.name %> (<%= p.bridge_name %><%= p.cidr ? ' • ' + p.cidr : '' %>)</option>
+                    <% }) %>
+                  </select>
+                  <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Populates bridge, gateway &amp; VLAN automatically.</div>
+                </div>
+                <% } %>
+              </div>
+
+              <div id="lxcStaticIpFields" style="display:none;margin-top:14px;padding-top:14px;border-top:1px dashed var(--border-subtle);">
+                <div class="v3-form-grid">
+                  <div class="v3-field">
+                    <label>Static IPv4 Address / CIDR</label>
+                    <input id="cIp" placeholder="10.0.3.50 or 10.0.3.50/24" oninput="updateLxcBlueprint()">
+                  </div>
+                  <div class="v3-field">
+                    <label>IPv4 Gateway</label>
+                    <input id="cGateway" placeholder="10.0.3.1 or auto" oninput="updateLxcBlueprint()">
+                  </div>
+                  <div class="v3-field">
+                    <label>Static IPv6 / CIDR (Optional)</label>
+                    <input id="cIpv6" placeholder="fd00::50/64">
+                  </div>
+                  <div class="v3-field">
+                    <label>802.1Q VLAN Tag (Optional)</label>
+                    <input id="cVlan" type="number" min="1" max="4094" placeholder="e.g. 100">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- STEP 5: ACCESS, SECURITY & LIFECYCLE -->
+            <div class="lxc-step-card" style="margin-bottom:0;">
+              <div class="lxc-step-head">
+                <div class="lxc-step-title-wrap">
+                  <span class="lxc-step-badge">5</span>
+                  <div>
+                    <h3 class="lxc-step-title">Access Credentials, Security &amp; Lifecycle</h3>
+                    <p class="lxc-step-sub">Encrypted root credentials, OpenSSH public keys, Docker nesting, and expiry policies.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div class="v3-form-grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-bottom:14px;">
+                <div class="v3-field">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+                    <label style="margin:0;">Root Password</label>
+                    <button type="button" class="lxc-chip" onclick="genCustomLxcPassword()">Generate Strong</button>
+                  </div>
+                  <div style="position:relative;">
+                    <input id="cRootPw" type="password" placeholder="Leave blank to auto-generate 18-char password" autocomplete="new-password" style="padding-right:58px;" oninput="updateLxcBlueprint()">
+                    <button type="button" onclick="toggleLxcPwVis()" id="cRootPwToggle"
+                      style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-muted);font-size:11px;font-weight:600;cursor:pointer;">
+                      Show
+                    </button>
+                  </div>
+                  <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Encrypted with AES-256-GCM at rest; never stored in plaintext.</div>
+                </div>
+
+                <div class="v3-field">
+                  <label>Expiration Policy (Days, 0 = Never)</label>
+                  <input id="cExp" type="number" min="0" value="0" oninput="updateLxcBlueprint()">
+                  <div class="lxc-chip-row">
+                    <button type="button" class="lxc-chip active" onclick="setNumericField('cExp',0)">Never (0)</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cExp',7)">7 Days</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cExp',30)">30 Days</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cExp',90)">90 Days</button>
+                    <button type="button" class="lxc-chip" onclick="setNumericField('cExp',365)">1 Year</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="v3-field" style="margin-bottom:14px;">
+                <label>Authorized SSH Public Keys (Optional, one per line)</label>
+                <textarea id="cSshKeys" rows="2" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... admin@workstation" style="font-family:monospace;font-size:12px;" oninput="updateLxcBlueprint()"></textarea>
+              </div>
+
+              <div class="lxc-toggle-list">
+                <label class="lxc-toggle-item">
+                  <div>
+                    <div style="font-size:13px;font-weight:600;color:var(--text-primary);">Container Nesting (Docker-Ready)</div>
+                    <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Allows running Docker, Podman &amp; nested cgroups inside the VPS.</div>
+                  </div>
+                  <input type="checkbox" id="cNest" checked onchange="updateLxcBlueprint()">
+                </label>
+
+                <label class="lxc-toggle-item">
+                  <div>
+                    <div style="font-size:13px;font-weight:600;color:var(--text-primary);">Boot Automatically with Host</div>
+                    <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Sets <code>lxc.start.auto = 1</code> so container starts after node reboot.</div>
+                  </div>
+                  <input type="checkbox" id="cAutostart" checked onchange="updateLxcBlueprint()">
+                </label>
+
+                <label class="lxc-toggle-item">
+                  <div>
+                    <div style="font-size:13px;font-weight:600;color:var(--text-primary);">Privileged Container Mapping</div>
+                    <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Recommended for systemd distros (AlmaLinux, Ubuntu, Debian) &amp; nested workloads.</div>
+                  </div>
+                  <input type="checkbox" id="cPriv" checked onchange="updateLxcBlueprint()">
+                </label>
+
+                <label class="lxc-toggle-item">
+                  <div>
+                    <div style="font-size:13px;font-weight:600;color:var(--text-primary);">Provision Immediately on Host</div>
+                    <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Downloads OS rootfs, applies config &amp; boots container now.</div>
+                  </div>
+                  <input type="checkbox" id="cProv" <%= _lxcOk ? 'checked' : '' %> onchange="updateLxcBlueprint()">
+                </label>
+              </div>
+
+              <div class="v3-field" style="margin-top:14px;">
+                <label>Internal Admin Notes (Optional)</label>
+                <input id="cNotes" placeholder="Customer order #1042, production workload, etc.">
+              </div>
+            </div>
+
           </div>
-          <div style="margin-top:14px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
-            <label style="font-size:13px;color:var(--text-secondary);"><input type="checkbox" id="cNest" checked> Enable Container Nesting (Docker-ready)</label>
-            <label style="font-size:13px;color:var(--text-secondary);"><input type="checkbox" id="cProv" <%= (capabilities && !capabilities.lxcAvailable) ? '' : 'checked' %>> Provision immediately on host via LXC</label>
-            <button type="submit" id="cSubmitBtn" class="btn btn-primary">Create LXC Instance</button>
+
+          <!-- RIGHT COLUMN: STICKY DEPLOYMENT BLUEPRINT -->
+          <div class="lxc-summary-sticky">
+            <div class="lxc-blueprint-card">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border-subtle);">
+                <div>
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.7px;color:#22d3ee;font-weight:700;">Deployment Blueprint</div>
+                  <h3 style="margin:3px 0 0;font-size:16px;font-weight:800;color:var(--text-primary);" id="bpTitle">vps-prod-01</h3>
+                </div>
+                <span class="v3-pill lxc">LXC NATIVE</span>
+              </div>
+
+              <div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Hostname</span><span class="lxc-bp-v" id="bpHost">vps-prod-01</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Owner</span><span class="lxc-bp-v" id="bpOwner">—</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Target Node</span><span class="lxc-bp-v" id="bpNode">—</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">OS Image</span><span class="lxc-bp-v" id="bpOs" style="color:#22d3ee;">—</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Compute</span><span class="lxc-bp-v" id="bpCpu">2 vCPU (100%)</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Memory / Swap</span><span class="lxc-bp-v" id="bpRam">2048 MB / 512 MB</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Root Storage</span><span class="lxc-bp-v" id="bpDisk">20 GB (dir)</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Networking</span><span class="lxc-bp-v" id="bpNet">lxcbr0 &bull; DHCP</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Credentials</span><span class="lxc-bp-v" id="bpAuth">Auto 18-char Pw</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Capabilities</span><span class="lxc-bp-v" id="bpFlags">Nesting, Autostart</span></div>
+                <div class="lxc-bp-row"><span class="lxc-bp-k">Expiration</span><span class="lxc-bp-v" id="bpExp">Never expires</span></div>
+              </div>
+
+              <button type="submit" id="cSubmitBtn" class="lxc-deploy-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                <span>Deploy LXC Container</span>
+              </button>
+
+              <div id="createResultBox" style="display:none;margin-top:14px;" class="v3-code"></div>
+            </div>
           </div>
-        </form>
-        <div id="createResultBox" style="display:none;margin-top:14px;" class="v3-code"></div>
-      </div>
+        </div>
+      </form>
       <% } %>
 
       <!-- SECTION: NODES -->
@@ -636,6 +1268,329 @@ async function syncHostLxc() {
 }
 
 let __lxcCreating = false;
+let __lxcHostCustom = false;
+let __lxcActiveCat = 'all';
+let __lxcIpMode = 'dhcp';
+let __lxcCatalog = [];
+let __lxcNodes = [];
+let __lxcNetPools = [];
+
+function parseEmbeddedJson(id) {
+  const el = document.getElementById(id);
+  if (!el) return [];
+  try { return JSON.parse(el.textContent || '[]'); } catch { return []; }
+}
+
+function getDistroBrand(t) {
+  const d = String(t.distro || t.slug || '').toLowerCase();
+  if (d.includes('ubuntu')) return { bg: 'rgba(233,84,32,0.16)', fg: '#fb923c', short: 'UB', cat: 'ubuntu' };
+  if (d.includes('debian')) return { bg: 'rgba(215,10,83,0.16)', fg: '#f43f5e', short: 'DB', cat: 'debian' };
+  if (d.includes('alma')) return { bg: 'rgba(16,185,129,0.16)', fg: '#34d399', short: 'AL', cat: 'rhel' };
+  if (d.includes('rocky')) return { bg: 'rgba(6,182,212,0.16)', fg: '#22d3ee', short: 'RK', cat: 'rhel' };
+  if (d.includes('centos')) return { bg: 'rgba(139,92,246,0.16)', fg: '#a78bfa', short: 'CS', cat: 'rhel' };
+  if (d.includes('fedora')) return { bg: 'rgba(59,130,246,0.18)', fg: '#60a5fa', short: 'FD', cat: 'fedora' };
+  if (d.includes('kali')) return { bg: 'rgba(168,85,247,0.18)', fg: '#c084fc', short: 'KL', cat: 'security' };
+  if (d.includes('alpine')) return { bg: 'rgba(14,165,233,0.16)', fg: '#38bdf8', short: 'AP', cat: 'security' };
+  return { bg: 'rgba(148,163,184,0.16)', fg: '#cbd5e1', short: 'LX', cat: 'security' };
+}
+
+function initLxcCreateStudio() {
+  __lxcCatalog = parseEmbeddedJson('lxcCatalogJson');
+  __lxcNodes = parseEmbeddedJson('lxcNodesJson');
+  __lxcNetPools = parseEmbeddedJson('lxcNetPoolsJson');
+  renderLxcOsGrid();
+  updateSelectedOsBanner();
+  updateLxcBlueprint();
+}
+
+function setLxcCat(cat, btnEl) {
+  __lxcActiveCat = cat;
+  document.querySelectorAll('#lxcCatBar .lxc-cat-pill').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  renderLxcOsGrid();
+}
+
+function renderLxcOsGrid() {
+  const grid = document.getElementById('lxcOsGrid');
+  const sel = document.getElementById('cTpl');
+  if (!grid || !sel) return;
+  const q = (document.getElementById('lxcTplSearch')?.value || '').trim().toLowerCase();
+  const activeSlug = sel.value;
+
+  const filtered = __lxcCatalog.filter(t => {
+    const brand = getDistroBrand(t);
+    if (__lxcActiveCat === 'custom' && !t.is_custom) return false;
+    if (__lxcActiveCat !== 'all' && __lxcActiveCat !== 'custom' && brand.cat !== __lxcActiveCat) return false;
+    if (q) {
+      const hay = [t.name, t.label, t.slug, t.distro, t.release, t.description].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (!filtered.length) {
+    grid.innerHTML = '<div style="grid-column:1/-1;padding:18px;text-align:center;color:var(--text-muted);font-size:12.5px;">No OS templates match this filter.</div>';
+    return;
+  }
+
+  grid.innerHTML = filtered.map(t => {
+    const b = getDistroBrand(t);
+    const isSel = t.slug === activeSlug;
+    const minRam = t.min_ram_mb || 256;
+    const minDisk = t.min_disk_gb || 5;
+    return `<div class="lxc-os-card ${isSel ? 'selected' : ''}" onclick="selectLxcTemplate('${hkvmEsc(t.slug)}')">
+      <span class="lxc-os-check">&#10003;</span>
+      <div class="lxc-os-top">
+        <span class="lxc-os-icon" style="background:${b.bg};color:${b.fg};border:1px solid ${b.fg}33;">${b.short}</span>
+        <div>
+          <div class="lxc-os-name">${hkvmEsc(t.name || t.label || t.slug)}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:1px;"><code>${hkvmEsc(t.distro || 'linux')}:${hkvmEsc(t.release || '')}</code> &bull; ${hkvmEsc(t.arch || 'amd64')}</div>
+        </div>
+      </div>
+      <div class="lxc-os-meta">
+        <span>&ge;${minRam}MB RAM</span>
+        <span>&bull;</span>
+        <span>&ge;${minDisk}GB Disk</span>
+        ${t.is_custom ? '<span class="v3-pill kvm" style="font-size:10px;padding:1px 6px;">Custom</span>' : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function selectLxcTemplate(slug) {
+  const sel = document.getElementById('cTpl');
+  if (!sel) return;
+  sel.value = slug;
+  const tpl = __lxcCatalog.find(t => t.slug === slug);
+  if (tpl) {
+    const ramInput = document.getElementById('cRam');
+    const diskInput = document.getElementById('cDisk');
+    if (ramInput && tpl.min_ram_mb && Number(ramInput.value) < Number(tpl.min_ram_mb)) {
+      ramInput.value = tpl.min_ram_mb;
+    }
+    if (diskInput && tpl.min_disk_gb && Number(diskInput.value) < Number(tpl.min_disk_gb)) {
+      diskInput.value = tpl.min_disk_gb;
+    }
+  }
+  renderLxcOsGrid();
+  updateSelectedOsBanner();
+  updateLxcBlueprint();
+}
+
+function updateSelectedOsBanner() {
+  const banner = document.getElementById('lxcSelectedOsBanner');
+  const sel = document.getElementById('cTpl');
+  if (!banner || !sel) return;
+  const tpl = __lxcCatalog.find(t => t.slug === sel.value) || __lxcCatalog[0];
+  if (!tpl) { banner.style.display = 'none'; return; }
+  banner.style.display = 'flex';
+  banner.innerHTML =
+    '<div><strong style="color:var(--text-primary);">Selected Image:</strong> ' + hkvmEsc(tpl.name || tpl.slug) +
+    (tpl.description ? ' &mdash; <span style="color:var(--text-muted);">' + hkvmEsc(tpl.description) + '</span>' : '') + '</div>' +
+    '<div><code>' + hkvmEsc(tpl.slug) + '</code></div>';
+}
+
+function selectLxcNode(nodeId) {
+  const sel = document.getElementById('cNode');
+  if (sel) sel.value = String(nodeId);
+  document.querySelectorAll('#lxcNodeCards .lxc-node-card').forEach(el => {
+    el.classList.toggle('selected', Number(el.getAttribute('data-node-id')) === Number(nodeId));
+  });
+  updateLxcBlueprint();
+}
+
+function onLxcNameInput() {
+  const raw = document.getElementById('cName').value;
+  const hint = document.getElementById('cNameHint');
+  const hostEl = document.getElementById('cHost');
+  if (!__lxcHostCustom && hostEl) {
+    hostEl.placeholder = raw.trim() ? raw.trim() + '.local' : 'vps-prod-01.local';
+  }
+  if (hint) {
+    if (!raw.trim()) {
+      hint.innerHTML = 'Letters, digits, hyphens, underscores (e.g. <code>web-node-01</code>).';
+      hint.style.color = 'var(--text-muted)';
+    } else if (/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(raw.trim())) {
+      hint.textContent = '✓ Valid LXC container identifier';
+      hint.style.color = '#10b981';
+    } else {
+      hint.textContent = 'Must start with a letter/digit and contain only letters, digits, hyphens, dots, or underscores.';
+      hint.style.color = '#ef4444';
+    }
+  }
+  updateLxcBlueprint();
+}
+
+function onLxcHostInput() {
+  const v = document.getElementById('cHost').value.trim();
+  __lxcHostCustom = v.length > 0;
+  updateLxcBlueprint();
+}
+
+function genRandomLxcName() {
+  const sel = document.getElementById('cTpl');
+  const base = (sel?.value || 'lxc').split('-')[0].replace(/[^a-z0-9]/gi, '').slice(0, 8) || 'lxc';
+  const suffix = Math.random().toString(36).slice(2, 6);
+  const generated = base + '-vps-' + suffix;
+  const nameEl = document.getElementById('cName');
+  if (nameEl) nameEl.value = generated;
+  if (!__lxcHostCustom) {
+    const hostEl = document.getElementById('cHost');
+    if (hostEl) hostEl.value = generated + '.local';
+  }
+  onLxcNameInput();
+}
+
+function clearActivePreset() {
+  document.querySelectorAll('#lxcPresetGrid .lxc-preset-card').forEach(b => b.classList.remove('active'));
+}
+
+function applyLxcPreset(key, cpu, ram, swap, disk, btnEl) {
+  clearActivePreset();
+  if (btnEl) btnEl.classList.add('active');
+  syncLxcCpu(cpu, 'preset');
+  document.getElementById('cRam').value = ram;
+  document.getElementById('cSwap').value = swap;
+  document.getElementById('cDisk').value = disk;
+  updateLxcBlueprint();
+}
+
+function syncLxcCpu(val, source) {
+  const n = Math.max(1, Math.min(128, Number(val) || 1));
+  const numEl = document.getElementById('cCpu');
+  const rngEl = document.getElementById('cCpuRange');
+  if (numEl && source !== 'num') numEl.value = n;
+  if (rngEl && source !== 'range') rngEl.value = Math.min(32, n);
+  if (source !== 'preset') clearActivePreset();
+  updateLxcBlueprint();
+}
+
+function setNumericField(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.value = val;
+  if (id === 'cRam' || id === 'cSwap' || id === 'cDisk') clearActivePreset();
+  updateLxcBlueprint();
+}
+
+function setLxcIpMode(mode) {
+  __lxcIpMode = mode;
+  document.getElementById('ipModeDhcpBtn')?.classList.toggle('active', mode === 'dhcp');
+  document.getElementById('ipModeStaticBtn')?.classList.toggle('active', mode === 'static');
+  const box = document.getElementById('lxcStaticIpFields');
+  if (box) box.style.display = mode === 'static' ? 'block' : 'none';
+  if (mode === 'dhcp') {
+    const ipEl = document.getElementById('cIp');
+    if (ipEl) ipEl.value = '';
+  }
+  updateLxcBlueprint();
+}
+
+function applyLxcNetworkPool(poolId) {
+  if (!poolId) return;
+  const pool = __lxcNetPools.find(p => Number(p.id) === Number(poolId));
+  if (!pool) return;
+  if (pool.bridge_name) document.getElementById('cBridge').value = pool.bridge_name;
+  if (pool.gateway) {
+    setLxcIpMode('static');
+    const gwEl = document.getElementById('cGateway');
+    if (gwEl) gwEl.value = pool.gateway;
+  }
+  if (pool.vlan_id) {
+    setLxcIpMode('static');
+    const vlanEl = document.getElementById('cVlan');
+    if (vlanEl) vlanEl.value = pool.vlan_id;
+  }
+  updateLxcBlueprint();
+}
+
+function genCustomLxcPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*';
+  const arr = new Uint32Array(18);
+  window.crypto.getRandomValues(arr);
+  let pw = '';
+  for (let i = 0; i < arr.length; i++) pw += chars[arr[i] % chars.length];
+  const el = document.getElementById('cRootPw');
+  if (el) {
+    el.value = pw;
+    el.type = 'text';
+    const tog = document.getElementById('cRootPwToggle');
+    if (tog) tog.textContent = 'Hide';
+  }
+  updateLxcBlueprint();
+}
+
+function toggleLxcPwVis() {
+  const el = document.getElementById('cRootPw');
+  const tog = document.getElementById('cRootPwToggle');
+  if (!el) return;
+  el.type = el.type === 'password' ? 'text' : 'password';
+  if (tog) tog.textContent = el.type === 'password' ? 'Show' : 'Hide';
+}
+
+function copyCreatedLxcPw() {
+  if (!window.__lastCreatedLxcPw) return;
+  navigator.clipboard.writeText(window.__lastCreatedLxcPw).then(() => {
+    hkvmToast('Root password copied to clipboard');
+  }).catch(() => {
+    hkvmToast('Copy manually from the highlighted code box', 'warning');
+  });
+}
+
+function updateLxcBlueprint() {
+  if (CURRENT_SECTION !== 'instances-create') return;
+  const name = (document.getElementById('cName')?.value || '').trim() || 'unnamed-lxc';
+  const host = (document.getElementById('cHost')?.value || '').trim() || name;
+  const userSel = document.getElementById('cUser');
+  const ownerTxt = userSel?.options[userSel.selectedIndex]?.text || '—';
+  const nodeSel = document.getElementById('cNode');
+  const nodeTxt = nodeSel?.options[nodeSel.selectedIndex]?.text || 'localhost';
+  const tplSlug = document.getElementById('cTpl')?.value || '';
+  const tplObj = __lxcCatalog.find(t => t.slug === tplSlug);
+
+  const cpu = Math.max(1, Number(document.getElementById('cCpu')?.value || 2));
+  const cpuLim = Number(document.getElementById('cCpuLimit')?.value || 100);
+  const ram = Math.max(128, Number(document.getElementById('cRam')?.value || 2048));
+  const swap = Math.max(0, Number(document.getElementById('cSwap')?.value || 0));
+  const disk = Math.max(2, Number(document.getElementById('cDisk')?.value || 20));
+  const backing = document.getElementById('cBacking')?.value || 'dir';
+  const bridge = (document.getElementById('cBridge')?.value || 'lxcbr0').trim();
+  const staticIp = (document.getElementById('cIp')?.value || '').trim();
+  const exp = Math.max(0, Number(document.getElementById('cExp')?.value || 0));
+  const customPw = (document.getElementById('cRootPw')?.value || '').trim();
+  const sshRaw = (document.getElementById('cSshKeys')?.value || '').trim();
+  const sshCount = sshRaw ? sshRaw.split('\n').map(s => s.trim()).filter(Boolean).length : 0;
+
+  const cpuBadge = document.getElementById('cCpuBadge');
+  if (cpuBadge) cpuBadge.textContent = cpu + (cpu === 1 ? ' Core' : ' Cores');
+  const ramBadge = document.getElementById('cRamBadge');
+  if (ramBadge) ramBadge.textContent = ram >= 1024 ? (Math.round((ram / 1024) * 100) / 100) + ' GB' : ram + ' MB';
+  const swapBadge = document.getElementById('cSwapBadge');
+  if (swapBadge) swapBadge.textContent = swap === 0 ? 'Disabled' : (swap >= 1024 ? (Math.round((swap / 1024) * 100) / 100) + ' GB' : swap + ' MB');
+  const diskBadge = document.getElementById('cDiskBadge');
+  if (diskBadge) diskBadge.textContent = disk + ' GB';
+
+  const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  setTxt('bpTitle', name);
+  setTxt('bpHost', host);
+  setTxt('bpOwner', ownerTxt);
+  setTxt('bpNode', nodeTxt);
+  setTxt('bpOs', tplObj ? (tplObj.name || tplObj.slug) : tplSlug);
+  setTxt('bpCpu', cpu + ' vCPU (' + cpuLim + '% cap)');
+  setTxt('bpRam', ram + ' MB / ' + (swap ? swap + ' MB swap' : 'No swap'));
+  setTxt('bpDisk', disk + ' GB (' + backing + ')');
+  setTxt('bpNet', bridge + ' • ' + (__lxcIpMode === 'static' && staticIp ? staticIp : 'DHCP'));
+  setTxt('bpAuth', (customPw ? 'Custom Pw' : 'Auto 18-char Pw') + (sshCount ? ' + ' + sshCount + ' SSH key' + (sshCount > 1 ? 's' : '') : ''));
+
+  const flags = [];
+  if (document.getElementById('cNest')?.checked) flags.push('Nesting');
+  if (document.getElementById('cAutostart')?.checked) flags.push('Autostart');
+  if (document.getElementById('cPriv')?.checked) flags.push('Privileged');
+  if (!document.getElementById('cProv')?.checked) flags.push('DB-Only');
+  setTxt('bpFlags', flags.length ? flags.join(', ') : 'Standard');
+  setTxt('bpExp', exp > 0 ? exp + ' days (auto-suspend)' : 'Never expires');
+}
+
 async function submitCreateLxc(e) {
   e.preventDefault();
   if (__lxcCreating) {
@@ -649,29 +1604,56 @@ async function submitCreateLxc(e) {
   const btn = document.getElementById('cSubmitBtn');
   const box = document.getElementById('createResultBox');
 
+  const sshKeys = (document.getElementById('cSshKeys')?.value || '')
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const customRootPw = (document.getElementById('cRootPw')?.value || '').trim();
+  const staticIpVal = __lxcIpMode === 'static' ? (document.getElementById('cIp')?.value || '').trim() : '';
+  const gwVal = __lxcIpMode === 'static' ? (document.getElementById('cGateway')?.value || '').trim() : '';
+  const ipv6Val = __lxcIpMode === 'static' ? (document.getElementById('cIpv6')?.value || '').trim() : '';
+  const vlanVal = __lxcIpMode === 'static' ? Number(document.getElementById('cVlan')?.value || 0) : 0;
+
   __lxcCreating = true;
   let elapsedSec = 0;
   let timerId = null;
 
   if (btn) {
     btn.disabled = true;
-    btn.style.opacity = '0.7';
-    btn.textContent = provOnHost ? 'Provisioning LXC... (0s)' : 'Creating...';
+    btn.innerHTML = provOnHost
+      ? '<span>Provisioning Container... (0s)</span>'
+      : '<span>Registering Container...</span>';
   }
 
-  box.style.display = 'block';
-  box.innerHTML = provOnHost
-    ? '<strong>Provisioning container "' + hkvmEsc(ctName) + '" (' + hkvmEsc(tplSlug) + ')...</strong>\n' +
-      'Downloading &amp; extracting OS rootfs from images.linuxcontainers.org (first download takes ~20–90s; cached templates take ~3s).\n' +
-      'Please keep this tab open until completion.'
-    : 'Registering LXC container "' + hkvmEsc(ctName) + '" in database...';
+  const renderProgress = (sec) => {
+    const phase = sec < 4
+      ? 'Validating parameters &amp; preparing LXC store...'
+      : sec < 25
+      ? 'Downloading &amp; extracting OS rootfs from images.linuxcontainers.org...'
+      : 'Applying cgroup limits, root credentials &amp; starting container...';
+    box.style.display = 'block';
+    box.innerHTML =
+      '<div style="font-family:sans-serif;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:700;color:#22d3ee;">' +
+      '<span>Deploying ' + hkvmEsc(ctName) + ' (' + hkvmEsc(tplSlug) + ')</span>' +
+      '<span>' + sec + 's</span></div>' +
+      '<div class="lxc-prog-track"><div class="lxc-prog-bar"></div></div>' +
+      '<div style="font-size:11.5px;color:var(--text-secondary);">' + phase + '</div>' +
+      '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">First-time OS template downloads take ~20–90s; cached templates finish in ~3s.</div>' +
+      '</div>';
+  };
 
   if (provOnHost) {
+    renderProgress(0);
     hkvmToast('Provisioning "' + ctName + '" — downloading OS image, please wait...', 'warning');
     timerId = setInterval(() => {
       elapsedSec += 1;
-      if (btn) btn.textContent = 'Provisioning LXC... (' + elapsedSec + 's)';
+      if (btn) btn.innerHTML = '<span>Provisioning Container... (' + elapsedSec + 's)</span>';
+      renderProgress(elapsedSec);
     }, 1000);
+  } else {
+    box.style.display = 'block';
+    box.textContent = 'Registering LXC container "' + ctName + '" in database...';
   }
 
   try {
@@ -679,42 +1661,70 @@ async function submitCreateLxc(e) {
       method: 'POST',
       body: {
         containerName: ctName,
-        hostname: document.getElementById('cHost').value || undefined,
+        hostname: (document.getElementById('cHost')?.value || '').trim() || undefined,
         userId: Number(document.getElementById('cUser').value),
         nodeId: Number(document.getElementById('cNode').value),
         templateSlug: tplSlug,
         cpuCores: Number(document.getElementById('cCpu').value),
+        cpuLimitPercent: Number(document.getElementById('cCpuLimit')?.value || 100),
+        cpuShares: Number(document.getElementById('cCpuShares')?.value || 1024),
+        cpuPinning: (document.getElementById('cCpuPin')?.value || '').trim() || null,
         ramMb: Number(document.getElementById('cRam').value),
         swapMb: Number(document.getElementById('cSwap').value),
         diskGb: Number(document.getElementById('cDisk').value),
+        backingStore: document.getElementById('cBacking')?.value || 'dir',
+        bandwidthQuotaGb: Number(document.getElementById('cBwQuota')?.value || 0),
         bridge: document.getElementById('cBridge').value,
-        ipv4Address: document.getElementById('cIp').value || null,
+        ipv4Address: staticIpVal || null,
+        ipv4Gateway: gwVal || null,
+        ipv6Address: ipv6Val || null,
+        vlanId: vlanVal > 0 ? vlanVal : null,
         expirationDays: Number(document.getElementById('cExp').value || 0),
+        rootPassword: customRootPw || undefined,
+        sshPublicKeys: sshKeys,
         nesting: document.getElementById('cNest').checked,
+        autostart: Boolean(document.getElementById('cAutostart')?.checked),
+        privileged: document.getElementById('cPriv') ? document.getElementById('cPriv').checked : true,
+        notes: (document.getElementById('cNotes')?.value || '').trim() || undefined,
         provisionOnHost: provOnHost
       }
     });
+    window.__lastCreatedLxcPw = out.generatedRootPassword;
+    const stPillClass = out.instance.status === 'running' ? 'running' : 'stopped';
     box.style.display = 'block';
     box.innerHTML =
-      '<strong>✓ LXC Container Created:</strong> ' + hkvmEsc(out.instance.name) + ' (#' + out.instance.refId + ') — Status: <strong>' + hkvmEsc(out.instance.status) + '</strong>\n' +
-      '<strong>Generated Root Password (copy now):</strong> <code>' + hkvmEsc(out.generatedRootPassword) + '</code>\n' +
-      (out.warning ? '\n<span style="color:#f59e0b;">Note: ' + hkvmEsc(out.warning) + '</span>\n' : '') +
-      '\n<div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">' +
-      '<a class="btn btn-primary" href="/lxc/' + out.instance.refId + '">Manage Container &rarr;</a>' +
-      '<a class="btn btn-outline" href="/admin/lxc">View All LXC Containers &rarr;</a>' +
+      '<div style="font-family:sans-serif;display:flex;flex-direction:column;gap:8px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">' +
+      '<strong style="color:#10b981;font-size:13px;">&#10003; Created ' + hkvmEsc(out.instance.name) + ' (#' + out.instance.refId + ')</strong>' +
+      '<span class="v3-pill ' + stPillClass + '">' + hkvmEsc(out.instance.status) + '</span>' +
+      '</div>' +
+      '<div style="padding:8px 10px;border-radius:7px;background:rgba(0,0,0,0.35);border:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
+      '<div style="overflow:hidden;text-overflow:ellipsis;"><div style="font-size:10.5px;color:var(--text-muted);">Root Password (encrypted at rest)</div>' +
+      '<code style="font-size:12.5px;color:#22d3ee;">' + hkvmEsc(out.generatedRootPassword) + '</code></div>' +
+      '<button type="button" class="btn btn-outline" style="padding:4px 9px;font-size:11px;flex-shrink:0;" onclick="copyCreatedLxcPw()">Copy</button>' +
+      '</div>' +
+      (out.warning ? '<div style="font-size:11.5px;color:#f59e0b;line-height:1.4;">Note: ' + hkvmEsc(out.warning) + '</div>' : '') +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px;">' +
+      '<a class="btn btn-primary" style="flex:1;text-align:center;font-size:12px;padding:7px 10px;" href="/lxc/' + out.instance.refId + '">Manage &rarr;</a>' +
+      '<a class="btn btn-outline" style="font-size:12px;padding:7px 10px;" href="/lxc/' + out.instance.refId + '/console">PTY Console</a>' +
+      '<a class="btn btn-outline" style="font-size:12px;padding:7px 10px;" href="/admin/lxc">All LXC</a>' +
+      '</div>' +
       '</div>';
-    hkvmToast('LXC instance "' + out.instance.name + '" created!');
+    hkvmToast('LXC instance "' + out.instance.name + '" deployed!');
   } catch (err) {
     box.style.display = 'block';
-    box.innerHTML = '<span style="color:#ef4444;"><strong>Provisioning Error:</strong> ' + hkvmEsc(err.message) + '</span>';
+    box.innerHTML =
+      '<div style="font-family:sans-serif;color:#ef4444;font-size:12.5px;line-height:1.45;">' +
+      '<strong>Provisioning Error:</strong> ' + hkvmEsc(err.message) + '</div>';
     hkvmToast(err.message, 'error');
   } finally {
     if (timerId) clearInterval(timerId);
     __lxcCreating = false;
     if (btn) {
       btn.disabled = false;
-      btn.style.opacity = '1';
-      btn.textContent = 'Create LXC Instance';
+      btn.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>' +
+        '<span>Deploy LXC Container</span>';
     }
   }
 }
@@ -1252,6 +2262,7 @@ function connectNodeShell() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   if (CURRENT_SECTION === 'instances') loadUnifiedInstances();
+  if (CURRENT_SECTION === 'instances-create') initLxcCreateStudio();
   if (CURRENT_SECTION === 'lxc') loadLxcList();
   if (CURRENT_SECTION === 'nodes') loadNodes();
   if (CURRENT_SECTION === 'storage') loadStorage(true);
