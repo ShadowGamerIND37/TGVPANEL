@@ -1,3 +1,4 @@
+export declare function getSecretVaultPath(): string;
 interface SecretBundle {
     sessionSecret: string;
     credentialKeyHex: string;
@@ -5,8 +6,9 @@ interface SecretBundle {
 }
 /**
  * Loads secrets from environment variables or persists auto-generated 256-bit
- * secrets in `.hkvm-secret` (mode 0600, git-ignored) so sessions and encrypted
+ * secrets in `.tgvpanel-secret` (mode 0600, git-ignored) so sessions and encrypted
  * credentials survive restarts without hardcoding secrets in source code.
+ * Automatically migrates legacy `.hkvm-secret` -> `.tgvpanel-secret` if present.
  */
 export declare function getSecretBundle(): SecretBundle;
 /**

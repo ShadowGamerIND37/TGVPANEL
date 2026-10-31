@@ -1,18 +1,16 @@
-# HKVM V3 — Phase 1: Complete Source Audit & Unification Mapping
+# TGVPANEL — Phase 1: Complete Source Audit & Unification Mapping
 
 ## 1. Executive Summary
-This document captures the complete Phase 1 audit of both supplied codebases before any code modification:
-- **Primary Foundation (HKVM V2)**: Located at repository root (`/home/user/TGVPANEL`), built on Node.js + Express + EJS + SQLite (`data/hkvm.db`) + `ws` + `ssh2`, managing QEMU/KVM virtual machines.
-- **Feature Source (HVM V9)**: Located in `./hvm`, built on Python Flask + Flask-SocketIO + SQLite, with a separate remote/local LXC Node Agent (`hvm/node.py`), Live Stats Manager (`hvm/live_stats_manager.py`), REST API (`hvm/api.py`), and LXC VPS lifecycle/networking/migration/backup panel (`hvm/hvm.py`).
-
-All HVM V9 capabilities are migrated natively into **HKVM V3** (Node.js + Express + TypeScript modules + EJS UI + unified SQLite DB with PostgreSQL migration path + Node.js/TypeScript Node Agent). The Python/Flask HVM web panel is **not** run or reverse-proxied.
+This document captures the Phase 1 architecture audit and unification mapping for **TGVPANEL**:
+- **Primary Express/EJS KVM Foundation**: Located at repository root (`/home/user/TGVPANEL`), built on Node.js + Express + EJS + SQLite (`data/tgvpanel.db`) + `ws` + `ssh2`, managing QEMU/KVM virtual machines.
+- **Unified LXC & Multi-Node Feature Source**: Migrated natively into **TGVPANEL** (Node.js + Express + TypeScript modules + EJS UI + unified SQLite DB `data/tgvpanel.db` with PostgreSQL migration path + Node.js/TypeScript Node Agent). No separate Python/Flask sidecar is run or reverse-proxied.
 
 ---
 
-## 2. HKVM V2 Feature Inventory (Foundation)
+## 2. Core KVM Foundation Inventory
 | Domain | Source File(s) | Existing Capabilities & Audit Notes |
 |---|---|---|
-| Core HTTP & WS Server | `app.js` | Express 4 + `http.Server` + `ws.Server` on `PORT` (default `8080`). Note: `dbDir` defaulted to `~/.hkvm` when `HKVM_DATA_DIR` was unset instead of `./data`; fixed in HKVM V3 to prioritize `./data/hkvm.db`. |
+| Core HTTP & WS Server | `app.js` | Express 4 + `http.Server` + `ws.Server` on `PORT` (default `8080`), backed by `./data/tgvpanel.db` (overridable via `TGVPANEL_DATA_DIR` / `TGVPANEL_DB_PATH`). |
 | Authentication & Sessions | `app.js`, `views/users/login.ejs` | `express-session`, `bcryptjs` password verification, `checkAuth` / `checkAdmin` middleware, `/api/login`, `/api/logout`, `/api/auth/check`. |
 | Discord OAuth2 | `app.js`, `views/admin/settings.ejs`, `views/users/profile.ejs` | `/api/discord-enabled`, `/api/discord-auth-url`, `/auth/discord/callback`, `/api/link-discord-account`, `/api/unlink-discord-account`, `/api/discord-account-info`, `discord_settings` & `user_discord_accounts` tables. |
 | Licensing | `licenses.js`, `views/license_activation.ejs` | Free edition stub (`isActivated() -> true`, `license_state` table). Preserved intact. |
@@ -25,7 +23,7 @@ All HVM V9 capabilities are migrated natively into **HKVM V3** (Node.js + Expres
 ---
 
 ## 3. HVM V9 Feature Inventory (Source to Migrate)
-| Domain | HVM Source File(s) | Capabilities Migrated into HKVM V3 |
+| Domain | Source File(s) | Capabilities Migrated into TGVPANEL |
 |---|---|---|
 | LXC VPS Lifecycle | `hvm/hvm.py`, `hvm/api.py` | Create (async background installer with live progress), Start, Stop, Force Stop, Restart, Freeze, Unfreeze, Suspend (with reason & suspension history), Unsuspend, Reinstall, Resize (CPU/RAM/Swap/Disk), Update config, Delete, Bulk Start, Bulk Stop, Ownership transfer, VPS Sharing (`shared_with`), Resource-monitor Whitelist (`whitelisted`). |
 | LXC Container Configuration | `hvm/hvm.py` | Container name/ID, hostname, OS catalog (`OS_OPTIONS`: Ubuntu 20.04/22.04/24.04, Debian 11/12/13, CentOS Stream 9/10, AlmaLinux 8/9/10, Rocky 8/9/10, Fedora 40-43, Kali), CPU cores/pinning/limits/shares/priority, RAM hard limit, 3-layer Swap control (LXC config + cgroup v1/v2 + guest), Disk rootfs quota, Mount points, Nesting/Privileged/AppArmor security profiles, `/dev/fuse` & `/dev/net/tun`, Root password & distro-aware OpenSSH setup (`apt` vs `dnf`/`yum`). |
@@ -43,13 +41,13 @@ All HVM V9 capabilities are migrated natively into **HKVM V3** (Node.js + Expres
 ---
 
 ## 4. API Inventory
-### 4.1 Preserved HKVM Legacy Endpoints
-All existing HKVM endpoints remain 100% functional for existing EJS pages and scripts:
+### 4.1 Preserved Core KVM Endpoints
+All existing KVM endpoints remain 100% functional for existing EJS pages and scripts:
 - Auth & Discord: `POST /api/login`, `POST /api/logout`, `GET /api/auth/check`, `GET /api/discord-enabled`, `GET /api/discord-auth-url`, `GET /auth/discord/callback`, `POST /api/link-discord-account`, `POST /api/unlink-discord-account`, `GET /api/discord-account-info`
 - KVM VMs: `GET /api/vms`, `GET /api/admin/vms`, `POST /api/vms`, `GET /api/vms/:vm_id`, `GET/PUT /api/vms/:vm_id/edit`, `POST /api/vms/:vm_id/{start,stop,restart,reinstall}`, `DELETE /api/vms/:vm_id`, `GET /api/vms/:vm_id/{stats,logs,console,snapshots}`, `POST /api/vms/:vm_id/console/command`, `POST /api/vms/:vm_id/snapshots`, `POST /api/vms/:vm_id/iso/{attach,detach}`, `GET /api/vms/:vm_id/iso/status`, `POST /api/ssh/connect`, `POST /api/ssh/command`
 - Templates, Metadata & Users: `GET /api/os-templates`, `GET/POST /api/admin/templates`, `PUT/DELETE /api/admin/templates/:id`, `PUT /api/admin/templates/builtin/:key`, `POST /api/admin/templates/:key/download`, `GET /api/admin/templates/cache/info`, `POST /api/admin/templates/cache/clear`, `GET /api/{cpu-models,smbios,network-types,dns-providers,iso-list}`, `GET /api/users/list`, `GET/POST /api/admin/users`, `GET/PUT/DELETE /api/admin/users/:id`, `GET /api/admin/users/:id/discord-info`, `GET/PUT /api/user/profile`, `PUT /api/user/password`, `GET/PUT /api/settings`, `POST /api/settings/:key`, `GET/PUT /api/admin/discord-settings`, `GET /api/admin/dashboard`, `GET /api/admin/activity`, `GET /api/system/status`
 
-### 4.2 Unified HKVM V3 Versioned REST API (`/api/v1/...`)
+### 4.2 Unified TGVPANEL Versioned REST API (`/api/v1/...`)
 - `/api/v1/auth/*` — session login/logout, 2FA TOTP enroll/verify/disable, password reset request & confirm, `/me`
 - `/api/v1/users/*` — user CRUD, profile, preferences, password reset, API key management
 - `/api/v1/instances/*` — unified KVM + LXC instance list, filter, search, detail, common lifecycle (`start`, `stop`, `restart`, `delete`, `reinstall`, `stats`, `logs`, `snapshots`)
@@ -67,7 +65,7 @@ All existing HKVM endpoints remain 100% functional for existing EJS pages and sc
 ---
 
 ## 5. Database Schema Inventory & Unification Plan
-### Existing HKVM Tables (`data/hkvm.db` — Preserved 100%)
+### Core Tables (`data/tgvpanel.db` — Preserved 100%)
 `users`, `vms`, `vm_logs`, `vm_snapshots`, `os_templates`, `settings`, `discord_settings`, `user_discord_accounts`, `license_state`.
 
 ### New Unified Tables Added via Versioned Transactional Migrations (`src/db/migrations/`)
@@ -100,5 +98,5 @@ All existing HKVM endpoints remain 100% functional for existing EJS pages and sc
 ---
 
 ## 6. Dependencies & Frontend Inventory Mapping
-- **Dependencies**: Preserving HKVM's `express`, `ejs`, `sqlite3`, `sqlite`, `bcryptjs`, `express-session`, `ws`, `ssh2`, `axios`, `cors`, `dotenv`, `uuid`; adding `typescript`, `node-pty` (real POSIX PTY), `multer` (secure uploads), `qrcode` (2FA TOTP QR), and local `@xterm/xterm` + `@xterm/addon-fit` assets.
-- **Frontend**: Extending `views/partials/admin/sidebar.ejs` (all 23 required navigation items), `views/partials/admin/header.ejs` (live notifications badge, unified search across KVM + LXC + nodes + users), `views/partials/users/sidebar.ejs`, and adding unified HKVM-styled EJS views for All Instances, LXC VPS list/create/detail/edit/console/files, Nodes list/create/detail/console, Storage, Networking, IP Management, Port Management, Backups, Snapshots, Live Statistics, Monitoring, API Management, Notifications, Activity Logs, System Info, and Maintenance.
+- **Dependencies**: Preserving `express`, `ejs`, `sqlite3`, `sqlite`, `bcryptjs`, `express-session`, `ws`, `ssh2`, `axios`, `cors`, `dotenv`, `uuid`; adding `typescript`, `node-pty` (real POSIX PTY), `multer` (secure uploads), `qrcode` (2FA TOTP QR), and local `@xterm/xterm` + `@xterm/addon-fit` assets.
+- **Frontend**: Extending `views/partials/admin/sidebar.ejs` (all 23 required navigation items), `views/partials/admin/header.ejs` (live notifications badge, unified search across KVM + LXC + nodes + users), `views/partials/users/sidebar.ejs`, and adding unified TGVPANEL-styled EJS views for All Instances, LXC VPS list/create/detail/edit/console/files, Nodes list/create/detail/console, Storage, Networking, IP Management, Port Management, Backups, Snapshots, Live Statistics, Monitoring, API Management, Notifications, Activity Logs, System Info, and Maintenance.

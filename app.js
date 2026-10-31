@@ -50,6 +50,7 @@ function logError(component, vm_id, action, error) {
 }
 
 const { getSecretBundle, encryptSecret, decryptSecret, isEncryptedSecret } = require('./lib/security/crypto-vault');
+const { resolveAndMigrateDatabasePath } = require('./lib/db/database');
 const { verifyPasswordWithLegacySupport } = require('./lib/db/hvm-importer');
 const { securityHeadersAndCsrfMiddleware, verifyCsrfMiddleware, createUnifiedAuthMiddleware } = require('./lib/security/middleware');
 const { initializeUnifiedHkvmRuntime, attachUnifiedWebSockets } = require('./lib/context');
@@ -65,18 +66,19 @@ let v3PrincipalMiddleware = null;
 let v3ApiRouter = null;
 let v3WebRouter = null;
 
-// Unified HKVM V3 SQLite store inside ./data/hkvm.db (overridable via HKVM_DATA_DIR / HKVM_DB_PATH)
-const dbDir = process.env.HKVM_DATA_DIR || path.join(__dirname, 'data');
-const dbPath = process.env.HKVM_DB_PATH || path.join(dbDir, 'hkvm.db');
-
-// Ensure database directory exists and is writable
+// Unified TGVPANEL SQLite store inside ./data/tgvpanel.db (auto-migrates legacy ./data/hkvm.db)
+const dbDir =
+  process.env.TGVPANEL_DATA_DIR ||
+  process.env.HKVM_DATA_DIR ||
+  path.join(__dirname, 'data');
+let dbPath;
 try {
-  if (!fs.existsSync(dbDir)) {
-    fs.mkdirSync(dbDir, { recursive: true, mode: 0o755 });
-    console.log('[Init] Created database directory:', dbDir);
-  }
+  dbPath = resolveAndMigrateDatabasePath(
+    dbDir,
+    process.env.TGVPANEL_DB_PATH || process.env.HKVM_DB_PATH
+  );
 } catch (error) {
-  console.error('[Init] Failed to create database directory:', dbDir, error.message);
+  console.error('[Init] Failed to initialize database directory:', dbDir, error.message);
   process.exit(1);
 }
 
@@ -331,6 +333,9 @@ const OS_TEMPLATES = {
 // Middleware
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.get('/js/hkvm-v3.js', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'js', 'tgvpanel-v3.js'));
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 const sessionParser = session({
@@ -366,7 +371,7 @@ licenses.initLicenseMiddleware(app);
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// HKVM V3 Unified Principal, REST API v1, and Unified Web Routes
+// TGVPANEL Unified Principal, REST API v1, and Unified Web Routes
 app.use((req, res, next) => {
   if (v3PrincipalMiddleware) return v3PrincipalMiddleware(req, res, next);
   next();
@@ -5141,7 +5146,7 @@ async function bootstrapHkvmV3() {
 
 const hkvmReadyPromise = bootstrapHkvmV3()
   .then(() => {
-    if (process.env.HKVM_NO_LISTEN !== '1') {
+    if (process.env.TGVPANEL_NO_LISTEN !== '1' && process.env.HKVM_NO_LISTEN !== '1') {
       server.listen(Number(PORT), '0.0.0.0', async () => {
         console.log('[License] Free Edition active');
 

@@ -9,7 +9,6 @@ Multi-node · Secure by default · Pure Node.js + TypeScript
 ![Node.js](https://img.shields.io/badge/Node.js-TypeScript-3c873a?logo=node.js&logoColor=white)
 ![SQLite](https://img.shields.io/badge/DB-SQLite%20(WAL)-003b57?logo=sqlite&logoColor=white)
 ![Virtualization](https://img.shields.io/badge/QEMU%2FKVM-%2B%20LXC-orange)
-<!-- TODO: add license + CI badges once available -->
 
 [Quick Start](#quick-start) ·
 [Features](#features) ·
@@ -30,8 +29,6 @@ TGVPANEL is a single platform for managing both virtual machines and containers,
 - **Multi-node.** Manage remote compute nodes through a standalone agent with HMAC-signed requests and optional mutual TLS.
 - **Honest by design.** Migration is offline and checksum-verified. Live (CRIU) migration is intentionally not claimed.
 
-<!-- TODO: add a screenshot of the Admin dashboard here -->
-
 ## Features
 
 | Area | Highlights |
@@ -51,12 +48,12 @@ TGVPANEL is a single platform for managing both virtual machines and containers,
 
 | Control | Implementation |
 |---|---|
-| Secrets at rest | `.hkvm-secret` (mode `0600`); remote node API keys encrypted with AES-256-GCM |
+| Secrets at rest | `.tgvpanel-secret` (mode `0600`); remote node API keys encrypted with AES-256-GCM |
 | Credentials | `bcrypt` passwords; PATs stored as SHA-256 hashes |
 | Two-factor auth | RFC 6238 TOTP |
 | Web protection | CSRF tokens, rate limiting, input validators |
 | Access control | RBAC: `admin`, `subadmin`, `operator`, `user`, `readonly`, with per-user ownership isolation and VPS sharing |
-| Node transport | HTTPS, optional mTLS, per-request HMAC-SHA256 (`X-HKVM-Timestamp`, `X-HKVM-Nonce`, `X-HKVM-Signature`) with replay protection |
+| Node transport | HTTPS, optional mTLS, per-request HMAC-SHA256 with timestamp & nonce replay protection |
 | Command execution | Strict binary allowlist, `execFile` only, `shell: false` |
 | Filesystem access | Container rootfs I/O confined by `realpath` (path-traversal jail) |
 | Auditing | Audit log for sensitive and administrative actions |
@@ -66,7 +63,7 @@ TGVPANEL is a single platform for managing both virtual machines and containers,
 | Component | Needed for |
 |---|---|
 | Linux: Ubuntu, Debian, AlmaLinux or Rocky | Host OS supported by the installer |
-| Node.js and npm (<!-- TODO: minimum version -->) | Panel and agent |
+| Node.js 20+ and npm | Panel and agent |
 | C/C++ toolchain and Node headers | Building native addons (`node-pty`, SQLite driver) |
 | `/dev/kvm`, `qemu-system-x86_64`, `qemu-img` | KVM virtual machines |
 | `lxc-*` tools | LXC containers |
@@ -89,9 +86,9 @@ The installer will:
 1. Detect `/dev/kvm`, QEMU, `qemu-img`, `lxc-*`, cgroups v2 and networking tools.
 2. Ask you to choose a mode: **Unified (KVM + LXC)**, **KVM only**, **LXC only**, or **Standalone remote node agent**.
 3. Build the TypeScript sources.
-4. Create `.hkvm-secret` (`0600`).
-5. Back up `data/hkvm.db`, then run migrations.
-6. Write systemd service units.
+4. Create `.tgvpanel-secret` (`0600`).
+5. Back up `data/tgvpanel.db`, then run migrations (`v001`..`v008`).
+6. Write systemd service units (`tgvpanel.service` / `tgvpanel-node-agent.service`).
 
 To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB backup included).
 
@@ -100,7 +97,7 @@ To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB
 ```bash
 npm install            # see note below if building offline
 npm run build          # compile src/**/*.ts -> lib/**/*.js
-npm run migrate        # back up data/hkvm.db, apply migrations v001..v005
+npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v008
 npm start              # panel on 0.0.0.0:8080
 ```
 
@@ -116,9 +113,9 @@ Change the port with `PORT=9090 npm start`. See `.env.example` for the available
 | `npm run build` | Compile TypeScript to `lib/` |
 | `npm run migrate` | Back up the database and apply pending migrations |
 | `npm start` | Start the panel |
-| `npm run agent:start` | Start the standalone node agent |
+| `npm run start:agent` | Start the standalone node agent |
 | `npm run import:hvm -- <path>` | Import a legacy database |
-| `npm test` | Run all 12 acceptance suites |
+| `npm test` | Run all 19 end-to-end acceptance suites |
 
 ## Importing a legacy database
 
@@ -126,7 +123,7 @@ Change the port with `PORT=9090 npm start`. See `.env.example` for the available
 npm run import:hvm -- /path/to/legacy.db
 ```
 
-- Creates a `VACUUM INTO` backup of `data/hkvm.db` first.
+- Creates a `VACUUM INTO` backup of `data/tgvpanel.db` first.
 - Resolves colliding usernames and emails safely.
 - Imports legacy `pbkdf2:sha256` and `scrypt` password hashes and upgrades them to `bcrypt` on the user's next login.
 - Re-encrypts remote node API keys with AES-256-GCM.
@@ -137,20 +134,20 @@ npm run import:hvm -- /path/to/legacy.db
 Run the agent on any compute host you want the panel to manage:
 
 ```bash
-HKVM_NODE_ID="eu-node-1" \
-HKVM_AGENT_PORT=8443 \
-HKVM_NODE_API_KEY="hkvm_node_..." \
-HKVM_NODE_HMAC_SECRET="..." \
-npm run agent:start
+TGVPANEL_NODE_ID="eu-node-1" \
+TGVPANEL_AGENT_PORT=8443 \
+TGVPANEL_NODE_API_KEY="..." \
+TGVPANEL_NODE_HMAC_SECRET="..." \
+npm run start:agent
 ```
 
 | Variable | Purpose |
 |---|---|
-| `HKVM_NODE_ID` | Unique node identifier |
-| `HKVM_AGENT_PORT` | Listening port (example: `8443`) |
-| `HKVM_NODE_API_KEY` | Per-node API key (stored hashed) |
-| `HKVM_NODE_HMAC_SECRET` | Shared secret for request signing |
-| `HKVM_NODE_MTLS` | Set to `true` to require mutual TLS |
+| `TGVPANEL_NODE_ID` | Unique node identifier |
+| `TGVPANEL_AGENT_PORT` | Listening port (example: `8443`) |
+| `TGVPANEL_NODE_API_KEY` | Per-node API key (stored hashed) |
+| `TGVPANEL_NODE_HMAC_SECRET` | Shared secret for request signing |
+| `TGVPANEL_NODE_MTLS` | Set to `true` to require mutual TLS |
 
 Then add the node under **Admin → Nodes**. API keys can be rotated there without restarting the agent.
 
@@ -189,11 +186,11 @@ Any failure before the commit removes partial target artifacts and restarts the 
 TGVPANEL/
 ├── app.js                  # Express + HTTP + WebSocket entrypoint
 ├── licenses.js             # Free Edition license module
-├── data/                   # hkvm.db (SQLite, WAL) and backups/
+├── data/                   # tgvpanel.db (SQLite, WAL) and backups/
 ├── src/
 │   ├── context.ts          # Runtime bootstrap, authenticated WS multiplexer
-│   ├── security/           # crypto-vault (secrets, AES-GCM, TOTP, CSRF), RBAC middleware
-│   ├── db/                 # SQLite wrapper, migrations v001..v005, legacy DB importer, CLIs
+│   ├── security/           # crypto-vault (.tgvpanel-secret, AES-GCM, TOTP, CSRF), RBAC middleware
+│   ├── db/                 # SQLite wrapper, migrations v001..v008, legacy DB importer, CLIs
 │   ├── node-agent/         # Standalone and local agent (auth, command runner, containers,
 │   │                       #   consoles, snapshots, transfers, health and host stats)
 │   ├── services/
@@ -208,10 +205,10 @@ TGVPANEL/
 │       ├── v1/router.ts    # REST API (/api/v1/*)
 │       └── web-routes.ts   # Admin (23 sections) and user EJS routes
 ├── views/                  # EJS templates (dark/light, local xterm.js)
-├── public/                 # CSS, hkvm-v3.js client helper, /vendor/xterm/
+├── public/                 # CSS, tgvpanel-v3.js client helper, /vendor/xterm/
 ├── scripts/                # install.sh, update.sh
 ├── docs/                   # Source audit, migration checklist, PostgreSQL 15+ guide
-└── tests/run-all.js        # 12-suite integration and security runner
+└── tests/run-all.js        # 19-suite integration and security runner
 ```
 
 <details>
@@ -219,7 +216,7 @@ TGVPANEL/
 
 | File | Responsibility |
 |---|---|
-| `security/crypto-vault.ts` | `.hkvm-secret`, AES-256-GCM, SHA-256 PATs, HMAC, TOTP, CSRF |
+| `security/crypto-vault.ts` | `.tgvpanel-secret`, AES-256-GCM, SHA-256 PATs, HMAC, TOTP, CSRF |
 | `security/middleware.ts` | RBAC, CSRF, rate limiting, validators |
 | `node-agent/agent.ts` | HTTP/HTTPS/mTLS + WebSocket server, `LocalNodeRuntime` |
 | `node-agent/authentication.ts` | API key hash, HMAC signature, timestamp and nonce replay guard |
@@ -239,12 +236,12 @@ TGVPANEL/
 npm test
 ```
 
-Runs 12 end-to-end suites from `tests/run-all.js` against an isolated temporary clone of `data/hkvm.db`, so your real data is never touched.
+Runs 19 end-to-end suites from `tests/run-all.js` against an isolated temporary clone of `data/tgvpanel.db`, so your real data is never touched.
 
 | Coverage |
 |---|
-| Migrations |
-| AES-256-GCM tamper defense |
+| Migrations (`v001`..`v008`) & automatic legacy DB / secret-vault file migration |
+| AES-256-GCM tamper defense (`.tgvpanel-secret`) |
 | Legacy import and login rehash |
 | CSRF and PAT scopes |
 | TOTP 2FA |
@@ -255,6 +252,7 @@ Runs 12 end-to-end suites from `tests/run-all.js` against an isolated temporary 
 | Storage, templates, networking, ports, firewall |
 | SHA-256 backups, monitoring, impersonation |
 | All 23 admin and user views plus `node-pty` WebSocket shell |
+| End-to-end LXC creation, snapshots, backups, 7-stage offline migration, KVM nesting, DNS/Netplan, loop disk quotas & cgroup v2 delegation |
 
 ## Contributing
 
@@ -262,4 +260,4 @@ Issues and pull requests are welcome. Before opening a PR, run `npm run build &&
 
 ## License
 
-<!-- TODO: add a LICENSE file and state it here. Note: licenses.js implements the "Free Edition" feature license, which is separate from the repository's source license. -->
+MIT © ShadowGamerIND

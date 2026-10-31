@@ -70,15 +70,16 @@ export interface StandaloneAgentOptions {
 }
 
 export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
-  const host = opts.host || process.env.HKVM_AGENT_HOST || '0.0.0.0';
-  const port = Number(opts.port || process.env.HKVM_AGENT_PORT || 5055);
-  const nodeId = opts.nodeId || process.env.HKVM_NODE_ID || 'remote-node';
-  const rawApiKey = opts.apiKey || process.env.HKVM_NODE_API_KEY || '';
-  const hmacSecret = opts.hmacSecret || process.env.HKVM_NODE_HMAC_SECRET || '';
+  const host = opts.host || process.env.TGVPANEL_AGENT_HOST || process.env.HKVM_AGENT_HOST || '0.0.0.0';
+  const port = Number(opts.port || process.env.TGVPANEL_AGENT_PORT || process.env.HKVM_AGENT_PORT || 5055);
+  const nodeId = opts.nodeId || process.env.TGVPANEL_NODE_ID || process.env.HKVM_NODE_ID || 'remote-node';
+  const rawApiKey = opts.apiKey || process.env.TGVPANEL_NODE_API_KEY || process.env.HKVM_NODE_API_KEY || '';
+  const hmacSecret =
+    opts.hmacSecret || process.env.TGVPANEL_NODE_HMAC_SECRET || process.env.HKVM_NODE_HMAC_SECRET || '';
 
   if (!rawApiKey || !hmacSecret) {
     throw new Error(
-      'TGVPANEL Node Agent requires HKVM_NODE_API_KEY and HKVM_NODE_HMAC_SECRET to start securely.'
+      'TGVPANEL Node Agent requires TGVPANEL_NODE_API_KEY and TGVPANEL_NODE_HMAC_SECRET to start securely.'
     );
   }
 
@@ -91,9 +92,15 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
     nodeId,
     apiKeyHash: hashApiKey(rawApiKey),
     hmacSecret,
-    requireMtls: Boolean(opts.requireMtls || process.env.HKVM_NODE_MTLS === 'true'),
+    requireMtls: Boolean(
+      opts.requireMtls ||
+        process.env.TGVPANEL_NODE_MTLS === 'true' ||
+        process.env.HKVM_NODE_MTLS === 'true'
+    ),
     credentialsFilePath: path.join(
-      process.env.HKVM_DATA_DIR || path.resolve(process.cwd(), 'data'),
+      process.env.TGVPANEL_DATA_DIR ||
+        process.env.HKVM_DATA_DIR ||
+        path.resolve(process.cwd(), 'data'),
       'node-agent-credentials.json'
     ),
   });
@@ -447,9 +454,9 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
 
   // Build HTTP or HTTPS server (with optional mTLS)
   let server: http.Server | https.Server;
-  const certPath = opts.tlsCertPath || process.env.HKVM_AGENT_TLS_CERT;
-  const keyPath = opts.tlsKeyPath || process.env.HKVM_AGENT_TLS_KEY;
-  const caPath = opts.tlsCaPath || process.env.HKVM_AGENT_TLS_CA;
+  const certPath = opts.tlsCertPath || process.env.TGVPANEL_AGENT_TLS_CERT || process.env.HKVM_AGENT_TLS_CERT;
+  const keyPath = opts.tlsKeyPath || process.env.TGVPANEL_AGENT_TLS_KEY || process.env.HKVM_AGENT_TLS_KEY;
+  const caPath = opts.tlsCaPath || process.env.TGVPANEL_AGENT_TLS_CA || process.env.HKVM_AGENT_TLS_CA;
 
   if (certPath && keyPath && fs.existsSync(certPath) && fs.existsSync(keyPath)) {
     const httpsOpts: https.ServerOptions = {

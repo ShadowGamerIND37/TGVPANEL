@@ -1573,7 +1573,7 @@
                 <button type="button" class="nc-tool-btn primary" style="padding:3px 9px;font-size:11px;" onclick="copyNodeShellEnvFlag()">Copy .env Flag</button>
               </div>
               <div style="color:#64748b;margin-bottom:3px;"># Enable audited super-admin host PTY shell</div>
-              <div style="color:#22d3ee;font-weight:700;">HKVM_ENABLE_NODE_SHELL=true</div>
+              <div style="color:#22d3ee;font-weight:700;">TGVPANEL_ENABLE_NODE_SHELL=true</div>
             </div>
           </div>
           <% } else { %>
@@ -2227,9 +2227,9 @@ async function submitAddNode(e) {
     box.style.display = 'block';
     box.textContent =
       'Remote Node Bootstrap Credentials (save in remote node .env):\n' +
-      'HKVM_NODE_ID=' + out.node.id + '\n' +
-      'HKVM_NODE_API_KEY=' + out.bootstrapCredentials.apiKey + '\n' +
-      'HKVM_NODE_HMAC_SECRET=' + out.bootstrapCredentials.hmacSecret;
+      'TGVPANEL_NODE_ID=' + out.node.id + '\n' +
+      'TGVPANEL_NODE_API_KEY=' + out.bootstrapCredentials.apiKey + '\n' +
+      'TGVPANEL_NODE_HMAC_SECRET=' + out.bootstrapCredentials.hmacSecret;
     loadNodes();
   } catch (err) { hkvmToast(err.message, 'error'); }
 }
@@ -2984,10 +2984,10 @@ function clearDiagOutput() {
 
 async function copyNodeShellEnvFlag() {
   try {
-    await navigator.clipboard.writeText('HKVM_ENABLE_NODE_SHELL=true');
-    hkvmToast('Copied HKVM_ENABLE_NODE_SHELL=true to clipboard');
+    await navigator.clipboard.writeText('TGVPANEL_ENABLE_NODE_SHELL=true');
+    hkvmToast('Copied TGVPANEL_ENABLE_NODE_SHELL=true to clipboard');
   } catch {
-    hkvmToast('Set HKVM_ENABLE_NODE_SHELL=true in .env');
+    hkvmToast('Set TGVPANEL_ENABLE_NODE_SHELL=true in .env');
   }
 }
 

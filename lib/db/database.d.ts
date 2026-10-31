@@ -3,6 +3,11 @@ export interface RunResult {
     lastID: number;
     changes: number;
 }
+/**
+ * Resolves the unified TGVPANEL SQLite path (`<dbDir>/tgvpanel.db` unless `explicitPath` is passed)
+ * and automatically migrates any legacy `<dbDir>/hkvm.db` (+ `-wal` / `-shm`) on disk with zero data loss.
+ */
+export declare function resolveAndMigrateDatabasePath(dbDir: string, explicitPath?: string): string;
 export declare class UnifiedDatabase {
     readonly raw: sqlite3.Database;
     readonly dbPath: string;
@@ -16,7 +21,7 @@ export declare class UnifiedDatabase {
      */
     transaction<T>(fn: () => Promise<T>): Promise<T>;
     /**
-     * Creates an automatic timestamped backup of data/hkvm.db before running migrations.
+     * Creates an automatic timestamped backup of data/tgvpanel.db before running migrations.
      */
     createBackup(label?: string): Promise<{
         backupPath: string;

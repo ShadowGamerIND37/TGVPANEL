@@ -154,7 +154,7 @@ function isPrivateRfc1918Ipv4(ip: string): boolean {
  * non-bridge-routable 10.255.255.254 tunnel listener).
  */
 export function resolveGuestDnsServers(hostResolvConfContent?: string): string[] {
-  const envDns = (process.env.HKVM_LXC_DNS || '').trim();
+  const envDns = (process.env.TGVPANEL_LXC_DNS || process.env.HKVM_LXC_DNS || '').trim();
   if (envDns) {
     const custom = envDns
       .split(/[\s,]+/)
@@ -201,7 +201,11 @@ export function resolveGuestDnsServers(hostResolvConfContent?: string): string[]
   return ordered.slice(0, 3);
 }
 
-const DEFAULT_LXC_BASE = process.env.HKVM_LXC_PATH || '/var/lib/lxc';
+const DEFAULT_LXC_BASE =
+  process.env.TGVPANEL_LXC_PATH ||
+  process.env.TGVPANEL_LXC_DIR ||
+  process.env.HKVM_LXC_PATH ||
+  '/var/lib/lxc';
 
 const UBUNTU_RELEASE_MAP: Record<string, string> = {
   '18.04': 'bionic',

@@ -7,6 +7,59 @@ export interface RunResult {
   changes: number;
 }
 
+/**
+ * Resolves the unified TGVPANEL SQLite path (`<dbDir>/tgvpanel.db` unless `explicitPath` is passed)
+ * and automatically migrates any legacy `<dbDir>/hkvm.db` (+ `-wal` / `-shm`) on disk with zero data loss.
+ */
+export function resolveAndMigrateDatabasePath(dbDir: string, explicitPath?: string): string {
+  fs.mkdirSync(dbDir, { recursive: true, mode: 0o755 });
+  if (explicitPath && explicitPath.trim().length > 0) {
+    return explicitPath.trim();
+  }
+
+  const targetPath = path.join(dbDir, 'tgvpanel.db');
+  const legacyPath = path.join(dbDir, 'hkvm.db');
+
+  if (!fs.existsSync(legacyPath)) {
+    return targetPath;
+  }
+
+  try {
+    const backupDir = path.join(dbDir, 'backups');
+    fs.mkdirSync(backupDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+
+    if (!fs.existsSync(targetPath)) {
+      // Pure rename: hkvm.db (+ -wal/-shm) -> tgvpanel.db (+ -wal/-shm)
+      fs.copyFileSync(legacyPath, path.join(backupDir, `tgvpanel_migrated_from_hkvm_${ts}.db`));
+      fs.renameSync(legacyPath, targetPath);
+      for (const suffix of ['-wal', '-shm', '-journal']) {
+        if (fs.existsSync(legacyPath + suffix)) {
+          fs.renameSync(legacyPath + suffix, targetPath + suffix);
+        }
+      }
+    } else if (!fs.existsSync(targetPath + '-wal')) {
+      // Both exist right after git checkout of baseline tgvpanel.db while live hkvm.db remained on disk:
+      // Preserve both in backups and promote live hkvm.db (+ -wal/-shm) to tgvpanel.db!
+      fs.copyFileSync(targetPath, path.join(backupDir, `tgvpanel_repo_baseline_${ts}.db`));
+      fs.copyFileSync(legacyPath, path.join(backupDir, `tgvpanel_migrated_from_hkvm_${ts}.db`));
+      fs.renameSync(legacyPath, targetPath);
+      for (const suffix of ['-wal', '-shm', '-journal']) {
+        if (fs.existsSync(targetPath + suffix)) {
+          try { fs.unlinkSync(targetPath + suffix); } catch { /* ignore */ }
+        }
+        if (fs.existsSync(legacyPath + suffix)) {
+          fs.renameSync(legacyPath + suffix, targetPath + suffix);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[TGVPANEL DB File Migration Warning]:', (err as Error).message);
+  }
+
+  return targetPath;
+}
+
 export class UnifiedDatabase {
   public readonly raw: sqlite3.Database;
   public readonly dbPath: string;
@@ -72,14 +125,14 @@ export class UnifiedDatabase {
   }
 
   /**
-   * Creates an automatic timestamped backup of data/hkvm.db before running migrations.
+   * Creates an automatic timestamped backup of data/tgvpanel.db before running migrations.
    */
   public async createBackup(label = 'auto'): Promise<{ backupPath: string; sizeBytes: number }> {
     const dir = path.join(path.dirname(this.dbPath), 'backups');
     fs.mkdirSync(dir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const backupPath = path.join(dir, `hkvm_${safeLabel}_${ts}.db`);
+    const backupPath = path.join(dir, `tgvpanel_${safeLabel}_${ts}.db`);
 
     // Checkpoint WAL first so the copy is self-contained, then use VACUUM INTO if supported
     try {

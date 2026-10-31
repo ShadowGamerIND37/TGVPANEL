@@ -19,7 +19,11 @@ export interface ActiveConsoleSession {
   close: () => void;
 }
 
-const DEFAULT_LXC_BASE = process.env.HKVM_LXC_PATH || '/var/lib/lxc';
+const DEFAULT_LXC_BASE =
+  process.env.TGVPANEL_LXC_PATH ||
+  process.env.TGVPANEL_LXC_DIR ||
+  process.env.HKVM_LXC_PATH ||
+  '/var/lib/lxc';
 
 /**
  * Spawns a real interactive PTY attached to an LXC container (`lxc-attach -P <lxcBaseDir> -n <name> ...`)
