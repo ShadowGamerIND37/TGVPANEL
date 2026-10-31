@@ -135,7 +135,7 @@ export class NodeManager {
     node: NodeRecord;
     bootstrapCredentials: { apiKey: string; hmacSecret: string };
   }> {
-    const keyPair = generateApiKeyPair('hkvm_node');
+    const keyPair = generateApiKeyPair('tgv_node');
     const hmacSecret = crypto.randomBytes(32).toString('hex');
 
     let createdId = 0;
@@ -282,7 +282,7 @@ export class NodeManager {
     const node = await this.getNodeById(nodeId);
     if (!node) throw new Error(`Node #${nodeId} not found.`);
 
-    const newPair = generateApiKeyPair('hkvm_node');
+    const newPair = generateApiKeyPair('tgv_node');
     const newHmac = crypto.randomBytes(32).toString('hex');
     let pushedToAgent = false;
 

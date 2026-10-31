@@ -144,6 +144,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$APP_DIR
+EnvironmentFile=-$APP_DIR/.env
 Environment=NODE_ENV=production
 Environment=PORT=$PANEL_PORT
 ExecStart=$(command -v node) $APP_DIR/app.js
@@ -165,8 +166,9 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$APP_DIR
+EnvironmentFile=-$APP_DIR/.env
 Environment=NODE_ENV=production
-Environment=AGENT_PORT=$AGENT_PORT
+Environment=TGVPANEL_AGENT_PORT=$AGENT_PORT
 ExecStart=$(command -v node) $APP_DIR/lib/node-agent/agent.js
 Restart=always
 RestartSec=5
@@ -179,8 +181,18 @@ EOF
 
   if [[ "$UNIT_DIR" == "/etc/systemd/system" ]]; then
     systemctl daemon-reload
-    [[ "$role" != "agent" ]] && systemctl enable --now tgvpanel.service
-    [[ "$role" == "agent" ]] && systemctl enable --now tgvpanel-node-agent.service
+    if [[ "$role" != "agent" ]]; then
+      systemctl enable --now tgvpanel.service
+    else
+      systemctl enable tgvpanel-node-agent.service
+      if [[ -f "$APP_DIR/.env" ]] && grep -qE '^TGVPANEL_NODE_API_KEY=.+' "$APP_DIR/.env"; then
+        systemctl restart tgvpanel-node-agent.service
+        ok "Started tgvpanel-node-agent.service on port $AGENT_PORT"
+      else
+        warn "tgvpanel-node-agent.service enabled. Paste TGVPANEL_NODE_API_KEY & TGVPANEL_NODE_HMAC_SECRET into $APP_DIR/.env, then run:"
+        warn "  sudo systemctl restart tgvpanel-node-agent.service"
+      fi
+    fi
   fi
 }
 

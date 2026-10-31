@@ -1027,8 +1027,12 @@
           <div class="v3-field"><label>Node Name</label><input id="nName" required placeholder="eu-fra-node-02"></div>
           <div class="v3-field"><label>Hostname</label><input id="nHost" required placeholder="fra02.example.com"></div>
           <div class="v3-field"><label>IPv4 Address</label><input id="nIp" required placeholder="203.0.113.10"></div>
-          <div class="v3-field"><label>Agent HTTPS URL</label><input id="nUrl" required placeholder="https://203.0.113.10:5055"></div>
+          <div class="v3-field"><label>Agent URL (HTTPS or private HTTP)</label><input id="nUrl" required placeholder="https://203.0.113.10:8443"></div>
           <div class="v3-field"><label>Location</label><input id="nLoc" value="Frankfurt, DE"></div>
+          <div class="v3-field" style="display:flex;align-items:center;gap:8px;padding-top:20px;">
+            <input type="checkbox" id="nVerifySsl" checked style="width:auto;margin:0;">
+            <label for="nVerifySsl" style="margin:0;cursor:pointer;font-size:12px;">Verify TLS Cert (uncheck for self-signed)</label>
+          </div>
           <div class="v3-field" style="display:flex;align-items:flex-end;"><button type="submit" class="btn btn-primary" style="width:100%;">Register Node</button></div>
         </form>
         <div id="nodeCredsOutput" class="v3-code" style="display:none;margin-top:12px;"></div>
@@ -2220,14 +2224,22 @@ async function submitAddNode(e) {
         hostname: document.getElementById('nHost').value,
         ipAddress: document.getElementById('nIp').value,
         url: document.getElementById('nUrl').value,
-        location: document.getElementById('nLoc').value
+        location: document.getElementById('nLoc').value,
+        verifySsl: document.getElementById('nVerifySsl') ? document.getElementById('nVerifySsl').checked : true
       }
     });
+    let parsedPort = '8443';
+    try {
+      const u = new URL(document.getElementById('nUrl').value);
+      parsedPort = u.port || (u.protocol === 'https:' ? '443' : '80');
+    } catch (_e) {}
     const box = document.getElementById('nodeCredsOutput');
     box.style.display = 'block';
     box.textContent =
-      'Remote Node Bootstrap Credentials (save in remote node .env):\n' +
+      '# Remote Node Bootstrap Credentials — paste into /opt/tgvpanel/.env on the remote node:\n' +
       'TGVPANEL_NODE_ID=' + out.node.id + '\n' +
+      'TGVPANEL_AGENT_HOST=0.0.0.0\n' +
+      'TGVPANEL_AGENT_PORT=' + parsedPort + '\n' +
       'TGVPANEL_NODE_API_KEY=' + out.bootstrapCredentials.apiKey + '\n' +
       'TGVPANEL_NODE_HMAC_SECRET=' + out.bootstrapCredentials.hmacSecret;
     loadNodes();

@@ -7,9 +7,10 @@ export interface AgentCredentialConfig {
     requireMtls: boolean;
     allowedControllerIps?: string[];
     credentialsFilePath?: string;
+    loadPersistedCredentials?: boolean;
 }
 /**
- * Replay-protection nonce cache + HMAC/API-Key/mTLS authenticator for the HKVM Node Agent.
+ * Replay-protection nonce cache + HMAC/API-Key/mTLS authenticator for the TGVPANEL Node Agent.
  */
 export declare class NodeAgentAuthenticator {
     private config;
