@@ -18,7 +18,10 @@ export function createUnifiedWebRouter(
   router.use(async (_req: Request, res: Response, next) => {
     res.locals.panelVersion = process.env.PANEL_VERSION || 'V3.0';
     res.locals.siteLogo = res.locals.siteLogo || '/images/logo.png';
-    res.locals.siteName = res.locals.siteName || 'HKVM';
+    res.locals.siteName =
+      res.locals.siteName && !/^hkvm(\s+panel)?(\s+v[\d.]+)?$/i.test(String(res.locals.siteName).trim())
+        ? res.locals.siteName
+        : 'TGVPANEL';
     try {
       const logoRow = await ctx.db.get<{ setting_value: string }>(
         `SELECT setting_value FROM settings WHERE setting_key = 'site_logo'`
@@ -27,7 +30,12 @@ export function createUnifiedWebRouter(
       const nameRow = await ctx.db.get<{ setting_value: string }>(
         `SELECT setting_value FROM settings WHERE setting_key = 'site_name'`
       );
-      if (nameRow?.setting_value) res.locals.siteName = nameRow.setting_value;
+      if (nameRow?.setting_value) {
+        const dbSiteName = String(nameRow.setting_value).trim();
+        res.locals.siteName = /^hkvm(\s+panel)?(\s+v[\d.]+)?$/i.test(dbSiteName)
+          ? 'TGVPANEL'
+          : nameRow.setting_value;
+      }
     } catch {
       // fallback defaults
     }
@@ -41,7 +49,7 @@ export function createUnifiedWebRouter(
       return res.redirect('/login');
     }
     return res.render('users/login-2fa', {
-      title: 'Two-Factor Verification - HKVM',
+      title: 'Two-Factor Verification - TGVPANEL',
       username: sess.pending2faUser.username,
     });
   });
@@ -171,7 +179,7 @@ export function createUnifiedWebRouter(
   router.get('/admin/instances', ...adminStaffGuard, async (req: Request, res: Response) => {
     const nodes = await ctx.nodeManager.listNodes();
     res.render('admin/unified-page', {
-      title: 'Unified Instances - HKVM',
+      title: 'Unified Instances - TGVPANEL',
       currentPage: 'instances',
       section: 'instances',
       user: res.locals.user || (req as any).session?.user,
@@ -186,7 +194,7 @@ export function createUnifiedWebRouter(
       ctx.db.all<any>(`SELECT id, username, role FROM users ORDER BY username ASC`),
     ]);
     res.render('admin/unified-page', {
-      title: 'LXC Containers - HKVM',
+      title: 'LXC Containers - TGVPANEL',
       currentPage: 'lxc',
       section: 'lxc',
       user: res.locals.user || (req as any).session?.user,
@@ -209,7 +217,7 @@ export function createUnifiedWebRouter(
         ctx.networkManager.listNetworkPools().catch(() => []),
       ]);
       res.render('admin/unified-page', {
-        title: 'Deploy LXC Container - HKVM',
+        title: 'Deploy LXC Container - TGVPANEL',
         currentPage: 'instances-create',
         section: 'instances-create',
         user: res.locals.user || (req as any).session?.user,
@@ -225,7 +233,7 @@ export function createUnifiedWebRouter(
   router.get('/admin/nodes', ...adminStaffGuard, async (req: Request, res: Response) => {
     const health = await getNodeHealthReport();
     res.render('admin/unified-page', {
-      title: 'Nodes Management - HKVM',
+      title: 'Nodes Management - TGVPANEL',
       currentPage: 'nodes',
       section: 'nodes',
       user: res.locals.user || (req as any).session?.user,
@@ -236,7 +244,7 @@ export function createUnifiedWebRouter(
   router.get('/admin/storage', ...adminStaffGuard, async (req: Request, res: Response) => {
     const nodes = await ctx.nodeManager.listNodes();
     res.render('admin/unified-page', {
-      title: 'Storage Pools & Volumes - HKVM',
+      title: 'Storage Pools & Volumes - TGVPANEL',
       currentPage: 'storage',
       section: 'storage',
       user: res.locals.user || (req as any).session?.user,
@@ -246,7 +254,7 @@ export function createUnifiedWebRouter(
 
   router.get('/admin/isos', ...adminStaffGuard, async (req: Request, res: Response) => {
     res.render('admin/unified-page', {
-      title: 'ISO Library - HKVM',
+      title: 'ISO Library - TGVPANEL',
       currentPage: 'isos',
       section: 'isos',
       user: res.locals.user || (req as any).session?.user,
@@ -255,7 +263,7 @@ export function createUnifiedWebRouter(
 
   router.get('/admin/lxc-templates', ...adminStaffGuard, async (req: Request, res: Response) => {
     res.render('admin/unified-page', {
-      title: 'LXC OS Templates - HKVM',
+      title: 'LXC OS Templates - TGVPANEL',
       currentPage: 'lxc-templates',
       section: 'lxc-templates',
       user: res.locals.user || (req as any).session?.user,
@@ -265,7 +273,7 @@ export function createUnifiedWebRouter(
   router.get('/admin/networking', ...adminStaffGuard, async (req: Request, res: Response) => {
     const nodes = await ctx.nodeManager.listNodes();
     res.render('admin/unified-page', {
-      title: 'Networking & IP Pools - HKVM',
+      title: 'Networking & IP Pools - TGVPANEL',
       currentPage: 'networking',
       section: 'networking',
       user: res.locals.user || (req as any).session?.user,
@@ -279,7 +287,7 @@ export function createUnifiedWebRouter(
        FROM users u LEFT JOIN port_allocations p ON p.user_id = u.id ORDER BY u.id ASC`
     );
     res.render('admin/unified-page', {
-      title: 'Port Forwarding & Quotas - HKVM',
+      title: 'Port Forwarding & Quotas - TGVPANEL',
       currentPage: 'ports',
       section: 'ports',
       user: res.locals.user || (req as any).session?.user,
@@ -290,7 +298,7 @@ export function createUnifiedWebRouter(
   router.get('/admin/firewall', ...adminStaffGuard, async (req: Request, res: Response) => {
     const nodes = await ctx.nodeManager.listNodes();
     res.render('admin/unified-page', {
-      title: 'Firewall Rules - HKVM',
+      title: 'Firewall Rules - TGVPANEL',
       currentPage: 'firewall',
       section: 'firewall',
       user: res.locals.user || (req as any).session?.user,
@@ -300,7 +308,7 @@ export function createUnifiedWebRouter(
 
   router.get('/admin/snapshots', ...adminStaffGuard, async (req: Request, res: Response) => {
     res.render('admin/unified-page', {
-      title: 'Unified Snapshots - HKVM',
+      title: 'Unified Snapshots - TGVPANEL',
       currentPage: 'snapshots',
       section: 'snapshots',
       user: res.locals.user || (req as any).session?.user,
@@ -309,7 +317,7 @@ export function createUnifiedWebRouter(
 
   router.get('/admin/backups', ...adminStaffGuard, async (req: Request, res: Response) => {
     res.render('admin/unified-page', {
-      title: 'Backups & Integrity - HKVM',
+      title: 'Backups & Integrity - TGVPANEL',
       currentPage: 'backups',
       section: 'backups',
       user: res.locals.user || (req as any).session?.user,
@@ -319,7 +327,7 @@ export function createUnifiedWebRouter(
   router.get('/admin/migrations', ...adminStaffGuard, async (req: Request, res: Response) => {
     const nodes = await ctx.nodeManager.listNodes();
     res.render('admin/unified-page', {
-      title: 'VPS Migrations (Offline Verified) - HKVM',
+      title: 'VPS Migrations (Offline Verified) - TGVPANEL',
       currentPage: 'migrations',
       section: 'migrations',
       user: res.locals.user || (req as any).session?.user,
@@ -330,7 +338,7 @@ export function createUnifiedWebRouter(
   router.get('/admin/monitoring', ...adminStaffGuard, async (req: Request, res: Response) => {
     const nodes = await ctx.nodeManager.listNodes();
     res.render('admin/unified-page', {
-      title: 'Live & Historical Monitoring - HKVM',
+      title: 'Live & Historical Monitoring - TGVPANEL',
       currentPage: 'monitoring',
       section: 'monitoring',
       user: res.locals.user || (req as any).session?.user,
@@ -344,7 +352,7 @@ export function createUnifiedWebRouter(
     requireRole(['admin']),
     async (req: Request, res: Response) => {
       res.render('admin/unified-page', {
-        title: 'API Keys & Webhooks - HKVM',
+        title: 'API Keys & Webhooks - TGVPANEL',
         currentPage: 'api-keys',
         section: 'api-keys',
         user: res.locals.user || (req as any).session?.user,
@@ -358,7 +366,7 @@ export function createUnifiedWebRouter(
     requireRole(['admin', 'subadmin']),
     async (req: Request, res: Response) => {
       res.render('admin/unified-page', {
-        title: 'Security & Activity Audit Logs - HKVM',
+        title: 'Security & Activity Audit Logs - TGVPANEL',
         currentPage: 'audit-logs',
         section: 'audit-logs',
         user: res.locals.user || (req as any).session?.user,
@@ -373,7 +381,7 @@ export function createUnifiedWebRouter(
     async (req: Request, res: Response) => {
       const nodes = await ctx.nodeManager.listNodes();
       res.render('admin/unified-page', {
-        title: 'Node Diagnostic & Host Console - HKVM',
+        title: 'Node Diagnostic & Host Console - TGVPANEL',
         currentPage: 'node-console',
         section: 'node-console',
         user: res.locals.user || (req as any).session?.user,
@@ -389,11 +397,11 @@ export function createUnifiedWebRouter(
     requireRole(['admin']),
     async (req: Request, res: Response) => {
       res.render('admin/unified-page', {
-        title: 'Edition & License Status - HKVM',
+        title: 'Edition & License Status - TGVPANEL',
         currentPage: 'license',
         section: 'license',
         user: res.locals.user || (req as any).session?.user,
-        licenseInfo: getLicenseSummary ? getLicenseSummary() : { edition: 'HKVM V3 Free Unified Edition', valid: true },
+        licenseInfo: getLicenseSummary ? getLicenseSummary() : { edition: 'TGVPANEL V3 Free Unified Edition', valid: true },
       });
     }
   );
@@ -401,7 +409,7 @@ export function createUnifiedWebRouter(
   // --- Unified User Panel Pages (Part 18) ---
   router.get('/instances', requirePrincipal, async (req: Request, res: Response) => {
     res.render('users/unified-user-page', {
-      title: 'My Instances (KVM & LXC) - HKVM',
+      title: 'My Instances (KVM & LXC) - TGVPANEL',
       currentPage: 'instances',
       section: 'instances',
       defaultEngine: '',
@@ -411,7 +419,7 @@ export function createUnifiedWebRouter(
 
   router.get('/lxc', requirePrincipal, async (req: Request, res: Response) => {
     res.render('users/unified-user-page', {
-      title: 'My LXC Containers - HKVM',
+      title: 'My LXC Containers - TGVPANEL',
       currentPage: 'lxc',
       section: 'instances',
       defaultEngine: 'lxc',
@@ -421,7 +429,7 @@ export function createUnifiedWebRouter(
 
   router.get('/ports', requirePrincipal, async (req: Request, res: Response) => {
     res.render('users/unified-user-page', {
-      title: 'NAT Port Forwarding - HKVM',
+      title: 'NAT Port Forwarding - TGVPANEL',
       currentPage: 'ports',
       section: 'ports',
       user: res.locals.user || (req as any).session?.user,
@@ -434,7 +442,7 @@ export function createUnifiedWebRouter(
       [req.principal!.userId]
     );
     res.render('users/unified-user-page', {
-      title: 'Security, 2FA & API Keys - HKVM',
+      title: 'Security, 2FA & API Keys - TGVPANEL',
       currentPage: 'security',
       section: 'security',
       user: res.locals.user || (req as any).session?.user,
@@ -476,7 +484,7 @@ export function createUnifiedWebRouter(
           }
         : null;
       return res.render('users/lxc-detail', {
-        title: `${instance.name} (LXC VPS) - HKVM`,
+        title: `${instance.name} (LXC VPS) - TGVPANEL`,
         currentPage: 'instances',
         user: res.locals.user || (req as any).session?.user,
         instance,
@@ -501,7 +509,7 @@ export function createUnifiedWebRouter(
         lxcId
       );
       return res.render('users/lxc-console', {
-        title: `Console: ${instance.name} - HKVM`,
+        title: `Console: ${instance.name} - TGVPANEL`,
         currentPage: 'instances',
         user: res.locals.user || (req as any).session?.user,
         instance,

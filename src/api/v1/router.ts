@@ -56,7 +56,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.get('/health', async (_req: Request, res: Response) => {
     const report = await getNodeHealthReport();
     res.json({
-      panel: 'HKVM',
+      panel: 'TGVPANEL',
       version: '3.0.0',
       status: report.status,
       capabilities: report.capabilities,
@@ -171,7 +171,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.post('/auth/2fa/setup', async (req: Request, res: Response) => {
     try {
       const secret = generateTotpSecret();
-      const qr = await generateTotpQrDataUrl(req.principal!.username, secret, 'HKVM');
+      const qr = await generateTotpQrDataUrl(req.principal!.username, secret, 'TGVPANEL');
       await ctx.db.run(`UPDATE users SET two_factor_secret_enc = ? WHERE id = ?`, [
         encryptSecret(secret),
         req.principal!.userId,

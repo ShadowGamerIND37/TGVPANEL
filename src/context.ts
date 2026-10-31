@@ -110,7 +110,7 @@ export async function initializeUnifiedHkvmRuntime(
 
 export function getHkvmRuntimeContext(): HkvmRuntimeContext {
   if (!activeContext) {
-    throw new Error('HKVM Unified Runtime has not been initialized.');
+    throw new Error('TGVPANEL Unified Runtime has not been initialized.');
   }
   return activeContext;
 }

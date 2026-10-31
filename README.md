@@ -1,6 +1,6 @@
 <div align="center">
 
-# HKVM V3
+# TGVPANEL
 
 **Unified virtualization control panel for QEMU/KVM virtual machines and LXC containers**
 
@@ -24,7 +24,7 @@ Multi-node · Secure by default · Pure Node.js + TypeScript
 
 ## Overview
 
-HKVM V3 is a single platform for managing both virtual machines and containers, with multi-node support built in.
+TGVPANEL is a single platform for managing both virtual machines and containers, with multi-node support built in.
 
 - **One panel, two hypervisors.** KVM and LXC instances share the same UI, API, storage, networking, backup and monitoring layers.
 - **Multi-node.** Manage remote compute nodes through a standalone agent with HMAC-signed requests and optional mutual TLS.
@@ -156,7 +156,7 @@ Then add the node under **Admin → Nodes**. API keys can be rotated there witho
 
 ## VPS migration model
 
-HKVM V3 uses **offline verified snapshot-transfer migration** (`strategy = 'offline_snapshot_transfer'`):
+TGVPANEL uses **offline verified snapshot-transfer migration** (`strategy = 'offline_snapshot_transfer'`):
 
 ```mermaid
 flowchart LR

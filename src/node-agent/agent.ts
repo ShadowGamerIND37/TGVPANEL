@@ -78,7 +78,7 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
 
   if (!rawApiKey || !hmacSecret) {
     throw new Error(
-      'HKVM Node Agent requires HKVM_NODE_API_KEY and HKVM_NODE_HMAC_SECRET to start securely.'
+      'TGVPANEL Node Agent requires HKVM_NODE_API_KEY and HKVM_NODE_HMAC_SECRET to start securely.'
     );
   }
 
@@ -512,7 +512,7 @@ if (require.main === module) {
   const instance = createNodeAgentServer();
   instance.server.listen(instance.port, instance.host, () => {
     console.log(
-      `[HKVM Node Agent v3.0.0] Listening on ${instance.host}:${instance.port}`
+      `[TGVPANEL Node Agent v3.0.0] Listening on ${instance.host}:${instance.port}`
     );
   });
 }

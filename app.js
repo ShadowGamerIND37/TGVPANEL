@@ -373,7 +373,7 @@ app.use((req, res, next) => {
 });
 app.use('/api/v1', verifyCsrfMiddleware, (req, res, next) => {
   if (v3ApiRouter) return v3ApiRouter(req, res, next);
-  res.status(503).json({ error: 'HKVM V3 runtime is initializing' });
+  res.status(503).json({ error: 'TGVPANEL runtime is initializing' });
 });
 app.use((req, res, next) => {
   if (v3WebRouter) return v3WebRouter(req, res, next);
@@ -580,7 +580,7 @@ function initializeDatabase() {
 
     // Initialize default site settings if not exist
     const defaultSettings = {
-      'site_name': 'HKVM',
+      'site_name': 'TGVPANEL',
       'site_description': 'Virtual Machine Management System',
       'site_icon_url': '/images/logo.png',
     };
@@ -1507,7 +1507,10 @@ app.use((req, res, next) => {
   
   // Set default logo and site name
   res.locals.siteLogo = process.env.DEFAULT_LOGO_URL || '/images/logo.png';
-  res.locals.siteName = process.env.PANEL_NAME || 'HKVM';
+  res.locals.siteName =
+    process.env.PANEL_NAME && !/^hkvm(\s+panel)?$/i.test(process.env.PANEL_NAME.trim())
+      ? process.env.PANEL_NAME
+      : 'TGVPANEL';
   
   // Load site settings from database (blocking, so sidebar reflects changes immediately)
   db.get(`SELECT setting_value FROM settings WHERE setting_key = 'site_icon_url' LIMIT 1`, (err, row) => {
@@ -1516,7 +1519,10 @@ app.use((req, res, next) => {
     }
     db.get(`SELECT setting_value FROM settings WHERE setting_key = 'site_name' LIMIT 1`, (err2, row2) => {
       if (!err2 && row2 && row2.setting_value) {
-        res.locals.siteName = row2.setting_value;
+        const dbSiteName = String(row2.setting_value).trim();
+        res.locals.siteName = /^hkvm(\s+panel)?(\s+v[\d.]+)?$/i.test(dbSiteName)
+          ? 'TGVPANEL'
+          : row2.setting_value;
       }
       next();
     });
@@ -1532,10 +1538,10 @@ app.get('/login', (req, res) => {
     return res.redirect('/dashboard');
   }
   res.render('users/login', { 
-    title: 'Login - HKVM Panel',
+    title: 'Login - TGVPANEL',
     currentPage: 'login',
     siteLogo: res.locals.siteLogo || process.env.DEFAULT_LOGO_URL || '/images/logo.png',
-    siteName: res.locals.siteName || process.env.PANEL_NAME || 'HKVM'
+    siteName: res.locals.siteName || 'TGVPANEL'
   });
 });
 
@@ -1555,7 +1561,7 @@ app.post('/api/license/activate', (req, res) => {
 app.get('/dashboard', checkAuth, (req, res) => {
   // Show user dashboard (works for both regular users and admins)
   res.render('users/dashboard', {
-    title: 'My VMs - HKVM Panel',
+    title: 'My VMs - TGVPANEL',
     currentPage: 'dashboard',
     user: {
       username: req.session.username,
@@ -1566,7 +1572,7 @@ app.get('/dashboard', checkAuth, (req, res) => {
 // Admin Dashboard - Admin only
 app.get('/admin/dashboard', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/dashboard', {
-    title: 'Dashboard - HKVM Panel',
+    title: 'Dashboard - TGVPANEL',
     currentPage: 'dashboard',
     user: {
       username: req.session.username,
@@ -1578,7 +1584,7 @@ app.get('/admin/dashboard', checkAuth, checkAdmin, (req, res) => {
 // Virtual Machines list (Admin only)
 app.get('/admin/vms', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/vms', {
-    title: 'Virtual Machines - HKVM Panel',
+    title: 'Virtual Machines - TGVPANEL',
     currentPage: 'vms'
   });
 });
@@ -1586,7 +1592,7 @@ app.get('/admin/vms', checkAuth, checkAdmin, (req, res) => {
 // Create VM (Admin only)
 app.get('/admin/vm-create', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/vm-create', {
-    title: 'Create Virtual Machine - HKVM Panel',
+    title: 'Create Virtual Machine - TGVPANEL',
     currentPage: 'vm-create',
     user: {
       username: req.session.username,
@@ -1598,7 +1604,7 @@ app.get('/admin/vm-create', checkAuth, checkAdmin, (req, res) => {
 // VM Details (Admin only)
 app.get('/admin/vm/:id', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/vm-detail', {
-    title: 'VM Details - HKVM Panel',
+    title: 'VM Details - TGVPANEL',
     currentPage: 'vm-detail',
     vmId: req.params.id
   });
@@ -1607,7 +1613,7 @@ app.get('/admin/vm/:id', checkAuth, checkAdmin, (req, res) => {
 // VM Console (Admin only)
 app.get('/admin/vm/:id/console', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/vm-console', {
-    title: 'VM Console - HKVM Panel',
+    title: 'VM Console - TGVPANEL',
     currentPage: 'vm-console',
     vmId: req.params.id
   });
@@ -1619,7 +1625,7 @@ app.get('/admin/vm/:id/edit', checkAuth, checkAdmin, (req, res) => {
     if (err || !vm) return res.status(404).render('users/404', { message: 'VM not found' });
     
     res.render('admin/vm-edit', {
-      title: 'Edit VM - HKVM Panel',
+      title: 'Edit VM - TGVPANEL',
       currentPage: 'vm-edit',
       vmId: req.params.id,
       vm: vm
@@ -1630,7 +1636,7 @@ app.get('/admin/vm/:id/edit', checkAuth, checkAdmin, (req, res) => {
 // Users management (admin only)
 app.get('/admin/users', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/users', {
-    title: 'Users - HKVM Panel',
+    title: 'Users - TGVPANEL',
     currentPage: 'users'
   });
 });
@@ -1638,7 +1644,7 @@ app.get('/admin/users', checkAuth, checkAdmin, (req, res) => {
 // Create new user page (admin only)
 app.get('/admin/users/create', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/users-create', {
-    title: 'Create User - HKVM Panel',
+    title: 'Create User - TGVPANEL',
     currentPage: 'users'
   });
 });
@@ -1651,7 +1657,7 @@ app.get('/admin/users/:id/edit', checkAuth, checkAdmin, (req, res) => {
   }
   
   res.render('admin/users-edit', {
-    title: 'Edit User - HKVM Panel',
+    title: 'Edit User - TGVPANEL',
     currentPage: 'users',
     userId: userId
   });
@@ -1660,7 +1666,7 @@ app.get('/admin/users/:id/edit', checkAuth, checkAdmin, (req, res) => {
 // Settings (admin only)
 app.get('/admin/settings', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/settings', {
-    title: 'Settings - HKVM Panel',
+    title: 'Settings - TGVPANEL',
     currentPage: 'settings'
   });
 });
@@ -1668,7 +1674,7 @@ app.get('/admin/settings', checkAuth, checkAdmin, (req, res) => {
 // OS Templates Management (admin only)
 app.get('/admin/templates', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/templates', {
-    title: 'OS Templates - HKVM Panel',
+    title: 'OS Templates - TGVPANEL',
     currentPage: 'templates'
   });
 });
@@ -1676,7 +1682,7 @@ app.get('/admin/templates', checkAuth, checkAdmin, (req, res) => {
 // Add OS Template (admin only)
 app.get('/admin/templates/add', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/templates-add', {
-    title: 'Add OS Template - HKVM Panel',
+    title: 'Add OS Template - TGVPANEL',
     currentPage: 'templates'
   });
 });
@@ -1712,7 +1718,7 @@ app.get('/admin/templates/builtin/:key/edit', checkAuth, checkAdmin, (req, res) 
   };
   
   res.render('admin/templates-edit', {
-    title: `View ${template.name} - HKVM Panel`,
+    title: `View ${template.name} - TGVPANEL`,
     currentPage: 'templates',
     siteLogo: res.locals.siteLogo || '/images/logo.png',
     templateKey: templateKey,
@@ -1726,7 +1732,7 @@ app.get('/admin/templates/builtin/:key/edit', checkAuth, checkAdmin, (req, res) 
 // User VMs list
 app.get('/vms', checkAuth, (req, res) => {
   res.render('users/vms', {
-    title: 'My Virtual Machines - HKVM Panel',
+    title: 'My Virtual Machines - TGVPANEL',
     currentPage: 'vms',
     user: {
       username: req.session.username,
@@ -1738,7 +1744,7 @@ app.get('/vms', checkAuth, (req, res) => {
 // User VM detail page
 app.get('/vm/:id', checkAuth, (req, res) => {
   res.render('users/vm-detail', {
-    title: 'VM Details - HKVM Panel',
+    title: 'VM Details - TGVPANEL',
     currentPage: 'vm-detail',
     vmId: req.params.id,
     userId: req.session.userId,
@@ -1752,7 +1758,7 @@ app.get('/vm/:id', checkAuth, (req, res) => {
 // User VM console page
 app.get('/vm/:id/console', checkAuth, (req, res) => {
   res.render('users/vm-console', {
-    title: 'VM Console - HKVM Panel',
+    title: 'VM Console - TGVPANEL',
     currentPage: 'vm-console',
     vmId: req.params.id,
     userId: req.session.userId,
@@ -1766,7 +1772,7 @@ app.get('/vm/:id/console', checkAuth, (req, res) => {
 // User VM SSH connection page
 app.get('/vm/:id/ssh', checkAuth, (req, res) => {
   res.render('users/vm-ssh', {
-    title: 'SSH Connection - HKVM Panel',
+    title: 'SSH Connection - TGVPANEL',
     currentPage: 'vm-ssh',
     vmId: req.params.id,
     userId: req.session.userId,
@@ -1780,7 +1786,7 @@ app.get('/vm/:id/ssh', checkAuth, (req, res) => {
 // Admin VM SSH connection page
 app.get('/admin/vm/:id/ssh', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/vm-ssh', {
-    title: 'SSH Connection - HKVM Admin Panel',
+    title: 'SSH Connection - TGVPANEL Admin',
     currentPage: 'vm-ssh',
     vmId: req.params.id,
     userId: req.session.userId,
@@ -1794,7 +1800,7 @@ app.get('/admin/vm/:id/ssh', checkAuth, checkAdmin, (req, res) => {
 // User profile page
 app.get('/profile', checkAuth, (req, res) => {
   res.render('users/profile', {
-    title: 'My Profile - HKVM Panel',
+    title: 'My Profile - TGVPANEL',
     currentPage: 'profile',
     user: {
       username: req.session.username,
@@ -3407,7 +3413,7 @@ app.post('/api/vms/:vm_id/snapshots', checkAuth, async (req, res) => {
   
   db.get(query, params, async (err, vm) => {
     if (err || !vm) return res.status(404).json({ error: 'VM not found or access denied' });
-    if (!hkvmV3Context) return res.status(503).json({ error: 'HKVM V3 runtime initializing' });
+    if (!hkvmV3Context) return res.status(503).json({ error: 'TGVPANEL runtime initializing' });
     try {
       const snap = await hkvmV3Context.kvmAdapter.createQcow2Snapshot(
         Number(req.params.vm_id),
@@ -3558,7 +3564,7 @@ async function downloadTemplate(sourceOrKey, targetPath) {
 function generateNATCloudInitConfig(vm) {
   const username = vm.username || 'root';
   const password = vm.password || 'password';
-  const hostname = vm.hostname || 'hkvm-instance';
+  const hostname = vm.hostname || 'tgvpanel-instance';
 
   // Build users section - support root and custom users
   let usersSection = `users:`;
@@ -3651,7 +3657,7 @@ final_message: |
 function generateStaticPublicIPv4CloudInitConfig(vm) {
   const username = vm.username || 'root';
   const password = vm.password || 'password';
-  const hostname = vm.hostname || 'hkvm-instance';
+  const hostname = vm.hostname || 'tgvpanel-instance';
   const ipv4_address = vm.ipv4_address || '10.0.0.100';
   const gateway = vm.gateway || vm.ipv4_gateway || '10.0.0.1';
   const netmask = vm.netmask || vm.ipv4_netmask || 24;
@@ -4328,9 +4334,10 @@ app.get('/api/settings', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     
     const settings = {
-      panel_version: 'V2.0',
-      panel_title: 'HKVM Panel V2.0',
+      panel_version: 'V3.0',
+      panel_title: 'TGVPANEL V3.0',
       panel_description: 'Professional VM Management Panel',
+      site_name: 'TGVPANEL',
       site_icon_url: '/images/logo.png',
       session_timeout: 24,
       max_sessions: 10
@@ -4339,7 +4346,19 @@ app.get('/api/settings', (req, res) => {
     // Override with DB values
     if (rows && rows.length > 0) {
       rows.forEach(row => {
-        settings[row.setting_key] = row.setting_value;
+        if (
+          row.setting_key === 'site_name' &&
+          /^hkvm(\s+panel)?(\s+v[\d.]+)?$/i.test(String(row.setting_value || '').trim())
+        ) {
+          settings[row.setting_key] = 'TGVPANEL';
+        } else if (
+          row.setting_key === 'panel_title' &&
+          /^hkvm(\s+panel)?(\s+v[\d.]+)?$/i.test(String(row.setting_value || '').trim())
+        ) {
+          settings[row.setting_key] = 'TGVPANEL V3.0';
+        } else {
+          settings[row.setting_key] = row.setting_value;
+        }
       });
     }
 
@@ -4707,7 +4726,7 @@ app.post('/api/ssh/command', checkAuth, (req, res) => {
 // ============= 404 HANDLER =============
 app.use((req, res) => {
   res.status(404).render('users/404', {
-    title: 'Page Not Found - HKVM Panel',
+    title: 'Page Not Found - TGVPANEL',
     message: 'Page not found'
   });
 });
@@ -5141,7 +5160,7 @@ const hkvmReadyPromise = bootstrapHkvmV3()
 
         console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║         HKVM UNIFIED VIRTUALIZATION PANEL V3.0             ║
+║         TGVPANEL UNIFIED VIRTUALIZATION PANEL V3.0         ║
 ║       QEMU/KVM Virtual Machines + LXC Containers           ║
 ╚════════════════════════════════════════════════════════════╝
 
@@ -5153,7 +5172,7 @@ const hkvmReadyPromise = bootstrapHkvmV3()
     }
   })
   .catch((err) => {
-    console.error('[HKVM V3 Bootstrap Fatal Error]:', err);
+    console.error('[TGVPANEL Bootstrap Fatal Error]:', err);
     process.exit(1);
   });
 

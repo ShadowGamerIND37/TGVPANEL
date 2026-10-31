@@ -1021,11 +1021,11 @@
             <div class="lxc-card-head">
               <div>
                 <h3 class="lxc-card-title"><svg width="16" height="16"><use href="#lx-users"/></svg> Co-Owner &amp; Team Access Sharing</h3>
-                <p class="lxc-card-sub">Grant other HKVM user accounts permission to view telemetry, open the PTY console, and control power state.</p>
+                <p class="lxc-card-sub">Grant other TGVPANEL user accounts permission to view telemetry, open the PTY console, and control power state.</p>
               </div>
             </div>
             <div class="lxc-field" style="max-width:520px;margin-bottom:12px;">
-              <label>Authorized HKVM User IDs (comma-separated)</label>
+              <label>Authorized TGVPANEL User IDs (comma-separated)</label>
               <input id="shareIdsInput" value="<%= (instance.sharedWith || []).join(', ') %>" placeholder="e.g. 2, 5, 12">
             </div>
             <button type="button" class="btn btn-primary" onclick="saveSharing()">Save Sharing Permissions</button>

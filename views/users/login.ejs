@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <meta name="theme-color" content="#0a0a0f">
-  <title><%= title || 'Login - HKVM Panel' %></title>
+  <title><%= title || 'Login - TGVPANEL' %></title>
   <link rel="icon" href="<%= siteLogo %>" type="image/png">
   <link rel="stylesheet" href="/css/admin.css">
   <style>
@@ -263,7 +263,7 @@
         </div>
         <div class="login-logo-inside">
           <div class="login-logo-icon" style="display: flex; align-items: center; justify-content: center;">
-            <img src="<%= siteLogo %>" style="width: 48px; height: 48px; object-fit: contain; border-radius: 8px;" alt="HKVM Logo">
+            <img src="<%= siteLogo %>" style="width: 48px; height: 48px; object-fit: contain; border-radius: 8px;" alt="TGVPANEL Logo">
           </div>
         </div>
       </div>
@@ -476,7 +476,7 @@ async function loadLoginBranding() {
     const settings = await res.json();
     
     const siteIconUrl = settings['site_icon_url'] || '/images/logo.png';
-    const siteName = settings['site_name'] || 'HKVM Panel';
+    const siteName = settings['site_name'] || 'TGVPANEL';
     const siteDesc = settings['site_description'] || 'Professional VM Management Platform';
     
     const iconImg = document.getElementById('loginIconImg');
@@ -561,7 +561,7 @@ async function loadLoginBranding() {
     const settings = await res.json();
     
     const siteIconUrl = settings['site_icon_url'] || '/images/logo.png';
-    const siteName = settings['site_name'] || 'HKVM Panel';
+    const siteName = settings['site_name'] || 'TGVPANEL';
     const siteDesc = settings['site_description'] || 'Professional VM Management Platform';
     
     const iconImg = document.getElementById('loginIconImg');
