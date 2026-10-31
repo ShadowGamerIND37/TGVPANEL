@@ -432,6 +432,26 @@ export function resolveHostBaseCgroupV2Dir(proc1CgroupRaw?: string): string {
   return '/sys/fs/cgroup';
 }
 
+export function readCgroupV2Type(cgDir: string): string {
+  try {
+    const typeFile = path.join(cgDir, 'cgroup.type');
+    if (!fs.existsSync(typeFile)) {
+      // Physical root `/sys/fs/cgroup` has CFTYPE_NOT_ON_ROOT on `cgroup.type` and is always a mixable domain
+      return 'domain';
+    }
+    return fs.readFileSync(typeFile, 'utf8').trim() || 'domain';
+  } catch {
+    return 'domain';
+  }
+}
+
+export function isUsableDomainCgroupDir(cgDir: string): boolean {
+  if (!fs.existsSync(cgDir)) return false;
+  return readCgroupV2Type(cgDir) === 'domain';
+}
+
+const THREADED_CAPABLE_CONTROLLERS = new Set(['cpu', 'cpuset', 'pids', 'perf_event']);
+
 export function cleanupLegacyHostLeafCgroup(baseDir = resolveHostBaseCgroupV2Dir()): void {
   try {
     const legacyLeaf = path.join(baseDir, 'hkvm.host');
@@ -452,23 +472,41 @@ export function cleanupLegacyHostLeafCgroup(baseDir = resolveHostBaseCgroupV2Dir
         }
       }
     }
+    try {
+      privilegedFs.rmdirSync(legacyLeaf);
+    } catch {
+      // non-empty or busy
+    }
   } catch {
     // non-fatal
   }
 }
 
 /**
- * Ensures cgroup v2 `cpu`, `cpuset`, `memory`, and `pids` controllers are delegated in BOTH
- * `<baseCgroup>/cgroup.subtree_control` AND `<baseCgroup>/hkvm.lxc/cgroup.subtree_control`.
+ * Ensures all available cgroup v2 controllers (`cpuset`, `cpu`, `io`, `memory`, `hugetlb`, `pids`,
+ * `rdma`, `misc`, etc.) are delegated in BOTH `<baseCgroup>/cgroup.subtree_control` AND
+ * `<baseCgroup>/hkvm.lxc/cgroup.subtree_control`.
  *
- * CRITICAL (`liblxc` & `lxcfs` compatibility):
- * Both `liblxc` and `lxcfs` read `/proc/1/cgroup` and call `prune_init_scope()`, which ONLY strips
- * `/init.scope`! Therefore, when PID 1 sits directly in `/sys/fs/cgroup/cgroup.procs` on Docker /
- * GitHub Codespace kernels ("no internal processes" rule -> EBUSY), host processes MUST be evacuated
- * into `/sys/fs/cgroup/init.scope` (never `/hkvm.host`), and containers run under `/sys/fs/cgroup/hkvm.lxc`
- * which never contains internal processes of its own.
+ * CRITICAL LINUX KERNEL CGROUP V2 RULES (`kernel/cgroup/cgroup.c` & `liblxc` `cgfsng.c`):
+ * 1. Both `liblxc` and `lxcfs` read `/proc/1/cgroup` and call `prune_init_scope()`, which ONLY strips
+ *    `/init.scope`. Host processes in `<baseDir>/cgroup.procs` MUST be evacuated into `<baseDir>/init.scope`.
+ * 2. Inside a cgroup namespace (Docker, LXD, Codespaces, nested container hosts), `<baseDir>` is NOT
+ *    the kernel's global mixable root (`!cgroup_is_mixable(baseDir)`). Enabling threaded-capable
+ *    controllers (`+cpu`, `+cpuset`, `+pids`) while `<baseDir>/cgroup.procs` STILL contains tasks
+ *    immediately flips `<baseDir>/cgroup.type` to `"domain threaded"`, causing `<baseDir>/init.scope`,
+ *    `<baseDir>/hkvm.lxc`, and `lxc.monitor.<name>` to become `"domain invalid"` and fail with
+ *    `-EOPNOTSUPP` ("Operation not supported") in `__cgfsng_delegate_controllers` and `cgfsng_monitor_enter`!
+ * 3. Therefore:
+ *    - If `<baseDir>` is `"domain threaded"` (or a non-root cgroup holding tasks while controllers are
+ *      enabled), first disable controllers (`-<ctrl>`) on empty child cgroups and on `<baseDir>` so
+ *      `<baseDir>` returns to `"domain"` and `<baseDir>/init.scope` returns to `"domain"`.
+ *    - ALWAYS evacuate `<baseDir>/cgroup.procs` into `<baseDir>/init.scope/cgroup.procs` BEFORE enabling
+ *      any controller on `<baseDir>/cgroup.subtree_control`.
+ *    - Delegate ALL available controllers listed in `cgroup.controllers` (domain controllers first,
+ *      threaded-capable controllers second) on BOTH `<baseDir>` and `<baseDir>/hkvm.lxc`, matching
+ *      `liblxc`'s `__cgfsng_delegate_controllers()`.
  */
-export function ensureCgroupV2SubtreeDelegation(): void {
+export function ensureCgroupV2SubtreeDelegation(targetBaseDir?: string): void {
   try {
     if (
       !fs.existsSync('/sys/fs/cgroup/cgroup.controllers') ||
@@ -478,77 +516,179 @@ export function ensureCgroupV2SubtreeDelegation(): void {
     }
     if (!isRunningAsRoot() && !canPasswordlessSudo()) return;
 
-    const baseDir = resolveHostBaseCgroupV2Dir();
+    const baseDir = targetBaseDir || resolveHostBaseCgroupV2Dir();
     const controllersFile = path.join(baseDir, 'cgroup.controllers');
     const subtreeFile = path.join(baseDir, 'cgroup.subtree_control');
+    const procsFile = path.join(baseDir, 'cgroup.procs');
     if (!fs.existsSync(controllersFile) || !fs.existsSync(subtreeFile)) return;
 
-    // Migrate any processes (including PID 1) out of legacy `/hkvm.host` into `/init.scope` first
-    cleanupLegacyHostLeafCgroup(baseDir);
+    const readTokens = (file: string): string[] =>
+      fs.existsSync(file)
+        ? fs.readFileSync(file, 'utf8').trim().split(/\s+/).filter(Boolean)
+        : [];
+    const readPids = (file: string): string[] =>
+      readTokens(file).filter((p) => /^\d+$/.test(p) && p !== '0');
 
-    const availableControllers = new Set(
-      fs.readFileSync(controllersFile, 'utf8').trim().split(/\s+/).filter(Boolean)
-    );
-    const readDelegated = (file: string) =>
-      new Set(
-        (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '')
-          .trim()
-          .split(/\s+/)
-          .filter(Boolean)
-      );
+    const isNonPhysicalRoot = fs.existsSync(path.join(baseDir, 'cgroup.type'));
+    let baseType = readCgroupV2Type(baseDir);
+    let basePids = readPids(procsFile);
+    let activeBaseSubtree = readTokens(subtreeFile);
 
-    const desired = ['cpu', 'cpuset', 'memory', 'pids'].filter((c) => availableControllers.has(c));
-    const enableControllersOn = (targetSubtreeFile: string, ctrls: string[]) => {
-      for (const c of ctrls) {
+    // Step 1: Self-heal `"domain threaded"` state on `baseDir` so child cgroups exit `"domain invalid"`!
+    if (
+      baseType === 'domain threaded' ||
+      (isNonPhysicalRoot && basePids.length > 0 && activeBaseSubtree.length > 0)
+    ) {
+      try {
+        for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          const childDir = path.join(baseDir, entry.name);
+          // Prune any empty leftover monitor/payload/legacy directories under `hkvm.lxc` or `baseDir`
+          if (entry.name === 'hkvm.lxc' && fs.existsSync(childDir)) {
+            for (const sub of fs.readdirSync(childDir, { withFileTypes: true })) {
+              if (!sub.isDirectory()) continue;
+              const subDir = path.join(childDir, sub.name);
+              if (readPids(path.join(subDir, 'cgroup.procs')).length === 0) {
+                try {
+                  privilegedFs.rmdirSync(subDir);
+                } catch {
+                  // busy
+                }
+              }
+            }
+          }
+          const childSub = path.join(childDir, 'cgroup.subtree_control');
+          if (fs.existsSync(childSub) && readPids(path.join(childDir, 'cgroup.procs')).length === 0) {
+            for (const c of readTokens(childSub)) {
+              try {
+                privilegedFs.writeFileSync(childSub, `-${c}`);
+              } catch {
+                // ignore
+              }
+            }
+          }
+          if (
+            readCgroupV2Type(childDir) === 'threaded' &&
+            readTokens(path.join(childDir, 'cgroup.threads')).length === 0
+          ) {
+            try {
+              privilegedFs.rmdirSync(childDir);
+            } catch {
+              // ignore
+            }
+          }
+        }
+      } catch {
+        // ignore child scan errors
+      }
+
+      for (const c of readTokens(subtreeFile)) {
         try {
-          privilegedFs.writeFileSync(targetSubtreeFile, `+${c}`);
+          privilegedFs.writeFileSync(subtreeFile, `-${c}`);
         } catch {
-          // ignore individual controller failure
+          // ignore if an active child cgroup holds controller
         }
       }
-    };
-
-    let delegated = readDelegated(subtreeFile);
-    let missing = desired.filter((c) => !delegated.has(c));
-    if (missing.length > 0) {
-      enableControllersOn(subtreeFile, missing);
-      delegated = readDelegated(subtreeFile);
-      missing = desired.filter((c) => !delegated.has(c));
+      baseType = readCgroupV2Type(baseDir);
     }
 
-    if (missing.length > 0) {
-      // EBUSY inside container cgroup root: evacuate internal processes into `<baseDir>/init.scope`
+    // Step 2: Migrate any legacy `/hkvm.host` processes AND evacuate `<baseDir>/cgroup.procs`
+    // into `<baseDir>/init.scope` BEFORE enabling any controller on `<baseDir>/cgroup.subtree_control`!
+    cleanupLegacyHostLeafCgroup(baseDir);
+    basePids = readPids(procsFile);
+    if (basePids.length > 0) {
       const initScopeDir = path.join(baseDir, 'init.scope');
       privilegedFs.mkdirpSync(initScopeDir);
-      const procsRaw = fs.readFileSync(path.join(baseDir, 'cgroup.procs'), 'utf8');
-      for (const pidLine of procsRaw.split('\n')) {
-        const pid = pidLine.trim();
-        if (!/^\d+$/.test(pid) || pid === '0') continue;
-        try {
-          privilegedFs.writeFileSync(path.join(initScopeDir, 'cgroup.procs'), `${pid}\n`);
-        } catch {
-          // kernel thread or exited process
+      if (isUsableDomainCgroupDir(initScopeDir)) {
+        for (const pid of basePids) {
+          try {
+            privilegedFs.writeFileSync(path.join(initScopeDir, 'cgroup.procs'), `${pid}\n`);
+          } catch {
+            // kernel thread on physical root or exited process
+          }
         }
       }
-      enableControllersOn(subtreeFile, missing);
     }
 
-    // Create dedicated container parent cgroup `<baseDir>/hkvm.lxc` (zero internal processes)
-    // and delegate `+cpu +cpuset +memory +pids` on it so every `lxc.payload.<name>` child gets
-    // `memory.max`, `memory.current`, `memory.stat`, `cpu.max`, and `cpuset.cpus`!
+    // Step 3: Order controllers so domain-only controllers (`memory`, `io`, `hugetlb`, `rdma`, `misc`)
+    // are enabled BEFORE threaded-capable controllers (`cpuset`, `cpu`, `pids`, `perf_event`).
+    const allAvailable = readTokens(controllersFile);
+    const orderedControllers = [
+      ...allAvailable.filter((c) => !THREADED_CAPABLE_CONTROLLERS.has(c)),
+      ...allAvailable.filter((c) => THREADED_CAPABLE_CONTROLLERS.has(c)),
+    ];
+
+    const remainingBasePids = readPids(procsFile);
+    const canEnableThreadedOnBase = !isNonPhysicalRoot || remainingBasePids.length === 0;
+    activeBaseSubtree = readTokens(subtreeFile);
+    const activeBaseSet = new Set(activeBaseSubtree);
+
+    for (const c of orderedControllers) {
+      if (activeBaseSet.has(c)) continue;
+      if (THREADED_CAPABLE_CONTROLLERS.has(c) && !canEnableThreadedOnBase) {
+        // Never flip a non-mixable cgroup with remaining tasks into `"domain threaded"`!
+        continue;
+      }
+      try {
+        privilegedFs.writeFileSync(subtreeFile, `+${c}`);
+      } catch {
+        // ignore unsupported individual controller
+      }
+    }
+
+    // Step 4: Create dedicated container parent cgroup `<baseDir>/hkvm.lxc` (zero internal processes)
+    // and delegate ALL available controllers on it so `liblxc`'s `__cgfsng_delegate_controllers()`
+    // and `cgfsng_monitor_enter()` succeed and every `lxc.payload.<name>` child gets `memory.max`,
+    // `memory.current`, `memory.stat`, `cpu.max`, and `cpuset.cpus`!
     const lxcGroupDir = path.join(baseDir, 'hkvm.lxc');
     privilegedFs.mkdirpSync(lxcGroupDir);
-    const lxcGroupControllersFile = path.join(lxcGroupDir, 'cgroup.controllers');
-    const lxcGroupSubtreeFile = path.join(lxcGroupDir, 'cgroup.subtree_control');
-    if (fs.existsSync(lxcGroupControllersFile) && fs.existsSync(lxcGroupSubtreeFile)) {
-      const lxcAvail = new Set(
-        fs.readFileSync(lxcGroupControllersFile, 'utf8').trim().split(/\s+/).filter(Boolean)
-      );
-      const lxcDesired = ['cpu', 'cpuset', 'memory', 'pids'].filter((c) => lxcAvail.has(c));
-      const lxcDelegated = readDelegated(lxcGroupSubtreeFile);
-      const lxcMissing = lxcDesired.filter((c) => !lxcDelegated.has(c));
-      if (lxcMissing.length > 0) {
-        enableControllersOn(lxcGroupSubtreeFile, lxcMissing);
+
+    // Clean up any stale empty monitor/payload directories left by aborted starts
+    try {
+      for (const sub of fs.readdirSync(lxcGroupDir, { withFileTypes: true })) {
+        if (!sub.isDirectory()) continue;
+        const subDir = path.join(lxcGroupDir, sub.name);
+        if (readPids(path.join(subDir, 'cgroup.procs')).length === 0) {
+          try {
+            privilegedFs.rmdirSync(subDir);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    if (isUsableDomainCgroupDir(lxcGroupDir)) {
+      const lxcGroupControllersFile = path.join(lxcGroupDir, 'cgroup.controllers');
+      const lxcGroupSubtreeFile = path.join(lxcGroupDir, 'cgroup.subtree_control');
+      const lxcProcsFile = path.join(lxcGroupDir, 'cgroup.procs');
+      // If any stray PID ever landed directly inside `hkvm.lxc`, move it to `init.scope`
+      for (const strayPid of readPids(lxcProcsFile)) {
+        try {
+          const initScopeDir = path.join(baseDir, 'init.scope');
+          privilegedFs.mkdirpSync(initScopeDir);
+          privilegedFs.writeFileSync(path.join(initScopeDir, 'cgroup.procs'), `${strayPid}\n`);
+        } catch {
+          // ignore
+        }
+      }
+      if (fs.existsSync(lxcGroupControllersFile) && fs.existsSync(lxcGroupSubtreeFile)) {
+        const lxcAvail = readTokens(lxcGroupControllersFile);
+        const lxcOrdered = [
+          ...lxcAvail.filter((c) => !THREADED_CAPABLE_CONTROLLERS.has(c)),
+          ...lxcAvail.filter((c) => THREADED_CAPABLE_CONTROLLERS.has(c)),
+        ];
+        const lxcDelegated = new Set(readTokens(lxcGroupSubtreeFile));
+        for (const c of lxcOrdered) {
+          if (lxcDelegated.has(c)) continue;
+          try {
+            privilegedFs.writeFileSync(lxcGroupSubtreeFile, `+${c}`);
+          } catch {
+            // ignore
+          }
+        }
       }
     }
   } catch {
@@ -587,8 +727,9 @@ function readActiveCgroupV2Controllers(enableIfSystem = false): Set<string> | nu
       ensureCgroupV2SubtreeDelegation();
     }
     const baseDir = resolveHostBaseCgroupV2Dir();
-    const lxcGroupSubtree = path.join(baseDir, 'hkvm.lxc', 'cgroup.subtree_control');
-    if (enableIfSystem && fs.existsSync(lxcGroupSubtree)) {
+    const lxcGroupDir = path.join(baseDir, 'hkvm.lxc');
+    const lxcGroupSubtree = path.join(lxcGroupDir, 'cgroup.subtree_control');
+    if (enableIfSystem && isUsableDomainCgroupDir(lxcGroupDir) && fs.existsSync(lxcGroupSubtree)) {
       const lxcSub = fs.readFileSync(lxcGroupSubtree, 'utf8').trim();
       const lxcDelegated = new Set(lxcSub.split(/\s+/).filter(Boolean));
       if (lxcDelegated.size > 0) {
@@ -599,14 +740,14 @@ function readActiveCgroupV2Controllers(enableIfSystem = false): Set<string> | nu
     const subFile = path.join(baseDir, 'cgroup.subtree_control');
     const raw = fs.readFileSync(fs.existsSync(ctrlFile) ? ctrlFile : '/sys/fs/cgroup/cgroup.controllers', 'utf8').trim();
     const rootControllers = new Set(raw.split(/\s+/).filter(Boolean));
-    if (fs.existsSync(subFile)) {
+    if (fs.existsSync(subFile) && isUsableDomainCgroupDir(baseDir)) {
       const subRaw = fs.readFileSync(subFile, 'utf8').trim();
       const delegated = new Set(subRaw.split(/\s+/).filter(Boolean));
       // On WSL2 / nested container hosts where root subtree_control has not delegated controllers,
       // writing lxc.cgroup2.<ctrl>.* causes lxc-start to fail with ENOENT on child cgroup files.
       return new Set([...rootControllers].filter((c) => delegated.has(c)));
     }
-    return rootControllers;
+    return new Set();
   } catch {
     return null;
   }
@@ -2368,7 +2509,7 @@ export class LxcContainerManager {
     if (isCgroupV2 && cgroupV2Controllers) {
       if (isSystemStore) {
         const baseCgDir = resolveHostBaseCgroupV2Dir();
-        if (fs.existsSync(path.join(baseCgDir, 'hkvm.lxc'))) {
+        if (isUsableDomainCgroupDir(path.join(baseCgDir, 'hkvm.lxc'))) {
           lines.push('lxc.cgroup.relative = 0');
           lines.push('lxc.cgroup.dir = hkvm.lxc');
         }
@@ -2928,7 +3069,7 @@ export class LxcContainerManager {
       override?.cpuPinning !== undefined ? override.cpuPinning : (saved?.cpuPinning ?? null);
 
     // Ensure ancestor cgroups between `/sys/fs/cgroup` and `targetCgDir` have controllers delegated
-    // whenever those ancestors have zero internal processes.
+    // whenever those ancestors are valid domain cgroups with zero internal processes.
     try {
       const relParts = path
         .relative('/sys/fs/cgroup', targetCgDir)
@@ -2937,12 +3078,27 @@ export class LxcContainerManager {
       let cursor = '/sys/fs/cgroup';
       for (let i = 0; i < relParts.length - 1; i++) {
         cursor = path.join(cursor, relParts[i]);
+        const ctrlFile = path.join(cursor, 'cgroup.controllers');
         const subFile = path.join(cursor, 'cgroup.subtree_control');
         const procsFile = path.join(cursor, 'cgroup.procs');
-        if (fs.existsSync(subFile) && fs.existsSync(procsFile)) {
+        if (
+          isUsableDomainCgroupDir(cursor) &&
+          fs.existsSync(ctrlFile) &&
+          fs.existsSync(subFile) &&
+          fs.existsSync(procsFile)
+        ) {
           const procsTxt = fs.readFileSync(procsFile, 'utf8').trim();
           if (!procsTxt) {
-            for (const ctrl of ['cpu', 'cpuset', 'memory', 'pids']) {
+            const avail = fs
+              .readFileSync(ctrlFile, 'utf8')
+              .trim()
+              .split(/\s+/)
+              .filter(Boolean);
+            const ordered = [
+              ...avail.filter((c) => !THREADED_CAPABLE_CONTROLLERS.has(c)),
+              ...avail.filter((c) => THREADED_CAPABLE_CONTROLLERS.has(c)),
+            ];
+            for (const ctrl of ordered) {
               try {
                 privilegedFs.writeFileSync(subFile, `+${ctrl}`);
               } catch {
@@ -3035,7 +3191,7 @@ export class LxcContainerManager {
 
     const isV2 = fs.existsSync('/sys/fs/cgroup/cgroup.controllers');
     const baseDir = isV2 ? resolveHostBaseCgroupV2Dir() : '/sys/fs/cgroup';
-    const hasHkvmLxcDir = isV2 && fs.existsSync(path.join(baseDir, 'hkvm.lxc'));
+    const hasHkvmLxcDir = isV2 && isUsableDomainCgroupDir(path.join(baseDir, 'hkvm.lxc'));
 
     const missingLimitsComment = !curCfg.includes('# hkvm.limits:');
     const missingMemDirective =
@@ -3104,6 +3260,87 @@ export class LxcContainerManager {
     return { rewriteConfig, requiresRestart: false, enforceLive };
   }
 
+  /**
+   * Restores `lxc.cgroup.dir = hkvm.lxc` and `lxc.cgroup2.*` limit lines inside `<ct>/config`
+   * when an earlier failed start stripped them prior to cgroup v2 `"domain threaded"` recovery.
+   */
+  public restoreStrippedCgroupDirectivesIfReady(containerName: string): boolean {
+    try {
+      const safeName = SafeValidators.containerName(containerName);
+      if (!fs.existsSync('/sys/fs/cgroup/cgroup.controllers')) return false;
+      const configFile = path.join(this.getContainerDir(safeName), 'config');
+      if (!privilegedFs.existsSync(configFile)) return false;
+
+      const curCfg = privilegedFs.readTextSync(configFile);
+      const saved = this.parseManagedLimitsComment(curCfg);
+      if (!saved) return false;
+
+      const baseDir = resolveHostBaseCgroupV2Dir();
+      const lxcGroupDir = path.join(baseDir, 'hkvm.lxc');
+      if (!isUsableDomainCgroupDir(lxcGroupDir)) return false;
+
+      const activeCtrls = readActiveCgroupV2Controllers(false);
+      if (!activeCtrls || activeCtrls.size === 0) return false;
+
+      const missingCgDir = !/^\s*lxc\.cgroup\.dir\s*=\s*hkvm\.lxc\s*$/m.test(curCfg);
+      const missingMemMax =
+        activeCtrls.has('memory') &&
+        Boolean(saved.ramMb && saved.ramMb >= 64) &&
+        !/^\s*lxc\.cgroup2\.memory\.max\s*=/m.test(curCfg);
+      const missingCpuMax =
+        activeCtrls.has('cpu') &&
+        Boolean(saved.cpuCores && saved.cpuCores >= 1) &&
+        !/^\s*lxc\.cgroup2\.cpu\.max\s*=/m.test(curCfg);
+
+      if (!missingCgDir && !missingMemMax && !missingCpuMax) return false;
+
+      const restoredLines: string[] = [];
+      if (missingCgDir) {
+        if (!/^\s*lxc\.cgroup\.relative\s*=/m.test(curCfg)) {
+          restoredLines.push('lxc.cgroup.relative = 0');
+        }
+        restoredLines.push('lxc.cgroup.dir = hkvm.lxc');
+      }
+      if (missingCpuMax && saved.cpuCores) {
+        const cpuPct = Math.min(100, Math.max(5, Number(saved.cpuLimitPercent ?? 100)));
+        const quotaUs = Math.round(Math.max(1, saved.cpuCores) * 100_000 * (cpuPct / 100));
+        restoredLines.push(`lxc.cgroup2.cpu.max = ${quotaUs} 100000`);
+      }
+      if (
+        activeCtrls.has('cpuset') &&
+        saved.cpuCores &&
+        !/^\s*lxc\.cgroup2\.cpuset\.cpus\s*=/m.test(curCfg)
+      ) {
+        const cpusetVal = selectContainerCpuset(
+          safeName,
+          saved.cpuCores,
+          readEffectiveHostCpuIds(),
+          saved.cpuPinning ?? null
+        );
+        if (cpusetVal) {
+          restoredLines.push(`lxc.cgroup2.cpuset.cpus = ${cpusetVal}`);
+        }
+      }
+      if (missingMemMax && saved.ramMb) {
+        restoredLines.push(`lxc.cgroup2.memory.max = ${Math.round(saved.ramMb)}M`);
+      }
+
+      if (restoredLines.length === 0) return false;
+
+      const endMarker = '# --- END HKVM MANAGED CONFIG ---';
+      let nextCfg: string;
+      if (curCfg.includes(endMarker)) {
+        nextCfg = curCfg.replace(endMarker, `${restoredLines.join('\n')}\n${endMarker}`);
+      } else {
+        nextCfg = `${curCfg.trimEnd()}\n${restoredLines.join('\n')}\n`;
+      }
+      privilegedFs.writeFileSync(configFile, nextCfg, 0o640);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   public async startContainer(containerName: string): Promise<void> {
     this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(containerName);
@@ -3117,6 +3354,9 @@ export class LxcContainerManager {
     if (this.isSystemLxcStore()) {
       ensureCgroupV2SubtreeDelegation();
       await ensureLxcfsDaemonMounted().catch(() => false);
+      // Self-heal `<ct>/config` if an earlier failed start stripped `lxc.cgroup.dir = hkvm.lxc` or
+      // `lxc.cgroup2.*` lines before cgroup v2 `"domain threaded"` recovery took effect.
+      this.restoreStrippedCgroupDirectivesIfReady(safeName);
     }
     await this.ensureExistingQuotaDiskMounted(safeName).catch(() => false);
     const preNet = await this.prepareContainerNetworkPreStart(safeName).catch(() => null);
@@ -3125,8 +3365,12 @@ export class LxcContainerManager {
       ? `/var/log/lxc/${safeName}.log`
       : path.join(this.getContainerDir(safeName), `${safeName}.log`);
 
-    const runStart = () =>
-      runAllowlistedCommand(
+    const runStart = () => {
+      if (this.isSystemLxcStore()) {
+        // Clean up any stale empty monitor/payload cgroups left by an aborted attempt
+        ensureCgroupV2SubtreeDelegation();
+      }
+      return runAllowlistedCommand(
         'lxc-start',
         [...this.lxcPathArgs(), '-n', safeName, '-d', '-l', 'ERROR', '-o', logFile],
         {
@@ -3134,6 +3378,7 @@ export class LxcContainerManager {
           asRoot: this.needsRootForStore() || undefined,
         }
       );
+    };
 
     let res = await runStart();
     if (res.exitCode !== 0) {
@@ -3150,7 +3395,8 @@ export class LxcContainerManager {
       const configFile = path.join(this.getContainerDir(safeName), 'config');
       if (/cgroup|limits|devices/i.test(combinedDiag) && privilegedFs.existsSync(configFile)) {
         try {
-          let curCfg = privilegedFs.readTextSync(configFile);
+          const originalCfgBeforeRetry = privilegedFs.readTextSync(configFile);
+          let curCfg = originalCfgBeforeRetry;
           const tryStripPattern = async (pattern: RegExp) => {
             if (res.exitCode === 0) return;
             const nextCfg = curCfg.replace(pattern, '');
@@ -3173,6 +3419,11 @@ export class LxcContainerManager {
           await tryStripPattern(/^\s*lxc\.cgroup2?\.cpuset\.[a-zA-Z0-9_.-]+\s*=.*$/gm);
           // Stage 5: Last-resort fallback on unprivileged kernels without any cgroup delegation
           await tryStripPattern(/^\s*lxc\.cgroup2?\.[a-zA-Z0-9_.-]+\s*=.*$/gm);
+
+          // Never leave `<ct>/config` permanently stripped on disk if all retry stages still failed!
+          if (res.exitCode !== 0 && curCfg !== originalCfgBeforeRetry) {
+            privilegedFs.writeFileSync(configFile, originalCfgBeforeRetry, 0o640);
+          }
         } catch {
           // ignore config rewrite error and surface original failure
         }

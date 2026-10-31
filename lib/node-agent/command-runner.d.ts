@@ -51,6 +51,7 @@ export declare const privilegedFs: {
     existsSync(targetPath: string): boolean;
     realpathSync(targetPath: string): string;
     mkdirpSync(targetPath: string, mode?: number): void;
+    rmdirSync(targetPath: string): void;
     readFileSync(targetPath: string, maxBytes?: number): Buffer;
     readTextSync(targetPath: string): string;
     writeFileSync(targetPath: string, data: Buffer | string, mode?: number): void;

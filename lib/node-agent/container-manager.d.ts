@@ -133,19 +133,34 @@ export declare function selectContainerCpuset(containerName: string, requestedCo
  * (`prune_init_scope()`) both resolve container cgroups from the same delegated root.
  */
 export declare function resolveHostBaseCgroupV2Dir(proc1CgroupRaw?: string): string;
+export declare function readCgroupV2Type(cgDir: string): string;
+export declare function isUsableDomainCgroupDir(cgDir: string): boolean;
 export declare function cleanupLegacyHostLeafCgroup(baseDir?: string): void;
 /**
- * Ensures cgroup v2 `cpu`, `cpuset`, `memory`, and `pids` controllers are delegated in BOTH
- * `<baseCgroup>/cgroup.subtree_control` AND `<baseCgroup>/hkvm.lxc/cgroup.subtree_control`.
+ * Ensures all available cgroup v2 controllers (`cpuset`, `cpu`, `io`, `memory`, `hugetlb`, `pids`,
+ * `rdma`, `misc`, etc.) are delegated in BOTH `<baseCgroup>/cgroup.subtree_control` AND
+ * `<baseCgroup>/hkvm.lxc/cgroup.subtree_control`.
  *
- * CRITICAL (`liblxc` & `lxcfs` compatibility):
- * Both `liblxc` and `lxcfs` read `/proc/1/cgroup` and call `prune_init_scope()`, which ONLY strips
- * `/init.scope`! Therefore, when PID 1 sits directly in `/sys/fs/cgroup/cgroup.procs` on Docker /
- * GitHub Codespace kernels ("no internal processes" rule -> EBUSY), host processes MUST be evacuated
- * into `/sys/fs/cgroup/init.scope` (never `/hkvm.host`), and containers run under `/sys/fs/cgroup/hkvm.lxc`
- * which never contains internal processes of its own.
+ * CRITICAL LINUX KERNEL CGROUP V2 RULES (`kernel/cgroup/cgroup.c` & `liblxc` `cgfsng.c`):
+ * 1. Both `liblxc` and `lxcfs` read `/proc/1/cgroup` and call `prune_init_scope()`, which ONLY strips
+ *    `/init.scope`. Host processes in `<baseDir>/cgroup.procs` MUST be evacuated into `<baseDir>/init.scope`.
+ * 2. Inside a cgroup namespace (Docker, LXD, Codespaces, nested container hosts), `<baseDir>` is NOT
+ *    the kernel's global mixable root (`!cgroup_is_mixable(baseDir)`). Enabling threaded-capable
+ *    controllers (`+cpu`, `+cpuset`, `+pids`) while `<baseDir>/cgroup.procs` STILL contains tasks
+ *    immediately flips `<baseDir>/cgroup.type` to `"domain threaded"`, causing `<baseDir>/init.scope`,
+ *    `<baseDir>/hkvm.lxc`, and `lxc.monitor.<name>` to become `"domain invalid"` and fail with
+ *    `-EOPNOTSUPP` ("Operation not supported") in `__cgfsng_delegate_controllers` and `cgfsng_monitor_enter`!
+ * 3. Therefore:
+ *    - If `<baseDir>` is `"domain threaded"` (or a non-root cgroup holding tasks while controllers are
+ *      enabled), first disable controllers (`-<ctrl>`) on empty child cgroups and on `<baseDir>` so
+ *      `<baseDir>` returns to `"domain"` and `<baseDir>/init.scope` returns to `"domain"`.
+ *    - ALWAYS evacuate `<baseDir>/cgroup.procs` into `<baseDir>/init.scope/cgroup.procs` BEFORE enabling
+ *      any controller on `<baseDir>/cgroup.subtree_control`.
+ *    - Delegate ALL available controllers listed in `cgroup.controllers` (domain controllers first,
+ *      threaded-capable controllers second) on BOTH `<baseDir>` and `<baseDir>/hkvm.lxc`, matching
+ *      `liblxc`'s `__cgfsng_delegate_controllers()`.
  */
-export declare function ensureCgroupV2SubtreeDelegation(): void;
+export declare function ensureCgroupV2SubtreeDelegation(targetBaseDir?: string): void;
 export declare function resolveLiveContainerCgroupV2Dir(pid: number | null | undefined): string | null;
 export declare class LxcContainerManager {
     private lxcBaseDir;
@@ -313,6 +328,11 @@ export declare class LxcContainerManager {
         requiresRestart: boolean;
         enforceLive: boolean;
     };
+    /**
+     * Restores `lxc.cgroup.dir = hkvm.lxc` and `lxc.cgroup2.*` limit lines inside `<ct>/config`
+     * when an earlier failed start stripped them prior to cgroup v2 `"domain threaded"` recovery.
+     */
+    restoreStrippedCgroupDirectivesIfReady(containerName: string): boolean;
     startContainer(containerName: string): Promise<void>;
     stopContainer(containerName: string, force?: boolean): Promise<void>;
     restartContainer(containerName: string): Promise<void>;

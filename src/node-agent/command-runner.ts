@@ -512,6 +512,17 @@ export const privilegedFs = {
     }
   },
 
+  rmdirSync(targetPath: string): void {
+    const resolved = assertSafeFsPath(targetPath);
+    try {
+      fs.rmdirSync(resolved);
+    } catch (err: any) {
+      if (err && err.code === 'ENOENT') return;
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      runSudoHelperSync('rmdir', ['--', resolved]);
+    }
+  },
+
   readFileSync(targetPath: string, maxBytes = 8 * 1024 * 1024): Buffer {
     const resolved = assertSafeFsPath(targetPath);
     try {

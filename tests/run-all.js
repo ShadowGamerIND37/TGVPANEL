@@ -2192,6 +2192,8 @@ exec "$@"
         resolveHostBaseCgroupV2Dir,
         ensureCgroupV2SubtreeDelegation,
         resolveLiveContainerCgroupV2Dir,
+        readCgroupV2Type,
+        isUsableDomainCgroupDir,
       } = require('../lib/node-agent/container-manager');
       const { privilegedFs, canPasswordlessSudo, isRunningAsRoot } =
         require('../lib/node-agent/command-runner');
@@ -2318,6 +2320,112 @@ exec "$@"
             await new Promise((r) => setTimeout(r, 80));
           }
           for (const cg of [payloadCg, legacyBrokenPayload, legacyHostCg]) {
+            try { execFileSync('sudo', ['-n', 'rmdir', cg]); } catch (_) {}
+          }
+        }
+
+        // 4. Real Linux 6.8 cgroup-namespace `"domain threaded"` -> `"domain invalid"` (`ENOTSUP` / `-95`)
+        // reproduction & live self-heal regression test (exact `cgfsng.c:3341` + `cgfsng.c:1539` fix)!
+        const simCgnsRoot = '/sys/fs/cgroup/tgv_t19_cgns_root';
+        const simInitScope = path.join(simCgnsRoot, 'init.scope');
+        const simHkvmLxc = path.join(simCgnsRoot, 'hkvm.lxc');
+        const simMonitor = path.join(simHkvmLxc, 'lxc.monitor.test');
+        const simPayload = path.join(simHkvmLxc, 'lxc.payload.test');
+        let hostPid1Sim = null;
+        let monPidSim = null;
+        let payPidSim = null;
+        try {
+          // Ensure parent `/sys/fs/cgroup` delegates all available controllers into `simCgnsRoot`
+          ensureCgroupV2SubtreeDelegation('/sys/fs/cgroup');
+          execFileSync('sudo', ['-n', 'mkdir', '-p', simCgnsRoot]);
+
+          hostPid1Sim = spawn('sleep', ['30'], { stdio: 'ignore' });
+          monPidSim = spawn('sleep', ['30'], { stdio: 'ignore' });
+          payPidSim = spawn('sleep', ['30'], { stdio: 'ignore' });
+
+          // Reproduce broken cgroup-namespace state: host task inside `simCgnsRoot/cgroup.procs`
+          // while threaded controllers (`+cpu +cpuset +pids`) were enabled BEFORE evacuating `cgroup.procs`!
+          privilegedFs.writeFileSync(path.join(simCgnsRoot, 'cgroup.procs'), `${hostPid1Sim.pid}\n`);
+          privilegedFs.writeFileSync(path.join(simCgnsRoot, 'cgroup.subtree_control'), '+cpu +cpuset +pids');
+          execFileSync('sudo', ['-n', 'mkdir', '-p', simInitScope, simHkvmLxc, simMonitor]);
+
+          assert.strictEqual(readCgroupV2Type(simCgnsRoot), 'domain threaded');
+          assert.strictEqual(readCgroupV2Type(simInitScope), 'domain invalid');
+          assert.strictEqual(readCgroupV2Type(simHkvmLxc), 'domain invalid');
+          assert.strictEqual(isUsableDomainCgroupDir(simHkvmLxc), false);
+
+          // Confirm exact `liblxc` `cgfsng.c:3341` + `cgfsng.c:1539` `ENOTSUP` failures BEFORE heal
+          const simAvailCtrls = fs
+            .readFileSync(path.join(simCgnsRoot, 'cgroup.controllers'), 'utf8')
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean);
+          const liblxcDelegateStr = simAvailCtrls.map((c) => `+${c}`).join(' ');
+          assert.throws(
+            () => privilegedFs.writeFileSync(path.join(simCgnsRoot, 'cgroup.subtree_control'), liblxcDelegateStr),
+            /Operation not supported|ENOTSUP/i
+          );
+          assert.throws(
+            () => privilegedFs.writeFileSync(path.join(simMonitor, 'cgroup.procs'), `${monPidSim.pid}\n`),
+            /Operation not supported|ENOTSUP/i
+          );
+
+          // Now run `ensureCgroupV2SubtreeDelegation(simCgnsRoot)` — must heal `domain threaded` -> `domain`,
+          // evacuate `hostPid1Sim` into `simCgnsRoot/init.scope`, and delegate ALL controllers on `hkvm.lxc`!
+          ensureCgroupV2SubtreeDelegation(simCgnsRoot);
+
+          assert.strictEqual(readCgroupV2Type(simCgnsRoot), 'domain');
+          assert.strictEqual(fs.readFileSync(path.join(simCgnsRoot, 'cgroup.procs'), 'utf8').trim(), '');
+          assert.strictEqual(readCgroupV2Type(simInitScope), 'domain');
+          assert.ok(
+            fs.readFileSync(path.join(simInitScope, 'cgroup.procs'), 'utf8').includes(String(hostPid1Sim.pid)),
+            'Expected host process evacuated into simCgnsRoot/init.scope'
+          );
+          assert.strictEqual(readCgroupV2Type(simHkvmLxc), 'domain');
+          assert.strictEqual(isUsableDomainCgroupDir(simHkvmLxc), true);
+
+          // Verify `liblxc` `__cgfsng_delegate_controllers` + `cgfsng_monitor_enter` + payload limits now SUCCEED!
+          privilegedFs.writeFileSync(path.join(simCgnsRoot, 'cgroup.subtree_control'), liblxcDelegateStr);
+          privilegedFs.writeFileSync(path.join(simHkvmLxc, 'cgroup.subtree_control'), liblxcDelegateStr);
+          execFileSync('sudo', ['-n', 'mkdir', '-p', simMonitor, simPayload]);
+          privilegedFs.writeFileSync(path.join(simMonitor, 'cgroup.procs'), `${monPidSim.pid}\n`);
+          privilegedFs.writeFileSync(path.join(simPayload, 'cgroup.procs'), `${payPidSim.pid}\n`);
+          privilegedFs.writeFileSync(path.join(simPayload, 'memory.max'), `${512 * 1024 * 1024}\n`);
+          assert.strictEqual(
+            fs.readFileSync(path.join(simPayload, 'memory.max'), 'utf8').trim(),
+            String(512 * 1024 * 1024)
+          );
+
+          // 5. Verify `restoreStrippedCgroupDirectivesIfReady()` heals a container `config` whose
+          // `lxc.cgroup.dir = hkvm.lxc` and `lxc.cgroup2.memory.max` were stripped during an earlier failed start!
+          const healCfgDir = path.join(process.env.TGVPANEL_LXC_PATH, 'stripped-test-heal');
+          fs.mkdirSync(healCfgDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(healCfgDir, 'config'),
+            [
+              '# --- BEGIN HKVM MANAGED CONFIG ---',
+              '# hkvm.limits: ram_mb=1024 swap_mb=256 cpu_cores=2 cpu_pct=100 pinning=',
+              'lxc.uts.name = stripped-test-heal',
+              '# --- END HKVM MANAGED CONFIG ---',
+              '',
+            ].join('\n')
+          );
+          const cmHeal = new LxcContainerManager(process.env.TGVPANEL_LXC_PATH);
+          const didRestore = cmHeal.restoreStrippedCgroupDirectivesIfReady('stripped-test-heal');
+          assert.strictEqual(didRestore, true, 'Expected stripped cgroup directives to be restored');
+          const restoredCfgTxt = fs.readFileSync(path.join(healCfgDir, 'config'), 'utf8');
+          assert.ok(restoredCfgTxt.includes('lxc.cgroup.dir = hkvm.lxc'), 'Expected lxc.cgroup.dir = hkvm.lxc restored');
+          assert.ok(restoredCfgTxt.includes('lxc.cgroup2.memory.max = 1024M'), 'Expected memory.max = 1024M restored');
+          assert.ok(restoredCfgTxt.includes('lxc.cgroup2.cpu.max = 200000 100000'), 'Expected cpu.max = 200000 100000 restored');
+          fs.rmSync(healCfgDir, { recursive: true, force: true });
+        } finally {
+          for (const p of [hostPid1Sim, monPidSim, payPidSim]) {
+            if (p) {
+              try { p.kill('SIGKILL'); } catch (_) {}
+            }
+          }
+          await new Promise((r) => setTimeout(r, 80));
+          for (const cg of [simPayload, simMonitor, simHkvmLxc, simInitScope, simCgnsRoot]) {
             try { execFileSync('sudo', ['-n', 'rmdir', cg]); } catch (_) {}
           }
         }
