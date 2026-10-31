@@ -1,87 +1,141 @@
-# HKVM V3 — Unified Virtualization Control Panel (QEMU/KVM + LXC)
+<div align="center">
 
-**HKVM V3** merges **HVM V9** (multi-node LXC container VPS platform & remote node agent) directly into **HKVM V2** (Express, EJS, SQLite, QEMU/KVM virtualization panel) as a single cohesive Node.js + TypeScript virtualization platform named **HKVM**.
+# HKVM V3
 
-No Python/Flask runtime is required or executed. All backend services, multi-node communication, HMAC/mTLS security, PTY consoles, storage/network orchestration, backups, offline verified migrations, and monitoring run natively in Node.js + TypeScript (`src/**/*.ts` compiled to `lib/**/*.js`) atop the preserved HKVM Express + EJS foundation (`app.js`).
+**Unified virtualization control panel for QEMU/KVM virtual machines and LXC containers**
 
----
+Multi-node · Secure by default · Pure Node.js + TypeScript
 
-## Architecture Overview
+![Node.js](https://img.shields.io/badge/Node.js-TypeScript-3c873a?logo=node.js&logoColor=white)
+![SQLite](https://img.shields.io/badge/DB-SQLite%20(WAL)-003b57?logo=sqlite&logoColor=white)
+![Virtualization](https://img.shields.io/badge/QEMU%2FKVM-%2B%20LXC-orange)
+<!-- TODO: add license + CI badges once available -->
 
-```
-TGVPANEL/
-├── app.js                                # HKVM V3 Express + HTTP + WebSocket entrypoint
-├── licenses.js                           # Free Edition license module (preserved)
-├── data/
-│   ├── hkvm.db                           # Primary unified SQLite database (WAL mode)
-│   └── backups/                          # Automatic VACUUM INTO pre-migration & scheduled backups
-├── src/
-│   ├── context.ts                        # Unified runtime bootstrap & authenticated WS multiplexer
-│   ├── security/
-│   │   ├── crypto-vault.ts               # .hkvm-secret (0600), AES-256-GCM, SHA-256 PATs, HMAC, RFC 6238 TOTP, CSRF
-│   │   └── middleware.ts                 # RBAC (admin/subadmin/operator/user/readonly), CSRF, rate limiting, validators
-│   ├── db/
-│   │   ├── database.ts                   # Transactional SQLite wrapper + audit logger + VACUUM INTO backup
-│   │   ├── migrations.ts                 # Versioned migrations v001..v005 (non-destructive)
-│   │   ├── hvm-importer.ts               # Legacy HVM V9 SQLite importer + Werkzeug pbkdf2/scrypt -> bcrypt upgrader
-│   │   ├── cli-migrate.ts                # `npm run migrate`
-│   │   └── hvm-importer-cli.ts           # `npm run import:hvm -- <path/to/hvm.db>`
-│   ├── node-agent/                       # Standalone & Local Compute Node Agent (replaces Python node.py)
-│   │   ├── agent.ts                      # HTTP/HTTPS/mTLS + WebSocket remote compute server & LocalNodeRuntime
-│   │   ├── authentication.ts             # Per-node API key hash, HMAC-SHA256 signature + timestamp + nonce replay guard
-│   │   ├── command-runner.ts             # Strict binary allowlist (`execFile` only, shell: false)
-│   │   ├── health.ts & host-stats.ts     # Real /dev/kvm, QEMU, LXC, cgroup v2 & /proc telemetry
-│   │   ├── container-manager.ts          # Native lxc-* lifecycle, cgroups v1/v2 limits & realpath-confined rootfs I/O
-│   │   ├── container-console.ts          # Real node-pty `lxc-attach` interactive container PTY
-│   │   ├── shell-manager.ts              # Safe diagnostic presets + opt-in audited Admin Node PTY shell
-│   │   ├── snapshot-manager.ts           # Native LXC snapshots & SHA-256 verified tar.gz backups
-│   │   └── transfer-manager.ts           # Checksum-verified container archive export/import
-│   ├── services/
-│   │   ├── virtualization/               # VirtualizationAdapter, KVMAdapter, LXCAdapter, VirtualizationManager, InstanceManager
-│   │   ├── nodes/NodeClient.ts           # Multi-node registry, circuit breakers, health sync & key rotation
-│   │   ├── storage/StorageManager.ts     # Storage pools (RAW/QCOW2/dir/LVM/ZFS/Btrfs), ISOs & LXC OS template catalog
-│   │   ├── network/NetworkManager.ts     # Bridges, NAT, IPv4/IPv6 pools, port forwards, bandwidth & iptables rollback
-│   │   ├── backup/BackupSnapshotManager.ts # Unified KVM QCOW2 + LXC snapshots, backups & SHA-256 verification
-│   │   ├── migration/MigrationManager.ts # Honest 7-stage Offline Snapshot-Transfer VPS Migration with rollback
-│   │   └── monitoring/MonitoringService.ts # Live/historical node & VPS metrics, alert rules, notifications & webhooks
-│   └── api/
-│       ├── v1/router.ts                  # Versioned `/api/v1/*` REST API
-│       └── web-routes.ts                 # Unified Admin (23 sidebar sections) & User EJS routes
-├── views/                                # Preserved & unified EJS views (dark/light themes, local xterm.js)
-├── public/                               # Static CSS, unified V3 client helper (`hkvm-v3.js`), local `/vendor/xterm/`
-├── scripts/                              # `install.sh` & `update.sh` with capability detection & DB backup
-├── docs/                                 # Source audit, Migration Checklist & PostgreSQL 15+ migration guide
-└── tests/run-all.js                      # 12-suite end-to-end integration & security acceptance runner
-```
+[Quick Start](#quick-start) ·
+[Features](#features) ·
+[Architecture](#architecture) ·
+[Node Agent](#remote-node-agent) ·
+[Migration](#vps-migration-model) ·
+[Testing](#testing)
+
+</div>
 
 ---
+
+## Overview
+
+HKVM V3 is a single platform for managing both virtual machines and containers, with multi-node support built in.
+
+- **One panel, two hypervisors.** KVM and LXC instances share the same UI, API, storage, networking, backup and monitoring layers.
+- **Multi-node.** Manage remote compute nodes through a standalone agent with HMAC-signed requests and optional mutual TLS.
+- **Honest by design.** Migration is offline and checksum-verified. Live (CRIU) migration is intentionally not claimed.
+
+<!-- TODO: add a screenshot of the Admin dashboard here -->
+
+## Features
+
+| Area | Highlights |
+|---|---|
+| **Virtualization** | KVM and LXC adapters behind one `VirtualizationManager`; native `lxc-*` lifecycle; cgroup v1/v2 resource limits |
+| **Consoles** | Interactive container PTY via `node-pty` + `lxc-attach`; xterm.js served locally (no CDN); opt-in, audited admin node shell |
+| **Storage** | Pools (RAW, QCOW2, directory, LVM, ZFS, Btrfs), ISO library, LXC OS template catalog |
+| **Networking** | Bridges, NAT, IPv4/IPv6 pools, port forwards, bandwidth limits, iptables changes with rollback |
+| **Backups** | KVM QCOW2 and LXC snapshots, SHA-256 verified `tar.gz` backups, scheduled backups |
+| **Migration** | 7-stage offline snapshot-transfer with automatic rollback ([details](#vps-migration-model)) |
+| **Monitoring** | Live and historical node/VPS metrics, alert rules, notifications, webhooks |
+| **Multi-node** | Node registry, circuit breakers, health sync, live API key rotation |
+| **API** | Versioned REST API at `/api/v1/*` with scoped personal access tokens |
+| **UI** | 23-section admin panel plus user portal, dark/light themes |
+
+### Security
+
+| Control | Implementation |
+|---|---|
+| Secrets at rest | `.hkvm-secret` (mode `0600`); remote node API keys encrypted with AES-256-GCM |
+| Credentials | `bcrypt` passwords; PATs stored as SHA-256 hashes |
+| Two-factor auth | RFC 6238 TOTP |
+| Web protection | CSRF tokens, rate limiting, input validators |
+| Access control | RBAC: `admin`, `subadmin`, `operator`, `user`, `readonly`, with per-user ownership isolation and VPS sharing |
+| Node transport | HTTPS, optional mTLS, per-request HMAC-SHA256 (`X-HKVM-Timestamp`, `X-HKVM-Nonce`, `X-HKVM-Signature`) with replay protection |
+| Command execution | Strict binary allowlist, `execFile` only, `shell: false` |
+| Filesystem access | Container rootfs I/O confined by `realpath` (path-traversal jail) |
+| Auditing | Audit log for sensitive and administrative actions |
+
+## Requirements
+
+| Component | Needed for |
+|---|---|
+| Linux: Ubuntu, Debian, AlmaLinux or Rocky | Host OS supported by the installer |
+| Node.js and npm (<!-- TODO: minimum version -->) | Panel and agent |
+| C/C++ toolchain and Node headers | Building native addons (`node-pty`, SQLite driver) |
+| `/dev/kvm`, `qemu-system-x86_64`, `qemu-img` | KVM virtual machines |
+| `lxc-*` tools | LXC containers |
+| cgroups v2 (v1 also handled) | Resource limits and telemetry |
+
+You only need the hypervisor pieces for the modes you plan to use. The installer detects what is present.
 
 ## Quick Start
 
-### 1. Automated Installer (Ubuntu / Debian / AlmaLinux / Rocky)
+### Option 1: Automated installer (recommended)
+
 ```bash
+git clone https://github.com/ShadowGamerIND37/TGVPANEL.git
+cd TGVPANEL
 sudo bash scripts/install.sh
 ```
-The installer detects `/dev/kvm`, `qemu-system-x86_64`, `qemu-img`, `lxc-*`, `cgroups v2`, and networking tools, lets you choose **Unified (KVM + LXC)**, **KVM Only**, **LXC Only**, or **Standalone Remote Node Agent**, builds TypeScript, initializes `.hkvm-secret` (`0600`), backs up `data/hkvm.db`, runs migrations, and writes systemd service units.
 
-### 2. Manual Build, Migration & Run
+The installer will:
+
+1. Detect `/dev/kvm`, QEMU, `qemu-img`, `lxc-*`, cgroups v2 and networking tools.
+2. Ask you to choose a mode: **Unified (KVM + LXC)**, **KVM only**, **LXC only**, or **Standalone remote node agent**.
+3. Build the TypeScript sources.
+4. Create `.hkvm-secret` (`0600`).
+5. Back up `data/hkvm.db`, then run migrations.
+6. Write systemd service units.
+
+To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB backup included).
+
+### Option 2: Manual setup
+
 ```bash
-# If building native addons offline where Node headers live in /usr/local/include/node:
-npm_config_nodedir=/usr/local npm install
-
-npm run build          # Compile src/**/*.ts -> lib/**/*.js
-npm run migrate        # Backup data/hkvm.db & apply migrations v001..v005
-npm start              # Start HKVM V3 Panel on 0.0.0.0:8080 (override via PORT=...)
+npm install            # see note below if building offline
+npm run build          # compile src/**/*.ts -> lib/**/*.js
+npm run migrate        # back up data/hkvm.db, apply migrations v001..v005
+npm start              # panel on 0.0.0.0:8080
 ```
 
-### 3. Importing an Existing HVM V9 Database
-```bash
-npm run import:hvm -- /path/to/legacy/hvm.db
-```
-- Automatically creates a `VACUUM INTO` backup of `data/hkvm.db` before importing.
-- Maps colliding usernames/emails safely, imports Werkzeug `pbkdf2:sha256` / `scrypt` password hashes and transparently upgrades them to `bcrypt` on next login, encrypts remote node API keys with AES-256-GCM, and imports LXC containers, port forwards, snapshots, backups, notifications, and API keys.
+Change the port with `PORT=9090 npm start`. See `.env.example` for the available settings.
 
-### 4. Starting a Standalone Remote Compute Node Agent
+> **Offline builds:** if Node headers live in `/usr/local/include/node`, install with
+> `npm_config_nodedir=/usr/local npm install`.
+
+### Available npm scripts
+
+| Command | Description |
+|---|---|
+| `npm run build` | Compile TypeScript to `lib/` |
+| `npm run migrate` | Back up the database and apply pending migrations |
+| `npm start` | Start the panel |
+| `npm run agent:start` | Start the standalone node agent |
+| `npm run import:hvm -- <path>` | Import a legacy database |
+| `npm test` | Run all 12 acceptance suites |
+
+## Importing a legacy database
+
+```bash
+npm run import:hvm -- /path/to/legacy.db
+```
+
+- Creates a `VACUUM INTO` backup of `data/hkvm.db` first.
+- Resolves colliding usernames and emails safely.
+- Imports legacy `pbkdf2:sha256` and `scrypt` password hashes and upgrades them to `bcrypt` on the user's next login.
+- Re-encrypts remote node API keys with AES-256-GCM.
+- Imports LXC containers, port forwards, snapshots, backups, notifications and API keys.
+
+## Remote node agent
+
+Run the agent on any compute host you want the panel to manage:
+
 ```bash
 HKVM_NODE_ID="eu-node-1" \
 HKVM_AGENT_PORT=8443 \
@@ -89,28 +143,123 @@ HKVM_NODE_API_KEY="hkvm_node_..." \
 HKVM_NODE_HMAC_SECRET="..." \
 npm run agent:start
 ```
-Supports HTTPS + optional mutual TLS (`HKVM_NODE_MTLS=true`), per-request HMAC-SHA256 signing (`X-HKVM-Timestamp`, `X-HKVM-Nonce`, `X-HKVM-Signature`) with replay protection, and live key rotation from **Admin -> Nodes**.
 
----
+| Variable | Purpose |
+|---|---|
+| `HKVM_NODE_ID` | Unique node identifier |
+| `HKVM_AGENT_PORT` | Listening port (example: `8443`) |
+| `HKVM_NODE_API_KEY` | Per-node API key (stored hashed) |
+| `HKVM_NODE_HMAC_SECRET` | Shared secret for request signing |
+| `HKVM_NODE_MTLS` | Set to `true` to require mutual TLS |
 
-## VPS Migration Model (Honest Architecture)
+Then add the node under **Admin → Nodes**. API keys can be rotated there without restarting the agent.
 
-HKVM V3 implements **Offline Verified Snapshot-Transfer Migration** (`strategy = 'offline_snapshot_transfer'`):
-1. Preflight check on source & target node health, LXC support, and free storage capacity.
-2. Graceful container stop on source node to ensure filesystem consistency.
-3. Rootfs + config export (`tar.gz`) with streaming **SHA-256** digest computation.
-4. Authenticated stream transfer to target node and SHA-256 verification before unpack.
-5. Target container registration, resource/network configuration, and startup health verification.
-6. Atomic SQLite node ownership commit (`lxc_instances` + `instances` + `vps_migrations`).
-7. Source cleanup only after target verification succeeds; any pre-commit failure automatically cleans up partial target artifacts and restarts the source container.
+## VPS migration model
 
-*(CRIU memory-page live migration is intentionally not claimed.)*
+HKVM V3 uses **offline verified snapshot-transfer migration** (`strategy = 'offline_snapshot_transfer'`):
 
----
+```mermaid
+flowchart LR
+    A[1. Preflight] --> B[2. Stop source]
+    B --> C[3. Export + SHA-256]
+    C --> D[4. Transfer + verify]
+    D --> E[5. Register + start target]
+    E --> F[6. Atomic DB commit]
+    F --> G[7. Clean up source]
+    D -. failure .-> R[Rollback]
+    E -. failure .-> R
+    R --> S[Remove partial target, restart source]
+```
 
-## Running Acceptance Tests
+1. **Preflight:** check source and target health, LXC support and free storage.
+2. **Stop:** gracefully stop the container on the source for filesystem consistency.
+3. **Export:** archive rootfs and config as `tar.gz` while streaming a SHA-256 digest.
+4. **Transfer:** authenticated stream to the target, SHA-256 verified before unpacking.
+5. **Register:** create the target container, apply resources and network config, verify startup.
+6. **Commit:** atomic SQLite ownership change (`lxc_instances`, `instances`, `vps_migrations`).
+7. **Clean up:** remove the source only after the target is verified.
+
+Any failure before the commit removes partial target artifacts and restarts the source container.
+
+> CRIU memory-page live migration is intentionally not claimed.
+
+## Architecture
+
+```
+TGVPANEL/
+├── app.js                  # Express + HTTP + WebSocket entrypoint
+├── licenses.js             # Free Edition license module
+├── data/                   # hkvm.db (SQLite, WAL) and backups/
+├── src/
+│   ├── context.ts          # Runtime bootstrap, authenticated WS multiplexer
+│   ├── security/           # crypto-vault (secrets, AES-GCM, TOTP, CSRF), RBAC middleware
+│   ├── db/                 # SQLite wrapper, migrations v001..v005, legacy DB importer, CLIs
+│   ├── node-agent/         # Standalone and local agent (auth, command runner, containers,
+│   │                       #   consoles, snapshots, transfers, health and host stats)
+│   ├── services/
+│   │   ├── virtualization/ # KVM + LXC adapters, instance manager
+│   │   ├── nodes/          # Multi-node client, circuit breakers, key rotation
+│   │   ├── storage/        # Pools, ISOs, template catalog
+│   │   ├── network/        # Bridges, NAT, IP pools, port forwards, firewall rollback
+│   │   ├── backup/         # Unified snapshots and verified backups
+│   │   ├── migration/      # Offline snapshot-transfer migration
+│   │   └── monitoring/     # Metrics, alerts, notifications, webhooks
+│   └── api/
+│       ├── v1/router.ts    # REST API (/api/v1/*)
+│       └── web-routes.ts   # Admin (23 sections) and user EJS routes
+├── views/                  # EJS templates (dark/light, local xterm.js)
+├── public/                 # CSS, hkvm-v3.js client helper, /vendor/xterm/
+├── scripts/                # install.sh, update.sh
+├── docs/                   # Source audit, migration checklist, PostgreSQL 15+ guide
+└── tests/run-all.js        # 12-suite integration and security runner
+```
+
+<details>
+<summary><strong>Per-file reference for <code>src/security/</code> and <code>src/node-agent/</code></strong></summary>
+
+| File | Responsibility |
+|---|---|
+| `security/crypto-vault.ts` | `.hkvm-secret`, AES-256-GCM, SHA-256 PATs, HMAC, TOTP, CSRF |
+| `security/middleware.ts` | RBAC, CSRF, rate limiting, validators |
+| `node-agent/agent.ts` | HTTP/HTTPS/mTLS + WebSocket server, `LocalNodeRuntime` |
+| `node-agent/authentication.ts` | API key hash, HMAC signature, timestamp and nonce replay guard |
+| `node-agent/command-runner.ts` | Binary allowlist, `execFile` only, `shell: false` |
+| `node-agent/health.ts`, `host-stats.ts` | `/dev/kvm`, QEMU, LXC, cgroup v2 and `/proc` telemetry |
+| `node-agent/container-manager.ts` | `lxc-*` lifecycle, cgroup limits, realpath-confined rootfs I/O |
+| `node-agent/container-console.ts` | `node-pty` + `lxc-attach` container terminal |
+| `node-agent/shell-manager.ts` | Diagnostic presets and opt-in audited admin shell |
+| `node-agent/snapshot-manager.ts` | LXC snapshots and SHA-256 verified backups |
+| `node-agent/transfer-manager.ts` | Checksum-verified archive export/import |
+
+</details>
+
+## Testing
 
 ```bash
 npm test
 ```
-Executes all 12 end-to-end suites in `tests/run-all.js` against an isolated temporary clone of `data/hkvm.db` (migrations, AES-256-GCM tamper defense, legacy HVM Werkzeug import + login rehash, CSRF + PAT scopes, RFC 6238 TOTP 2FA, RBAC + ownership isolation + VPS sharing, standalone Node Agent HMAC + replay rejection, Linux `/proc` telemetry, rootfs path-traversal jail + command allowlist, storage/templates/networking/ports/firewall, SHA-256 backups/monitoring/impersonation, and all 23 Admin + User EJS views + `node-pty` WebSocket shell).
+
+Runs 12 end-to-end suites from `tests/run-all.js` against an isolated temporary clone of `data/hkvm.db`, so your real data is never touched.
+
+| Coverage |
+|---|
+| Migrations |
+| AES-256-GCM tamper defense |
+| Legacy import and login rehash |
+| CSRF and PAT scopes |
+| TOTP 2FA |
+| RBAC, ownership isolation, VPS sharing |
+| Agent HMAC and replay rejection |
+| Linux `/proc` telemetry |
+| Path-traversal jail and command allowlist |
+| Storage, templates, networking, ports, firewall |
+| SHA-256 backups, monitoring, impersonation |
+| All 23 admin and user views plus `node-pty` WebSocket shell |
+
+## Contributing
+
+Issues and pull requests are welcome. Before opening a PR, run `npm run build && npm test`.
+
+## License
+
+<!-- TODO: add a LICENSE file and state it here. Note: licenses.js implements the "Free Edition" feature license, which is separate from the repository's source license. -->
