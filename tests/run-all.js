@@ -2126,6 +2126,145 @@ exec "$@"
         }
       }
     });
+
+    await runStep('T19: Real kernel cgroup v2 delegation (init.scope + hkvm.lxc), legacy hkvm.host migration & live RAM/CPU enforcement', async () => {
+      const { spawn, execFileSync } = require('child_process');
+      const {
+        LxcContainerManager,
+        resolveHostBaseCgroupV2Dir,
+        ensureCgroupV2SubtreeDelegation,
+        resolveLiveContainerCgroupV2Dir,
+      } = require('../lib/node-agent/container-manager');
+      const { privilegedFs, canPasswordlessSudo, isRunningAsRoot } =
+        require('../lib/node-agent/command-runner');
+
+      // 1. Verify `/init.scope` and legacy `/hkvm.host` stripping for liblxc & lxcfs `prune_init_scope` parity
+      assert.strictEqual(resolveHostBaseCgroupV2Dir('0::/init.scope\n'), '/sys/fs/cgroup');
+      assert.strictEqual(resolveHostBaseCgroupV2Dir('0::/hkvm.host\n'), '/sys/fs/cgroup');
+
+      // 2. Verify granular `startContainer` cgroup fallback NEVER wipes `memory.max` or `cpuset.cpus`
+      // when `devices.allow` fails on first start attempt!
+      const stageCtRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'cgroup-stage-preserve-01',
+        nodeId: 1,
+        templateSlug: 'ubuntu-22.04',
+        cpuCores: 1,
+        ramMb: 1024,
+        swapMb: 512,
+        diskGb: 10,
+        kvmNesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(stageCtRes.status, 201, `Create stage test LXC failed: ${stageCtRes.text}`);
+      const stageCtId = stageCtRes.json.instance.refId;
+      await adminClient.request('POST', `/api/v1/instances/lxc/${stageCtId}/action`, { action: 'stop' });
+
+      const stageCtDir = path.join(process.env.HKVM_LXC_PATH, 'cgroup-stage-preserve-01');
+      privilegedFs.writeFileSync(path.join(stageCtDir, '.fail_cgroup_once'), '1');
+      const stageStartRes = await adminClient.request('POST', `/api/v1/instances/lxc/${stageCtId}/action`, {
+        action: 'start',
+      });
+      assert.strictEqual(stageStartRes.status, 200, `Staged start failed: ${stageStartRes.text}`);
+      const postStageCfg = privilegedFs.readTextSync(path.join(stageCtDir, 'config'));
+      assert.ok(
+        postStageCfg.includes('memory.max = 1024M') || postStageCfg.includes('memory.limit_in_bytes = 1024M'),
+        'Stage 1 devices strip must preserve memory.max = 1024M!'
+      );
+      assert.ok(postStageCfg.includes('cpuset.cpus ='), 'Stage 1 devices strip must preserve cpuset.cpus!');
+      assert.ok(postStageCfg.includes('# hkvm.limits: ram_mb=1024'), 'Expected # hkvm.limits metadata comment');
+      await adminClient.request('POST', `/api/v1/instances/lxc/${stageCtId}/action`, { action: 'delete' });
+
+      // 3. Real Linux 6.8 cgroup v2 hierarchy test: legacy `/hkvm.host` evacuation -> `/init.scope`,
+      // `/hkvm.lxc` controller delegation, live `memory.max` (1024 MiB -> 2048 MiB), `cpu.max`, & `nproc=1`!
+      if ((isRunningAsRoot() || canPasswordlessSudo()) && fs.existsSync('/sys/fs/cgroup/cgroup.controllers')) {
+        let sleeper = null;
+        const payloadCg = '/sys/fs/cgroup/hkvm.lxc/lxc.payload.cgroup-e2e-01';
+        const legacyHostCg = '/sys/fs/cgroup/hkvm.host';
+        const legacyBrokenPayload = '/sys/fs/cgroup/hkvm.host/lxc.payload.broken-01';
+        try {
+          sleeper = spawn('sleep', ['30'], { stdio: 'ignore' });
+          assert.ok(sleeper.pid > 1);
+
+          // Simulate PR #13 broken state: process placed in `/sys/fs/cgroup/hkvm.host`
+          execFileSync('sudo', ['-n', 'mkdir', '-p', legacyBrokenPayload]);
+          privilegedFs.writeFileSync(path.join(legacyHostCg, 'cgroup.procs'), `${sleeper.pid}\n`);
+          ensureCgroupV2SubtreeDelegation();
+
+          const migratedCg = resolveLiveContainerCgroupV2Dir(sleeper.pid);
+          assert.strictEqual(
+            migratedCg,
+            '/sys/fs/cgroup/init.scope',
+            `Expected PID migrated from /hkvm.host into /init.scope, got ${migratedCg}`
+          );
+
+          const hkvmLxcSub = fs.readFileSync('/sys/fs/cgroup/hkvm.lxc/cgroup.subtree_control', 'utf8');
+          assert.ok(hkvmLxcSub.includes('memory'), 'Expected +memory delegated on /sys/fs/cgroup/hkvm.lxc');
+          assert.ok(hkvmLxcSub.includes('cpu'), 'Expected +cpu delegated on /sys/fs/cgroup/hkvm.lxc');
+          assert.ok(hkvmLxcSub.includes('cpuset'), 'Expected +cpuset delegated on /sys/fs/cgroup/hkvm.lxc');
+
+          // Verify `needsContainerCgroupRestartOrHeal` flags processes trapped in `/hkvm.host/lxc.payload.*`
+          privilegedFs.writeFileSync(path.join(legacyBrokenPayload, 'cgroup.procs'), `${sleeper.pid}\n`);
+          const cmTest = new LxcContainerManager(process.env.HKVM_LXC_PATH);
+          const brokenDiag = cmTest.needsContainerCgroupRestartOrHeal('broken-01', sleeper.pid, {
+            ramMb: 1024,
+            cpuCores: 1,
+          });
+          assert.strictEqual(brokenDiag.requiresRestart, true, 'Trapped /hkvm.host container must trigger restart');
+
+          // Move sleeper into real `/sys/fs/cgroup/hkvm.lxc/lxc.payload.cgroup-e2e-01` and enforce 1024 MB + 1 vCPU!
+          execFileSync('sudo', ['-n', 'mkdir', '-p', payloadCg]);
+          privilegedFs.writeFileSync(path.join(payloadCg, 'cgroup.procs'), `${sleeper.pid}\n`);
+          const enforced = await cmTest.enforceLiveContainerCgroups('cgroup-e2e-01', {
+            ramMb: 1024,
+            swapMb: 512,
+            cpuCores: 1,
+            cpuLimitPercent: 100,
+            pid: sleeper.pid,
+          });
+          assert.strictEqual(enforced, true, 'Expected live cgroup v2 enforcement to succeed');
+          assert.strictEqual(
+            fs.readFileSync(path.join(payloadCg, 'memory.max'), 'utf8').trim(),
+            String(1024 * 1024 * 1024),
+            'Expected exact 1073741824 bytes (1024 MiB) in memory.max'
+          );
+          assert.strictEqual(
+            fs.readFileSync(path.join(payloadCg, 'cpu.max'), 'utf8').trim(),
+            '100000 100000',
+            'Expected exact 1 vCPU CFS quota in cpu.max'
+          );
+          const cpusetAssigned = fs.readFileSync(path.join(payloadCg, 'cpuset.cpus'), 'utf8').trim();
+          assert.strictEqual(cpusetAssigned.split(',').length, 1, 'Expected 1 CPU core pinned in cpuset.cpus');
+
+          // Spawn a real subshell inside `payloadCg` and verify kernel `nproc` reports `1`!
+          const nprocOut = execFileSync(
+            'sudo',
+            ['-n', 'sh', '-c', `echo $$ > ${payloadCg}/cgroup.procs && nproc`],
+            { encoding: 'utf8' }
+          ).trim();
+          assert.strictEqual(nprocOut, '1', `Expected guest nproc inside 1-vCPU cgroup to be 1, got ${nprocOut}`);
+
+          // Live hot-scale RAM to 2048 MiB without restart!
+          await cmTest.enforceLiveContainerCgroups('cgroup-e2e-01', {
+            ramMb: 2048,
+            cpuCores: 1,
+            pid: sleeper.pid,
+          });
+          assert.strictEqual(
+            fs.readFileSync(path.join(payloadCg, 'memory.max'), 'utf8').trim(),
+            String(2048 * 1024 * 1024),
+            'Expected live RAM hot-scale to 2048 MiB in memory.max'
+          );
+        } finally {
+          if (sleeper) {
+            try { sleeper.kill('SIGKILL'); } catch (_) {}
+            await new Promise((r) => setTimeout(r, 80));
+          }
+          for (const cg of [payloadCg, legacyBrokenPayload, legacyHostCg]) {
+            try { execFileSync('sudo', ['-n', 'rmdir', cg]); } catch (_) {}
+          }
+        }
+      }
+    });
   } finally {
     const { execFileSync } = require('child_process');
     for (const storeDir of [path.join(tmpRoot, 'local-lxc'), path.join(tmpRoot, 'agent-lxc')]) {
