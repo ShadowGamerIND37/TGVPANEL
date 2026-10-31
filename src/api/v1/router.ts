@@ -161,6 +161,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   // --- All endpoints below require an authenticated principal (Session or Bearer API Key) ---
   router.use(requirePrincipal);
   router.use((req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       return apiMutationLimiter(req, res, next);
     }

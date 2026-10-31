@@ -256,6 +256,10 @@ export class KVMAdapter implements VirtualizationAdapter {
       if (this.hooks.deleteVmById) {
         await this.hooks.deleteVmById(refId);
       } else {
+        await this.db.run(`DELETE FROM vm_logs WHERE vm_id = ?`, [refId]).catch(() => undefined);
+        await this.db
+          .run(`DELETE FROM vm_snapshots WHERE vm_id = ?`, [refId])
+          .catch(() => undefined);
         await this.db.run(`DELETE FROM vms WHERE vm_id = ?`, [refId]);
       }
       await this.db.run(`DELETE FROM instances WHERE engine = 'kvm' AND ref_id = ?`, [refId]);

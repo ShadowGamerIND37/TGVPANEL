@@ -1166,7 +1166,7 @@ async function loadAdminData() {
     }
 
     // Fetch all VMs
-    const vmsRes = await fetch('/api/admin/vms');
+    const vmsRes = await fetch('/api/admin/vms', { cache: 'no-store' });
     if (!vmsRes.ok) throw new Error('Failed to load VMs');
     const vms = await vmsRes.json();
     

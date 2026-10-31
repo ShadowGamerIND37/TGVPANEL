@@ -27,7 +27,7 @@
   };
 
   window.hkvmApi = async function (url, options) {
-    var opts = Object.assign({ method: 'GET', headers: {} }, options || {});
+    var opts = Object.assign({ method: 'GET', cache: 'no-store', headers: {} }, options || {});
     var csrfMeta = document.querySelector('meta[name="csrf-token"]');
     if (csrfMeta && csrfMeta.content) {
       opts.headers['X-CSRF-Token'] = csrfMeta.content;
