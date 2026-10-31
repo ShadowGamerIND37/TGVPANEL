@@ -1,9 +1,9 @@
-HKVM PROPRIETARY SOURCE-AVAILABLE LICENSE
-Version 1.0
+PROPRIETARY SOURCE-AVAILABLE LICENSE
+Version 3.0
 
 Copyright (c) 2026 ShadowGamerIND37. All rights reserved.
 
-"Software" means HKVM V3 (also distributed as TGVPANEL), including all source
+"Software" means TGVPANEL including all source
 code, compiled code, scripts, views, stylesheets, documentation, and
 other files in this repository, and any copy of them.
 
@@ -138,12 +138,10 @@ and any other remedy available by law, in addition to damages.
 --------------------------------------------------------------------------
 12. GENERAL
 --------------------------------------------------------------------------
-  (a) Governing law and courts: <ADD YOUR COUNTRY / STATE, e.g. "the laws
-      of India; courts at Kolkata, West Bengal">.
-  (b) If any part of this license is unenforceable, the rest remains in
+  (a) If any part of this license is unenforceable, the rest remains in
       effect.
-  (c) Failing to enforce a term is not a waiver of it.
-  (d) This is the entire license for the Software and replaces any earlier
+  (b) Failing to enforce a term is not a waiver of it.
+  (c) This is the entire license for the Software and replaces any earlier
       license for it. The Licensor may release later versions under
       different terms; those apply only to those later versions.
-  (e) You may not assign this license without the Licensor's written consent.
+  (d) You may not assign this license without the Licensor's written consent.
