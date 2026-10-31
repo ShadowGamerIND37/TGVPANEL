@@ -396,12 +396,75 @@ export function selectContainerCpuset(
 }
 
 /**
- * Ensures cgroup v2 `cpu`, `cpuset`, `memory`, and `pids` controllers are delegated in
- * `/sys/fs/cgroup/cgroup.subtree_control`. On Docker / GitHub Codespace cgroup roots where
- * PID 1 sits directly in `/sys/fs/cgroup/cgroup.procs` ("no internal processes" rule -> EBUSY),
- * safely evacuates root processes into `/sys/fs/cgroup/hkvm.host` first.
+ * Resolves the host's base cgroup v2 directory from `/proc/1/cgroup`, stripping `/init.scope`
+ * (and any legacy `/hkvm.host` leaf created by older builds) so `liblxc` and `lxcfs`
+ * (`prune_init_scope()`) both resolve container cgroups from the same delegated root.
  */
-function ensureCgroupV2SubtreeDelegation(): void {
+export function resolveHostBaseCgroupV2Dir(proc1CgroupRaw?: string): string {
+  try {
+    const raw =
+      proc1CgroupRaw !== undefined
+        ? proc1CgroupRaw
+        : fs.existsSync('/proc/1/cgroup')
+          ? fs.readFileSync('/proc/1/cgroup', 'utf8')
+          : '';
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('0::')) continue;
+      let rel = trimmed.slice(3).trim() || '/';
+      if (rel.endsWith('/init.scope')) {
+        rel = rel.slice(0, -'/init.scope'.length) || '/';
+      } else if (rel.endsWith('/hkvm.host')) {
+        rel = rel.slice(0, -'/hkvm.host'.length) || '/';
+      }
+      const candidate = path.resolve('/sys/fs/cgroup', rel.replace(/^\/+/, ''));
+      if (candidate.startsWith('/sys/fs/cgroup') && fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // fallback to /sys/fs/cgroup
+  }
+  return '/sys/fs/cgroup';
+}
+
+export function cleanupLegacyHostLeafCgroup(baseDir = resolveHostBaseCgroupV2Dir()): void {
+  try {
+    const legacyLeaf = path.join(baseDir, 'hkvm.host');
+    if (!fs.existsSync(legacyLeaf)) return;
+    const initScopeDir = path.join(baseDir, 'init.scope');
+    privilegedFs.mkdirpSync(initScopeDir);
+
+    const legacyProcs = path.join(legacyLeaf, 'cgroup.procs');
+    if (fs.existsSync(legacyProcs)) {
+      const procsRaw = fs.readFileSync(legacyProcs, 'utf8');
+      for (const pidLine of procsRaw.split('\n')) {
+        const pid = pidLine.trim();
+        if (!/^\d+$/.test(pid) || pid === '0') continue;
+        try {
+          privilegedFs.writeFileSync(path.join(initScopeDir, 'cgroup.procs'), `${pid}\n`);
+        } catch {
+          // exited process or kernel thread
+        }
+      }
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+/**
+ * Ensures cgroup v2 `cpu`, `cpuset`, `memory`, and `pids` controllers are delegated in BOTH
+ * `<baseCgroup>/cgroup.subtree_control` AND `<baseCgroup>/hkvm.lxc/cgroup.subtree_control`.
+ *
+ * CRITICAL (`liblxc` & `lxcfs` compatibility):
+ * Both `liblxc` and `lxcfs` read `/proc/1/cgroup` and call `prune_init_scope()`, which ONLY strips
+ * `/init.scope`! Therefore, when PID 1 sits directly in `/sys/fs/cgroup/cgroup.procs` on Docker /
+ * GitHub Codespace kernels ("no internal processes" rule -> EBUSY), host processes MUST be evacuated
+ * into `/sys/fs/cgroup/init.scope` (never `/hkvm.host`), and containers run under `/sys/fs/cgroup/hkvm.lxc`
+ * which never contains internal processes of its own.
+ */
+export function ensureCgroupV2SubtreeDelegation(): void {
   try {
     if (
       !fs.existsSync('/sys/fs/cgroup/cgroup.controllers') ||
@@ -411,55 +474,104 @@ function ensureCgroupV2SubtreeDelegation(): void {
     }
     if (!isRunningAsRoot() && !canPasswordlessSudo()) return;
 
-    const rootControllers = new Set(
-      fs.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8').trim().split(/\s+/).filter(Boolean)
+    const baseDir = resolveHostBaseCgroupV2Dir();
+    const controllersFile = path.join(baseDir, 'cgroup.controllers');
+    const subtreeFile = path.join(baseDir, 'cgroup.subtree_control');
+    if (!fs.existsSync(controllersFile) || !fs.existsSync(subtreeFile)) return;
+
+    // Migrate any processes (including PID 1) out of legacy `/hkvm.host` into `/init.scope` first
+    cleanupLegacyHostLeafCgroup(baseDir);
+
+    const availableControllers = new Set(
+      fs.readFileSync(controllersFile, 'utf8').trim().split(/\s+/).filter(Boolean)
     );
-    const readDelegated = () =>
+    const readDelegated = (file: string) =>
       new Set(
-        fs
-          .readFileSync('/sys/fs/cgroup/cgroup.subtree_control', 'utf8')
+        (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '')
           .trim()
           .split(/\s+/)
           .filter(Boolean)
       );
 
-    const desired = ['cpu', 'cpuset', 'memory', 'pids'].filter((c) => rootControllers.has(c));
-    let delegated = readDelegated();
-    let missing = desired.filter((c) => !delegated.has(c));
-    if (missing.length === 0) return;
-
-    const enableControllers = (ctrls: string[]) => {
+    const desired = ['cpu', 'cpuset', 'memory', 'pids'].filter((c) => availableControllers.has(c));
+    const enableControllersOn = (targetSubtreeFile: string, ctrls: string[]) => {
       for (const c of ctrls) {
         try {
-          privilegedFs.writeFileSync('/sys/fs/cgroup/cgroup.subtree_control', `+${c}`);
+          privilegedFs.writeFileSync(targetSubtreeFile, `+${c}`);
         } catch {
           // ignore individual controller failure
         }
       }
     };
 
-    enableControllers(missing);
-    delegated = readDelegated();
-    missing = desired.filter((c) => !delegated.has(c));
-    if (missing.length === 0) return;
+    let delegated = readDelegated(subtreeFile);
+    let missing = desired.filter((c) => !delegated.has(c));
+    if (missing.length > 0) {
+      enableControllersOn(subtreeFile, missing);
+      delegated = readDelegated(subtreeFile);
+      missing = desired.filter((c) => !delegated.has(c));
+    }
 
-    // EBUSY inside container cgroup root: evacuate internal processes into /sys/fs/cgroup/hkvm.host
-    const leafCgroup = '/sys/fs/cgroup/hkvm.host';
-    privilegedFs.mkdirpSync(leafCgroup);
-    const procsRaw = fs.readFileSync('/sys/fs/cgroup/cgroup.procs', 'utf8');
-    for (const pidLine of procsRaw.split('\n')) {
-      const pid = pidLine.trim();
-      if (!/^\d+$/.test(pid) || pid === '0') continue;
-      try {
-        privilegedFs.writeFileSync(path.join(leafCgroup, 'cgroup.procs'), `${pid}\n`);
-      } catch {
-        // kernel thread or exited process
+    if (missing.length > 0) {
+      // EBUSY inside container cgroup root: evacuate internal processes into `<baseDir>/init.scope`
+      const initScopeDir = path.join(baseDir, 'init.scope');
+      privilegedFs.mkdirpSync(initScopeDir);
+      const procsRaw = fs.readFileSync(path.join(baseDir, 'cgroup.procs'), 'utf8');
+      for (const pidLine of procsRaw.split('\n')) {
+        const pid = pidLine.trim();
+        if (!/^\d+$/.test(pid) || pid === '0') continue;
+        try {
+          privilegedFs.writeFileSync(path.join(initScopeDir, 'cgroup.procs'), `${pid}\n`);
+        } catch {
+          // kernel thread or exited process
+        }
+      }
+      enableControllersOn(subtreeFile, missing);
+    }
+
+    // Create dedicated container parent cgroup `<baseDir>/hkvm.lxc` (zero internal processes)
+    // and delegate `+cpu +cpuset +memory +pids` on it so every `lxc.payload.<name>` child gets
+    // `memory.max`, `memory.current`, `memory.stat`, `cpu.max`, and `cpuset.cpus`!
+    const lxcGroupDir = path.join(baseDir, 'hkvm.lxc');
+    privilegedFs.mkdirpSync(lxcGroupDir);
+    const lxcGroupControllersFile = path.join(lxcGroupDir, 'cgroup.controllers');
+    const lxcGroupSubtreeFile = path.join(lxcGroupDir, 'cgroup.subtree_control');
+    if (fs.existsSync(lxcGroupControllersFile) && fs.existsSync(lxcGroupSubtreeFile)) {
+      const lxcAvail = new Set(
+        fs.readFileSync(lxcGroupControllersFile, 'utf8').trim().split(/\s+/).filter(Boolean)
+      );
+      const lxcDesired = ['cpu', 'cpuset', 'memory', 'pids'].filter((c) => lxcAvail.has(c));
+      const lxcDelegated = readDelegated(lxcGroupSubtreeFile);
+      const lxcMissing = lxcDesired.filter((c) => !lxcDelegated.has(c));
+      if (lxcMissing.length > 0) {
+        enableControllersOn(lxcGroupSubtreeFile, lxcMissing);
       }
     }
-    enableControllers(missing);
   } catch {
     // non-fatal on read-only cgroupfs
   }
+}
+
+export function resolveLiveContainerCgroupV2Dir(pid: number | null | undefined): string | null {
+  try {
+    if (!pid || pid <= 1) return null;
+    const cgFile = `/proc/${pid}/cgroup`;
+    if (!fs.existsSync(cgFile)) return null;
+    const raw = fs.readFileSync(cgFile, 'utf8');
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('0::')) continue;
+      const rel = trimmed.slice(3).trim();
+      if (!rel || rel === '/') return null;
+      const candidate = path.resolve('/sys/fs/cgroup', rel.replace(/^\/+/, ''));
+      if (candidate.startsWith('/sys/fs/cgroup/') && fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 function readActiveCgroupV2Controllers(enableIfSystem = false): Set<string> | null {
@@ -470,10 +582,21 @@ function readActiveCgroupV2Controllers(enableIfSystem = false): Set<string> | nu
     if (enableIfSystem) {
       ensureCgroupV2SubtreeDelegation();
     }
-    const raw = fs.readFileSync('/sys/fs/cgroup/cgroup.controllers', 'utf8').trim();
+    const baseDir = resolveHostBaseCgroupV2Dir();
+    const lxcGroupSubtree = path.join(baseDir, 'hkvm.lxc', 'cgroup.subtree_control');
+    if (enableIfSystem && fs.existsSync(lxcGroupSubtree)) {
+      const lxcSub = fs.readFileSync(lxcGroupSubtree, 'utf8').trim();
+      const lxcDelegated = new Set(lxcSub.split(/\s+/).filter(Boolean));
+      if (lxcDelegated.size > 0) {
+        return lxcDelegated;
+      }
+    }
+    const ctrlFile = path.join(baseDir, 'cgroup.controllers');
+    const subFile = path.join(baseDir, 'cgroup.subtree_control');
+    const raw = fs.readFileSync(fs.existsSync(ctrlFile) ? ctrlFile : '/sys/fs/cgroup/cgroup.controllers', 'utf8').trim();
     const rootControllers = new Set(raw.split(/\s+/).filter(Boolean));
-    if (fs.existsSync('/sys/fs/cgroup/cgroup.subtree_control')) {
-      const subRaw = fs.readFileSync('/sys/fs/cgroup/cgroup.subtree_control', 'utf8').trim();
+    if (fs.existsSync(subFile)) {
+      const subRaw = fs.readFileSync(subFile, 'utf8').trim();
       const delegated = new Set(subRaw.split(/\s+/).filter(Boolean));
       // On WSL2 / nested container hosts where root subtree_control has not delegated controllers,
       // writing lxc.cgroup2.<ctrl>.* causes lxc-start to fail with ENOENT on child cgroup files.
@@ -2133,6 +2256,7 @@ export class LxcContainerManager {
     }
 
     const existing = privilegedFs.readTextSync(configFile);
+    const prevLimits = this.parseManagedLimitsComment(existing);
     const markerStart = '# --- BEGIN HKVM MANAGED CONFIG ---';
     const markerEnd = '# --- END HKVM MANAGED CONFIG ---';
 
@@ -2141,22 +2265,46 @@ export class LxcContainerManager {
       ''
     );
 
-    // Strip template-copied default lxc.net.0.* and lxc.apparmor.* directives so HKVM's managed block is authoritative
+    // Strip template-copied default lxc.net.0.*, lxc.apparmor.*, and stale cgroup placement directives
     if (cfg.bridge !== undefined) {
       stripped = stripped.replace(/^\s*lxc\.net\.0(?:\.[a-zA-Z0-9_.-]+)?\s*=.*$/gm, '');
     }
     stripped = stripped.replace(/^\s*lxc\.apparmor\.(?:profile|allow_nesting)\s*=.*$/gm, '');
+    stripped = stripped.replace(/^\s*lxc\.cgroup\.(?:relative|dir(?:\.[a-zA-Z0-9_.-]+)?)\s*=.*$/gm, '');
     stripped = stripped.replace(/\n{3,}/g, '\n\n');
 
     const isSystemStore = this.isSystemLxcStore();
+    // Delegate cgroup v2 controllers (`init.scope` + `hkvm.lxc`) FIRST, BEFORE spawning/probing `lxcfs`!
+    const cgroupV2Controllers = readActiveCgroupV2Controllers(isSystemStore);
     if (isSystemStore) {
       await ensureLxcfsDaemonMounted().catch(() => false);
     }
 
-    const cgroupV2Controllers = readActiveCgroupV2Controllers(isSystemStore);
     const isCgroupV2 = cgroupV2Controllers !== null;
     const apparmorAvailable = isAppArmorProfileLoadable();
-    const lines: string[] = [markerStart];
+    const effectiveCores = Math.max(1, Number(cfg.cpuCores ?? prevLimits?.cpuCores ?? 1));
+    const effectivePct = Math.min(
+      100,
+      Math.max(5, Number(cfg.cpuLimitPercent ?? prevLimits?.cpuLimitPercent ?? 100))
+    );
+    const effectiveRamMb =
+      cfg.ramMb !== undefined ? Math.max(64, Number(cfg.ramMb)) : prevLimits?.ramMb;
+    const effectiveSwapMb =
+      cfg.swapMb !== undefined ? Math.max(0, Number(cfg.swapMb)) : prevLimits?.swapMb;
+    const effectivePinning =
+      cfg.cpuPinning !== undefined ? cfg.cpuPinning : (prevLimits?.cpuPinning ?? null);
+    const quotaUs = Math.round(effectiveCores * 100_000 * (effectivePct / 100));
+    const effectiveCpuset = selectContainerCpuset(
+      safeName,
+      effectiveCores,
+      readEffectiveHostCpuIds(),
+      effectivePinning
+    );
+
+    const lines: string[] = [
+      markerStart,
+      `# hkvm.limits: ram_mb=${effectiveRamMb ?? ''} swap_mb=${effectiveSwapMb ?? ''} cpu_cores=${effectiveCores} cpu_pct=${effectivePct} cpuset=${effectiveCpuset || ''} pinning=${effectivePinning || ''}`,
+    ];
 
     if (cfg.hostname) {
       const cleanHost = cfg.hostname.replace(/[^a-zA-Z0-9.-]/g, '').slice(0, 63);
@@ -2210,17 +2358,14 @@ export class LxcContainerManager {
       lines.push('lxc.mount.entry = /dev/net/tun dev/net/tun none bind,optional,create=file 0 0');
     }
 
-    const cores = Math.max(1, Number(cfg.cpuCores || 1));
-    const pct = Math.min(100, Math.max(5, Number(cfg.cpuLimitPercent || 100)));
-    const quotaUs = Math.round(cores * 100_000 * (pct / 100));
-    const effectiveCpuset = selectContainerCpuset(
-      safeName,
-      cores,
-      readEffectiveHostCpuIds(),
-      cfg.cpuPinning
-    );
-
     if (isCgroupV2 && cgroupV2Controllers) {
+      if (isSystemStore) {
+        const baseCgDir = resolveHostBaseCgroupV2Dir();
+        if (fs.existsSync(path.join(baseCgDir, 'hkvm.lxc'))) {
+          lines.push('lxc.cgroup.relative = 0');
+          lines.push('lxc.cgroup.dir = hkvm.lxc');
+        }
+      }
       if (cgroupV2Controllers.has('cpu')) {
         lines.push(`lxc.cgroup2.cpu.max = ${quotaUs} 100000`);
         if (cfg.cpuShares) {
@@ -2232,11 +2377,11 @@ export class LxcContainerManager {
         lines.push(`lxc.cgroup2.cpuset.cpus = ${effectiveCpuset}`);
       }
       if (cgroupV2Controllers.has('memory')) {
-        if (cfg.ramMb) {
-          lines.push(`lxc.cgroup2.memory.max = ${Math.max(64, cfg.ramMb)}M`);
+        if (effectiveRamMb) {
+          lines.push(`lxc.cgroup2.memory.max = ${effectiveRamMb}M`);
         }
-        if (cfg.swapMb !== undefined && isCgroupV2SwapSupported()) {
-          lines.push(`lxc.cgroup2.memory.swap.max = ${Math.max(0, cfg.swapMb)}M`);
+        if (effectiveSwapMb !== undefined && isCgroupV2SwapSupported()) {
+          lines.push(`lxc.cgroup2.memory.swap.max = ${effectiveSwapMb}M`);
         }
       }
     } else if (!isCgroupV2) {
@@ -2248,8 +2393,8 @@ export class LxcContainerManager {
       if (effectiveCpuset) {
         lines.push(`lxc.cgroup.cpuset.cpus = ${effectiveCpuset}`);
       }
-      if (cfg.ramMb) {
-        lines.push(`lxc.cgroup.memory.limit_in_bytes = ${Math.max(64, cfg.ramMb)}M`);
+      if (effectiveRamMb) {
+        lines.push(`lxc.cgroup.memory.limit_in_bytes = ${effectiveRamMb}M`);
       }
     }
 
@@ -2693,6 +2838,265 @@ export class LxcContainerManager {
     };
   }
 
+  public async ensureHostIsolationReady(): Promise<void> {
+    if (!this.isSystemLxcStore()) return;
+    ensureCgroupV2SubtreeDelegation();
+    await ensureLxcfsDaemonMounted().catch(() => false);
+  }
+
+  public parseManagedLimitsComment(
+    configText: string
+  ): {
+    ramMb?: number;
+    swapMb?: number;
+    cpuCores?: number;
+    cpuLimitPercent?: number;
+    cpuset?: string | null;
+    cpuPinning?: string | null;
+  } | null {
+    const m = configText.match(/^#\s*hkvm\.limits:\s*(.+)$/m);
+    if (!m) return null;
+    const kv: Record<string, string> = {};
+    for (const tok of m[1].trim().split(/\s+/)) {
+      const eq = tok.indexOf('=');
+      if (eq > 0) {
+        kv[tok.slice(0, eq)] = tok.slice(eq + 1);
+      }
+    }
+    return {
+      ramMb: kv.ram_mb && /^\d+$/.test(kv.ram_mb) ? Number(kv.ram_mb) : undefined,
+      swapMb: kv.swap_mb && /^\d+$/.test(kv.swap_mb) ? Number(kv.swap_mb) : undefined,
+      cpuCores: kv.cpu_cores && /^\d+$/.test(kv.cpu_cores) ? Number(kv.cpu_cores) : undefined,
+      cpuLimitPercent: kv.cpu_pct && /^\d+$/.test(kv.cpu_pct) ? Number(kv.cpu_pct) : undefined,
+      cpuset: kv.cpuset || null,
+      cpuPinning: kv.pinning || null,
+    };
+  }
+
+  /**
+   * Enforces RAM (`memory.max`), Swap (`memory.swap.max`), CFS CPU quota (`cpu.max`), and
+   * CPU core pinning (`cpuset.cpus`) directly on the running container's live kernel cgroup v2
+   * directory (resolved from `/proc/<init_pid>/cgroup`), with each controller applied independently
+   * so an unsupported secondary knob (such as `memory.swap.max` or `devices.allow`) NEVER prevents
+   * `memory.max`, `cpu.max`, or `cpuset.cpus` from taking effect.
+   */
+  public async enforceLiveContainerCgroups(
+    containerName: string,
+    override?: {
+      ramMb?: number;
+      swapMb?: number;
+      cpuCores?: number;
+      cpuLimitPercent?: number;
+      cpuPinning?: string | null;
+      pid?: number | null;
+      cgroupDirOverride?: string;
+    }
+  ): Promise<boolean> {
+    const safeName = SafeValidators.containerName(containerName);
+    let targetCgDir = override?.cgroupDirOverride || null;
+    if (!targetCgDir) {
+      let pid = override?.pid ?? null;
+      if (!pid) {
+        const info = await this.inspectContainer(safeName).catch(() => null);
+        if (!info || info.state !== 'running' || !info.pid) return false;
+        pid = info.pid;
+      }
+      targetCgDir = resolveLiveContainerCgroupV2Dir(pid);
+    }
+    if (!targetCgDir || !fs.existsSync(targetCgDir)) return false;
+
+    const configFile = path.join(this.getContainerDir(safeName), 'config');
+    const saved = privilegedFs.existsSync(configFile)
+      ? this.parseManagedLimitsComment(privilegedFs.readTextSync(configFile))
+      : null;
+
+    const ramMb = override?.ramMb ?? saved?.ramMb;
+    const swapMb = override?.swapMb ?? saved?.swapMb;
+    const cpuCores = override?.cpuCores ?? saved?.cpuCores;
+    const cpuPct = Math.min(
+      100,
+      Math.max(5, Number(override?.cpuLimitPercent ?? saved?.cpuLimitPercent ?? 100))
+    );
+    const explicitPinning =
+      override?.cpuPinning !== undefined ? override.cpuPinning : (saved?.cpuPinning ?? null);
+
+    // Ensure ancestor cgroups between `/sys/fs/cgroup` and `targetCgDir` have controllers delegated
+    // whenever those ancestors have zero internal processes.
+    try {
+      const relParts = path
+        .relative('/sys/fs/cgroup', targetCgDir)
+        .split(path.sep)
+        .filter(Boolean);
+      let cursor = '/sys/fs/cgroup';
+      for (let i = 0; i < relParts.length - 1; i++) {
+        cursor = path.join(cursor, relParts[i]);
+        const subFile = path.join(cursor, 'cgroup.subtree_control');
+        const procsFile = path.join(cursor, 'cgroup.procs');
+        if (fs.existsSync(subFile) && fs.existsSync(procsFile)) {
+          const procsTxt = fs.readFileSync(procsFile, 'utf8').trim();
+          if (!procsTxt) {
+            for (const ctrl of ['cpu', 'cpuset', 'memory', 'pids']) {
+              try {
+                privilegedFs.writeFileSync(subFile, `+${ctrl}`);
+              } catch {
+                // ignore
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // non-fatal
+    }
+
+    let appliedAny = false;
+    if (ramMb && ramMb >= 64) {
+      const memMaxFile = path.join(targetCgDir, 'memory.max');
+      if (fs.existsSync(memMaxFile)) {
+        try {
+          privilegedFs.writeFileSync(memMaxFile, `${Math.round(ramMb * 1024 * 1024)}\n`);
+          appliedAny = true;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (swapMb !== undefined && swapMb >= 0) {
+      const swapMaxFile = path.join(targetCgDir, 'memory.swap.max');
+      if (fs.existsSync(swapMaxFile)) {
+        try {
+          privilegedFs.writeFileSync(swapMaxFile, `${Math.round(swapMb * 1024 * 1024)}\n`);
+          appliedAny = true;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (cpuCores && cpuCores >= 1) {
+      const cpuMaxFile = path.join(targetCgDir, 'cpu.max');
+      const quotaUs = Math.round(Math.max(1, cpuCores) * 100_000 * (cpuPct / 100));
+      if (fs.existsSync(cpuMaxFile)) {
+        try {
+          privilegedFs.writeFileSync(cpuMaxFile, `${quotaUs} 100000\n`);
+          appliedAny = true;
+        } catch {
+          // ignore
+        }
+      }
+
+      const cpusetFile = path.join(targetCgDir, 'cpuset.cpus');
+      const cpusetVal = selectContainerCpuset(
+        safeName,
+        cpuCores,
+        readEffectiveHostCpuIds(),
+        explicitPinning
+      );
+      if (cpusetVal && fs.existsSync(cpusetFile)) {
+        try {
+          privilegedFs.writeFileSync(cpusetFile, `${cpusetVal}\n`);
+          appliedAny = true;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    return appliedAny;
+  }
+
+  /**
+   * Inspects both `<ct>/config` and the container's live kernel cgroup (`/proc/<pid>/cgroup`)
+   * to determine whether the container needs its config refreshed, needs a restart out of an
+   * undelegated cgroup (such as legacy `/hkvm.host/...`), or can have limits applied live in-place.
+   */
+  public needsContainerCgroupRestartOrHeal(
+    containerName: string,
+    pid: number | null | undefined,
+    desired: {
+      ramMb: number;
+      swapMb?: number;
+      cpuCores: number;
+      cpuLimitPercent?: number;
+      cpuPinning?: string | null;
+    }
+  ): { rewriteConfig: boolean; requiresRestart: boolean; enforceLive: boolean } {
+    const safeName = SafeValidators.containerName(containerName);
+    const cfgPath = path.join(this.getContainerDir(safeName), 'config');
+    const curCfg = privilegedFs.existsSync(cfgPath) ? privilegedFs.readTextSync(cfgPath) : '';
+
+    const isV2 = fs.existsSync('/sys/fs/cgroup/cgroup.controllers');
+    const baseDir = isV2 ? resolveHostBaseCgroupV2Dir() : '/sys/fs/cgroup';
+    const hasHkvmLxcDir = isV2 && fs.existsSync(path.join(baseDir, 'hkvm.lxc'));
+
+    const missingLimitsComment = !curCfg.includes('# hkvm.limits:');
+    const missingMemDirective =
+      !curCfg.includes('memory.max') && !curCfg.includes('memory.limit_in_bytes');
+    const missingCgroupDirDirective = hasHkvmLxcDir && !curCfg.includes('lxc.cgroup.dir = hkvm.lxc');
+    const hasCommonLxcfsHook =
+      curCfg.includes('/usr/share/lxc/config/common.conf') &&
+      fs.existsSync('/usr/share/lxc/config/common.conf.d/00-lxcfs.conf');
+    const missingLxcfsBind =
+      fs.existsSync('/var/lib/lxcfs/proc/meminfo') &&
+      !hasCommonLxcfsHook &&
+      !curCfg.includes('/var/lib/lxcfs/proc/meminfo');
+
+    const rewriteConfig =
+      missingLimitsComment ||
+      missingMemDirective ||
+      missingCgroupDirDirective ||
+      missingLxcfsBind;
+
+    if (!pid || pid <= 1 || !isV2) {
+      return {
+        rewriteConfig,
+        requiresRestart: Boolean(pid && pid > 1 && missingLxcfsBind),
+        enforceLive: false,
+      };
+    }
+
+    const cgDir = resolveLiveContainerCgroupV2Dir(pid);
+    if (!cgDir) {
+      return { rewriteConfig: true, requiresRestart: true, enforceLive: false };
+    }
+
+    // If the container is trapped inside legacy `/hkvm.host/...` or a cgroup where `memory.max`
+    // is not delegated by its parent `subtree_control`, only a restart into `hkvm.lxc` can give it
+    // a delegated payload cgroup with `memory.max` + `memory.stat` + `cpuset.cpus`!
+    const memMaxPath = path.join(cgDir, 'memory.max');
+    if (cgDir.includes('/hkvm.host/') || !fs.existsSync(memMaxPath) || missingLxcfsBind) {
+      return { rewriteConfig: true, requiresRestart: true, enforceLive: false };
+    }
+
+    let enforceLive = false;
+    try {
+      const expectedBytes = String(Math.round(Math.max(64, desired.ramMb) * 1024 * 1024));
+      const actualMemMax = fs.readFileSync(memMaxPath, 'utf8').trim();
+      if (actualMemMax !== expectedBytes) {
+        enforceLive = true;
+      }
+      const cpusetPath = path.join(cgDir, 'cpuset.cpus');
+      const expectedCpuset = selectContainerCpuset(
+        safeName,
+        desired.cpuCores,
+        readEffectiveHostCpuIds(),
+        desired.cpuPinning
+      );
+      if (expectedCpuset && fs.existsSync(cpusetPath)) {
+        const actualCpus = parseCpuListSpec(fs.readFileSync(cpusetPath, 'utf8'));
+        const expectedCpus = parseCpuListSpec(expectedCpuset);
+        if (actualCpus.length !== expectedCpus.length) {
+          enforceLive = true;
+        }
+      }
+    } catch {
+      enforceLive = true;
+    }
+
+    return { rewriteConfig, requiresRestart: false, enforceLive };
+  }
+
   public async startContainer(containerName: string): Promise<void> {
     this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(containerName);
@@ -2704,8 +3108,8 @@ export class LxcContainerManager {
     }
 
     if (this.isSystemLxcStore()) {
-      await ensureLxcfsDaemonMounted().catch(() => false);
       ensureCgroupV2SubtreeDelegation();
+      await ensureLxcfsDaemonMounted().catch(() => false);
     }
     await this.ensureExistingQuotaDiskMounted(safeName).catch(() => false);
     const preNet = await this.prepareContainerNetworkPreStart(safeName).catch(() => null);
@@ -2740,39 +3144,28 @@ export class LxcContainerManager {
       if (/cgroup|limits|devices/i.test(combinedDiag) && privilegedFs.existsSync(configFile)) {
         try {
           let curCfg = privilegedFs.readTextSync(configFile);
-          // Stage 1: Strip ONLY `devices.allow` / `devices.deny` first (eBPF device rules often fail in
-          // nested Docker/Codespace cgroups, and must NEVER wipe out `memory.max` or `cpu.max`!)
-          const withoutDevices = curCfg.replace(
-            /^\s*lxc\.cgroup2?\.devices\.[a-zA-Z0-9_.-]+\s*=.*$/gm,
-            ''
-          );
-          if (withoutDevices !== curCfg) {
-            privilegedFs.writeFileSync(configFile, withoutDevices, 0o640);
-            curCfg = withoutDevices;
-            res = await runStart();
-          }
-
-          // Stage 2: If still failing, strip `cpuset.cpus` next while keeping `memory.max` and `cpu.max`
-          if (res.exitCode !== 0) {
-            const withoutCpuset = curCfg.replace(
-              /^\s*lxc\.cgroup2?\.cpuset\.[a-zA-Z0-9_.-]+\s*=.*$/gm,
-              ''
-            );
-            if (withoutCpuset !== curCfg) {
-              privilegedFs.writeFileSync(configFile, withoutCpuset, 0o640);
-              curCfg = withoutCpuset;
-              res = await runStart();
-            }
-          }
-
-          // Stage 3: Last-resort fallback on unprivileged kernels without any cgroup delegation
-          if (res.exitCode !== 0) {
-            const nextCfg = curCfg.replace(/^\s*lxc\.cgroup2?\.[a-zA-Z0-9_.-]+\s*=.*$/gm, '');
+          const tryStripPattern = async (pattern: RegExp) => {
+            if (res.exitCode === 0) return;
+            const nextCfg = curCfg.replace(pattern, '');
             if (nextCfg !== curCfg) {
               privilegedFs.writeFileSync(configFile, nextCfg, 0o640);
+              curCfg = nextCfg;
               res = await runStart();
             }
-          }
+          };
+
+          // Stage 1: Strip ONLY `devices.allow` / `devices.deny` (eBPF device rules often fail in nested cgroups)
+          await tryStripPattern(/^\s*lxc\.cgroup2?\.devices\.[a-zA-Z0-9_.-]+\s*=.*$/gm);
+          // Stage 2: Strip secondary `memory.swap.*` & `cpu.weight` while preserving `memory.max`, `cpu.max`, and `cpuset.cpus`
+          await tryStripPattern(
+            /^\s*lxc\.cgroup2?\.(?:memory\.swap\.[a-zA-Z0-9_.-]+|cpu\.weight)\s*=.*$/gm
+          );
+          // Stage 3: Strip `lxc.cgroup.dir` / `lxc.cgroup.relative` on older LXC versions while STILL keeping `memory.max` & `cpuset.cpus`
+          await tryStripPattern(/^\s*lxc\.cgroup\.(?:dir|relative)\s*=.*$/gm);
+          // Stage 4: Strip `cpuset.*` while keeping `memory.max` and `cpu.max`
+          await tryStripPattern(/^\s*lxc\.cgroup2?\.cpuset\.[a-zA-Z0-9_.-]+\s*=.*$/gm);
+          // Stage 5: Last-resort fallback on unprivileged kernels without any cgroup delegation
+          await tryStripPattern(/^\s*lxc\.cgroup2?\.[a-zA-Z0-9_.-]+\s*=.*$/gm);
         } catch {
           // ignore config rewrite error and surface original failure
         }
@@ -2790,6 +3183,12 @@ export class LxcContainerManager {
         }
         throw new Error(`lxc-start failed: ${(res.stderr || res.stdout).trim()}${logDetails}`);
       }
+    }
+
+    if (this.isSystemLxcStore()) {
+      // Directly enforce `memory.max`, `cpu.max`, and `cpuset.cpus` on the live payload cgroup
+      // so `neofetch` / `free -h` / `nproc` ALWAYS see exact limits even if an optional directive was skipped!
+      await this.enforceLiveContainerCgroups(safeName).catch(() => false);
     }
 
     if (preNet && this.isSystemLxcStore()) {
@@ -2906,8 +3305,18 @@ export class LxcContainerManager {
     const safeName = SafeValidators.containerName(containerName);
     await this.writeManagedConfigSection(safeName, update);
 
-    // Apply live cgroup limits immediately if container is running
+    // Apply live cgroup limits immediately if container is running (direct kernel cgroupfs + lxc-cgroup)
     const info = await this.inspectContainer(safeName);
+    if (info.state === 'running') {
+      await this.enforceLiveContainerCgroups(safeName, {
+        ramMb: update.ramMb,
+        swapMb: update.swapMb,
+        cpuCores: update.cpuCores,
+        cpuLimitPercent: update.cpuLimitPercent,
+        cpuPinning: update.cpuPinning,
+        pid: info.pid,
+      }).catch(() => false);
+    }
     if (info.state === 'running' && isBinaryAvailable('lxc-cgroup')) {
       const isV2 = fs.existsSync('/sys/fs/cgroup/cgroup.controllers');
       const rootOpt = { timeoutMs: 5000, asRoot: this.needsRootForStore() || undefined };

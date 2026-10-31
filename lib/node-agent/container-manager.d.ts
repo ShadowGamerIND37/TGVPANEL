@@ -127,6 +127,26 @@ export declare function readEffectiveHostCpuIds(): number[];
  * report the container's assigned vCPU count while spreading load across host cores.
  */
 export declare function selectContainerCpuset(containerName: string, requestedCores: number, availableCpus?: number[], explicitPinning?: string | null): string | null;
+/**
+ * Resolves the host's base cgroup v2 directory from `/proc/1/cgroup`, stripping `/init.scope`
+ * (and any legacy `/hkvm.host` leaf created by older builds) so `liblxc` and `lxcfs`
+ * (`prune_init_scope()`) both resolve container cgroups from the same delegated root.
+ */
+export declare function resolveHostBaseCgroupV2Dir(proc1CgroupRaw?: string): string;
+export declare function cleanupLegacyHostLeafCgroup(baseDir?: string): void;
+/**
+ * Ensures cgroup v2 `cpu`, `cpuset`, `memory`, and `pids` controllers are delegated in BOTH
+ * `<baseCgroup>/cgroup.subtree_control` AND `<baseCgroup>/hkvm.lxc/cgroup.subtree_control`.
+ *
+ * CRITICAL (`liblxc` & `lxcfs` compatibility):
+ * Both `liblxc` and `lxcfs` read `/proc/1/cgroup` and call `prune_init_scope()`, which ONLY strips
+ * `/init.scope`! Therefore, when PID 1 sits directly in `/sys/fs/cgroup/cgroup.procs` on Docker /
+ * GitHub Codespace kernels ("no internal processes" rule -> EBUSY), host processes MUST be evacuated
+ * into `/sys/fs/cgroup/init.scope` (never `/hkvm.host`), and containers run under `/sys/fs/cgroup/hkvm.lxc`
+ * which never contains internal processes of its own.
+ */
+export declare function ensureCgroupV2SubtreeDelegation(): void;
+export declare function resolveLiveContainerCgroupV2Dir(pid: number | null | undefined): string | null;
 export declare class LxcContainerManager {
     private lxcBaseDir;
     private inFlightCreations;
@@ -252,6 +272,47 @@ export declare class LxcContainerManager {
      * live inside the guest.
      */
     repairContainerNetworking(containerName: string, fallbackBridge?: string): Promise<LxcNetworkRepairResult>;
+    ensureHostIsolationReady(): Promise<void>;
+    parseManagedLimitsComment(configText: string): {
+        ramMb?: number;
+        swapMb?: number;
+        cpuCores?: number;
+        cpuLimitPercent?: number;
+        cpuset?: string | null;
+        cpuPinning?: string | null;
+    } | null;
+    /**
+     * Enforces RAM (`memory.max`), Swap (`memory.swap.max`), CFS CPU quota (`cpu.max`), and
+     * CPU core pinning (`cpuset.cpus`) directly on the running container's live kernel cgroup v2
+     * directory (resolved from `/proc/<init_pid>/cgroup`), with each controller applied independently
+     * so an unsupported secondary knob (such as `memory.swap.max` or `devices.allow`) NEVER prevents
+     * `memory.max`, `cpu.max`, or `cpuset.cpus` from taking effect.
+     */
+    enforceLiveContainerCgroups(containerName: string, override?: {
+        ramMb?: number;
+        swapMb?: number;
+        cpuCores?: number;
+        cpuLimitPercent?: number;
+        cpuPinning?: string | null;
+        pid?: number | null;
+        cgroupDirOverride?: string;
+    }): Promise<boolean>;
+    /**
+     * Inspects both `<ct>/config` and the container's live kernel cgroup (`/proc/<pid>/cgroup`)
+     * to determine whether the container needs its config refreshed, needs a restart out of an
+     * undelegated cgroup (such as legacy `/hkvm.host/...`), or can have limits applied live in-place.
+     */
+    needsContainerCgroupRestartOrHeal(containerName: string, pid: number | null | undefined, desired: {
+        ramMb: number;
+        swapMb?: number;
+        cpuCores: number;
+        cpuLimitPercent?: number;
+        cpuPinning?: string | null;
+    }): {
+        rewriteConfig: boolean;
+        requiresRestart: boolean;
+        enforceLive: boolean;
+    };
     startContainer(containerName: string): Promise<void>;
     stopContainer(containerName: string, force?: boolean): Promise<void>;
     restartContainer(containerName: string): Promise<void>;

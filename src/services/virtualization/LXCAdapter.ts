@@ -1186,6 +1186,9 @@ export class LXCAdapter implements VirtualizationAdapter {
     );
     const cm = this.nodeManager.localRuntime.containerManager;
     const isSystemStore = path.resolve(cm.getBaseDir()) === '/var/lib/lxc';
+    if (isSystemStore) {
+      await cm.ensureHostIsolationReady().catch(() => undefined);
+    }
 
     for (const r of rows) {
       try {
@@ -1194,12 +1197,19 @@ export class LXCAdapter implements VirtualizationAdapter {
 
         if (isSystemStore) {
           const needsLoopUpgrade = !info.diskQuotaEnforced && r.disk_gb >= 1;
-          const cfgPath = path.join(cm.getContainerDir(r.container_name), 'config');
-          const curCfg = privilegedFs.existsSync(cfgPath) ? privilegedFs.readTextSync(cfgPath) : '';
-          const missingCgroupLimits =
-            !curCfg.includes('memory.max') && !curCfg.includes('memory.limit_in_bytes');
+          const cgHeal = cm.needsContainerCgroupRestartOrHeal(
+            r.container_name,
+            info.state === 'running' ? info.pid : null,
+            {
+              ramMb: r.ram_mb,
+              swapMb: r.swap_mb,
+              cpuCores: r.cpu_cores,
+              cpuLimitPercent: r.cpu_limit_pct,
+              cpuPinning: r.cpu_pinning,
+            }
+          );
 
-          if (needsLoopUpgrade || missingCgroupLimits) {
+          if (needsLoopUpgrade || cgHeal.rewriteConfig || cgHeal.requiresRestart) {
             const wasRunning = info.state === 'running';
             if (wasRunning && needsLoopUpgrade) {
               await cm.stopContainer(r.container_name).catch(() => undefined);
@@ -1233,12 +1243,33 @@ export class LXCAdapter implements VirtualizationAdapter {
               if (wasRunning) {
                 await cm.startContainer(r.container_name).catch(() => undefined);
               }
-            } else if (wasRunning && missingCgroupLimits) {
+            } else if (wasRunning && cgHeal.requiresRestart) {
               await cm.restartContainer(r.container_name).catch(() => undefined);
+            } else if (wasRunning) {
+              await cm
+                .enforceLiveContainerCgroups(r.container_name, {
+                  ramMb: r.ram_mb,
+                  swapMb: r.swap_mb,
+                  cpuCores: r.cpu_cores,
+                  cpuLimitPercent: r.cpu_limit_pct,
+                  cpuPinning: r.cpu_pinning,
+                })
+                .catch(() => false);
             }
             info = await cm.inspectContainer(r.container_name);
           } else {
             await cm.ensureExistingQuotaDiskMounted(r.container_name).catch(() => false);
+            if (info.state === 'running' && cgHeal.enforceLive) {
+              await cm
+                .enforceLiveContainerCgroups(r.container_name, {
+                  ramMb: r.ram_mb,
+                  swapMb: r.swap_mb,
+                  cpuCores: r.cpu_cores,
+                  cpuLimitPercent: r.cpu_limit_pct,
+                  cpuPinning: r.cpu_pinning,
+                })
+                .catch(() => false);
+            }
           }
         }
 
