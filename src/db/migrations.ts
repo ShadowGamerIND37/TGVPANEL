@@ -1154,6 +1154,17 @@ export const MIGRATIONS: MigrationDefinition[] = [
       await ensureColumn(db, 'lxc_instances', 'kvm_nesting', 'INTEGER DEFAULT 0');
     },
   },
+  {
+    version: 7,
+    name: 'v007_rebrand_default_admin_email',
+    up: async (db) => {
+      await db.run(
+        `UPDATE users
+         SET email = 'admin@shadowgamerind.local'
+         WHERE LOWER(email) IN ('admin@hopingboyz.local', 'admin@hopingboy.local')`
+      );
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

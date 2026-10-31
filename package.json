@@ -22,7 +22,7 @@
     "virtualization",
     "management"
   ],
-  "author": "Hopingboyz",
+  "author": "ShadowGamerIND",
   "license": "MIT",
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

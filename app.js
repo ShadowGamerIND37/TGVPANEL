@@ -609,7 +609,7 @@ function initializeDatabase() {
       if (!row) {
         const hashedPassword = bcrypt.hashSync('admin', 10);
         db.run(`INSERT INTO users (username, password, email, role) VALUES (?, ?, ?, ?)`,
-          ['admin', hashedPassword, 'admin@hopingboyz.local', 'admin']);
+          ['admin', hashedPassword, 'admin@shadowgamerind.local', 'admin']);
         console.log('✓ Default admin created: admin/admin (role: admin)');
       } else {
         console.log(`✓ Admin user exists: ${row.username} (role: ${row.role})`);

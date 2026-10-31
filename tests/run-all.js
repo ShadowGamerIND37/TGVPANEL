@@ -150,13 +150,13 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
-    await runStep('T01: Transactional SQLite backup & migrations v001..v006 preserve legacy HKVM data', async () => {
+    await runStep('T01: Transactional SQLite backup & migrations v001..v007 preserve legacy HKVM data & rebrand default email', async () => {
       const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
       const v2Raw = new sqlite3.Database(v2ScratchPath);
       const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
       await v2Db.exec(`
         CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT, email TEXT, full_name TEXT, role TEXT DEFAULT 'user', is_active INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-        INSERT INTO users (username, password, email, role) VALUES ('admin', '$2a$10$legacyhashplaceholder123456789012345678901234567', 'admin@hkvm.local', 'admin');
+        INSERT INTO users (username, password, email, role) VALUES ('admin', '$2a$10$legacyhashplaceholder123456789012345678901234567', 'admin@hopingboyz.local', 'admin');
         CREATE TABLE vms (vm_id INTEGER PRIMARY KEY AUTOINCREMENT, vm_name TEXT, hostname TEXT, owner_id INTEGER, memory INTEGER DEFAULT 1024, cpus INTEGER DEFAULT 1, disk_size TEXT DEFAULT '20G', status TEXT DEFAULT 'stopped', password TEXT);
         CREATE TABLE vm_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, vm_id INTEGER, action TEXT, status TEXT, message TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE vm_snapshots (snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT, vm_id INTEGER, snapshot_name TEXT, size_gb REAL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
@@ -167,7 +167,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       `);
 
       const migRes = await runMigrations(v2Db);
-      assert.ok(migRes.applied.length >= 6, 'Expected v001..v006 migrations to apply');
+      assert.ok(migRes.applied.length >= 7, 'Expected v001..v007 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
 
       const lxcCols = await v2Db.all(`PRAGMA table_info(lxc_instances)`);
@@ -175,6 +175,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
       const adminUser = await v2Db.get(`SELECT * FROM users WHERE username = 'admin'`);
       assert.ok(adminUser, 'Legacy admin user preserved');
+      assert.strictEqual(adminUser.email, 'admin@shadowgamerind.local', 'Expected default email rebranded to ShadowGamerIND');
       const templates = await v2Db.all(`SELECT * FROM lxc_templates`);
       assert.ok(templates.length >= 15, 'Seeded LXC OS template catalog');
       await v2Db.close();
