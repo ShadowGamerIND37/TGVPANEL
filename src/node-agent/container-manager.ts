@@ -76,7 +76,119 @@ export interface LxcContainerRuntimeInfo {
   rxBytes: number;
   txBytes: number;
   diskUsedBytes: number;
+  configuredIpv4?: string | null;
+  configuredGateway?: string | null;
   startupWarning?: string;
+}
+
+export interface LxcBridgeNetworkInfo {
+  ready: boolean;
+  bridgeIp: string | null;
+  prefixLen: number;
+  subnetCidr: string | null;
+  hasDhcpServer: boolean;
+  natConfigured: boolean;
+}
+
+export interface LxcNetworkRepairResult {
+  containerName: string;
+  state: LxcContainerRuntimeInfo['state'];
+  bridge: string;
+  ipv4Address: string | null;
+  gateway: string | null;
+  dnsServers: string[];
+  natConfigured: boolean;
+  liveApplied: boolean;
+}
+
+export function ipv4ToUint32(ip: string): number {
+  const parts = ip.trim().split('.').map((p) => parseInt(p, 10));
+  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) {
+    return 0;
+  }
+  return (((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0);
+}
+
+export function uint32ToIpv4(num: number): string {
+  const u = num >>> 0;
+  return `${(u >>> 24) & 255}.${(u >>> 16) & 255}.${(u >>> 8) & 255}.${u & 255}`;
+}
+
+export function prefixLenToNetmask(prefixLen: number): string {
+  const p = Math.min(32, Math.max(0, Math.floor(prefixLen)));
+  const mask = p === 0 ? 0 : ((0xffffffff << (32 - p)) >>> 0);
+  return uint32ToIpv4(mask);
+}
+
+export function computeIpv4SubnetCidr(ip: string, prefixLen = 24): string | null {
+  const u = ipv4ToUint32(ip);
+  if (!u) return null;
+  const p = Math.min(32, Math.max(8, Math.floor(prefixLen)));
+  const mask = (0xffffffff << (32 - p)) >>> 0;
+  const net = (u & mask) >>> 0;
+  return `${uint32ToIpv4(net)}/${p}`;
+}
+
+function isPrivateRfc1918Ipv4(ip: string): boolean {
+  const parts = ip.trim().split('.').map((p) => parseInt(p, 10));
+  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n))) return false;
+  if (parts[0] === 10) return true;
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  if (parts[0] === 192 && parts[1] === 168) return true;
+  return false;
+}
+
+/**
+ * Resolves up to 3 reliable upstream IPv4 DNS servers suitable for inside an LXC container
+ * (respecting glibc MAXNS=3 while filtering out host loopback 127.0.0.53 and WSL2's
+ * non-bridge-routable 10.255.255.254 tunnel listener).
+ */
+export function resolveGuestDnsServers(hostResolvConfContent?: string): string[] {
+  const envDns = (process.env.HKVM_LXC_DNS || '').trim();
+  if (envDns) {
+    const custom = envDns
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter((s) => /^(\d{1,3}\.){3}\d{1,3}$/.test(s));
+    if (custom.length > 0) return custom.slice(0, 3);
+  }
+
+  const hostCandidates: string[] = [];
+  try {
+    const raw =
+      hostResolvConfContent !== undefined
+        ? hostResolvConfContent
+        : fs.existsSync('/etc/resolv.conf')
+        ? fs.readFileSync('/etc/resolv.conf', 'utf8')
+        : '';
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const m = trimmed.match(/^nameserver\s+(\d{1,3}(?:\.\d{1,3}){3})\b/i);
+      if (!m) continue;
+      const ns = m[1];
+      if (
+        ns.startsWith('127.') ||
+        ns.startsWith('0.') ||
+        ns.startsWith('169.254.') ||
+        ns === '10.255.255.254'
+      ) {
+        continue;
+      }
+      if (!hostCandidates.includes(ns)) hostCandidates.push(ns);
+    }
+  } catch {
+    // ignore host /etc/resolv.conf read errors
+  }
+
+  const ordered: string[] = ['1.1.1.1', '8.8.8.8'];
+  for (const h of hostCandidates) {
+    if (!ordered.includes(h)) ordered.push(h);
+  }
+  if (ordered.length < 3 && !ordered.includes('1.0.0.1')) {
+    ordered.push('1.0.0.1');
+  }
+  return ordered.slice(0, 3);
 }
 
 const DEFAULT_LXC_BASE = process.env.HKVM_LXC_PATH || '/var/lib/lxc';
@@ -306,24 +418,552 @@ export class LxcContainerManager {
     }
   }
 
-  private async ensureBridgeAvailable(bridgeName: string): Promise<boolean> {
-    const safeBridge = SafeValidators.bridgeOrIface(bridgeName);
-    if (fs.existsSync(`/sys/class/net/${safeBridge}`)) {
-      return true;
-    }
-    if (!isBinaryAvailable('ip')) {
+  private isSystemLxcStore(): boolean {
+    return this.lxcBaseDir === '/var/lib/lxc' || this.lxcBaseDir.startsWith('/var/lib/lxc/');
+  }
+
+  private bridgeHasPhysicalSlave(safeBridge: string): boolean {
+    try {
+      const brifDir = `/sys/class/net/${safeBridge}/brif`;
+      if (!fs.existsSync(brifDir)) return false;
+      for (const iface of fs.readdirSync(brifDir)) {
+        if (fs.existsSync(`/sys/class/net/${iface}/device`)) {
+          return true;
+        }
+      }
+      return false;
+    } catch {
       return false;
     }
-    // Attempt to create and bring up the requested Linux bridge (e.g. lxcbr0 on fresh hosts/Codespaces)
-    await runAllowlistedCommand('ip', ['link', 'add', 'name', safeBridge, 'type', 'bridge'], {
-      timeoutMs: 5000,
-      asRoot: true,
-    });
+  }
+
+  private detectBridgeDhcpServer(safeBridge: string): boolean {
+    try {
+      for (const pidFile of ['/run/lxc/dnsmasq.pid', '/var/run/lxc/dnsmasq.pid']) {
+        if (safeBridge === 'lxcbr0' && fs.existsSync(pidFile)) {
+          const p = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+          if (p > 0 && fs.existsSync(`/proc/${p}`)) return true;
+        }
+      }
+      if (!fs.existsSync('/proc')) return false;
+      for (const ent of fs.readdirSync('/proc')) {
+        if (!/^\d+$/.test(ent)) continue;
+        try {
+          const cmd = fs.readFileSync(`/proc/${ent}/cmdline`, 'utf8').replace(/\0/g, ' ');
+          if (
+            /(dnsmasq|dhcpd|kea-dhcp4|udhcpd)/i.test(cmd) &&
+            (cmd.includes(safeBridge) || (safeBridge === 'lxcbr0' && cmd.includes('lxc')))
+          ) {
+            return true;
+          }
+        } catch {
+          // ignore exited proc
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Ensures the Linux bridge exists, is UP, has an IPv4 gateway address (when operating as
+   * a virtual NAT bridge such as `lxcbr0`), enables `net.ipv4.ip_forward=1`, and installs
+   * idempotent outbound NAT MASQUERADE + top-priority FORWARD ACCEPT rules so Docker's
+   * `FORWARD DROP` policy or UFW never blocks LXC container internet/DNS access.
+   */
+  public async ensureBridgeNetworkReady(bridgeName: string): Promise<LxcBridgeNetworkInfo> {
+    const safeBridge = SafeValidators.bridgeOrIface(bridgeName);
+    if (!isBinaryAvailable('ip')) {
+      return {
+        ready: fs.existsSync(`/sys/class/net/${safeBridge}`),
+        bridgeIp: null,
+        prefixLen: 24,
+        subnetCidr: null,
+        hasDhcpServer: this.detectBridgeDhcpServer(safeBridge),
+        natConfigured: false,
+      };
+    }
+
+    if (!fs.existsSync(`/sys/class/net/${safeBridge}`)) {
+      await runAllowlistedCommand('ip', ['link', 'add', 'name', safeBridge, 'type', 'bridge'], {
+        timeoutMs: 5000,
+        asRoot: true,
+      });
+    }
+
+    if (!fs.existsSync(`/sys/class/net/${safeBridge}`)) {
+      return {
+        ready: false,
+        bridgeIp: null,
+        prefixLen: 24,
+        subnetCidr: null,
+        hasDhcpServer: false,
+        natConfigured: false,
+      };
+    }
+
     await runAllowlistedCommand('ip', ['link', 'set', safeBridge, 'up'], {
       timeoutMs: 5000,
       asRoot: true,
     });
-    return fs.existsSync(`/sys/class/net/${safeBridge}`);
+
+    let bridgeIp: string | null = null;
+    let prefixLen = 24;
+    const addrRes = await runAllowlistedCommand(
+      'ip',
+      ['-4', '-o', 'addr', 'show', 'dev', safeBridge],
+      { timeoutMs: 5000, asRoot: true }
+    );
+    const addrMatch = addrRes.stdout.match(/\binet\s+(\d+\.\d+\.\d+\.\d+)\/(\d+)\b/);
+    if (addrMatch) {
+      bridgeIp = addrMatch[1];
+      prefixLen = parseInt(addrMatch[2], 10) || 24;
+    }
+
+    const isVirtualNatBridge = !this.bridgeHasPhysicalSlave(safeBridge);
+
+    if (!bridgeIp && isVirtualNatBridge) {
+      const routeRes = await runAllowlistedCommand('ip', ['-4', 'route', 'show'], {
+        timeoutMs: 5000,
+      });
+      const routesText = routeRes.stdout || '';
+      const gatewayCandidates = ['10.0.3.1', '10.88.3.1', '10.99.3.1', '172.29.3.1'];
+      let chosenGw = '10.0.3.1';
+      for (const cand of gatewayCandidates) {
+        const prefix3 = cand.split('.').slice(0, 3).join('.') + '.';
+        if (!routesText.includes(prefix3)) {
+          chosenGw = cand;
+          break;
+        }
+      }
+      const assignRes = await runAllowlistedCommand(
+        'ip',
+        ['addr', 'add', `${chosenGw}/24`, 'dev', safeBridge],
+        { timeoutMs: 5000, asRoot: true }
+      );
+      if (assignRes.exitCode === 0 || /File exists/i.test(assignRes.stderr)) {
+        bridgeIp = chosenGw;
+        prefixLen = 24;
+      }
+    }
+
+    const subnetCidr = bridgeIp ? computeIpv4SubnetCidr(bridgeIp, prefixLen) : null;
+    let natConfigured = false;
+
+    if (bridgeIp && subnetCidr && isVirtualNatBridge && isPrivateRfc1918Ipv4(bridgeIp)) {
+      if (isBinaryAvailable('sysctl')) {
+        await runAllowlistedCommand('sysctl', ['-w', 'net.ipv4.ip_forward=1'], {
+          timeoutMs: 5000,
+          asRoot: true,
+        }).catch(() => undefined);
+      }
+
+      if (isBinaryAvailable('iptables')) {
+        const checkMasq = await runAllowlistedCommand(
+          'iptables',
+          ['-t', 'nat', '-C', 'POSTROUTING', '-s', subnetCidr, '!', '-d', subnetCidr, '-j', 'MASQUERADE'],
+          { timeoutMs: 5000, asRoot: true }
+        );
+        if (checkMasq.exitCode !== 0) {
+          const addMasq = await runAllowlistedCommand(
+            'iptables',
+            ['-t', 'nat', '-A', 'POSTROUTING', '-s', subnetCidr, '!', '-d', subnetCidr, '-j', 'MASQUERADE'],
+            { timeoutMs: 5000, asRoot: true }
+          );
+          natConfigured = addMasq.exitCode === 0;
+        } else {
+          natConfigured = true;
+        }
+
+        const checkFwdIn = await runAllowlistedCommand(
+          'iptables',
+          ['-C', 'FORWARD', '-i', safeBridge, '-j', 'ACCEPT'],
+          { timeoutMs: 5000, asRoot: true }
+        );
+        if (checkFwdIn.exitCode !== 0) {
+          await runAllowlistedCommand(
+            'iptables',
+            ['-I', 'FORWARD', '1', '-i', safeBridge, '-j', 'ACCEPT'],
+            { timeoutMs: 5000, asRoot: true }
+          );
+        }
+
+        const checkFwdOut = await runAllowlistedCommand(
+          'iptables',
+          ['-C', 'FORWARD', '-o', safeBridge, '-j', 'ACCEPT'],
+          { timeoutMs: 5000, asRoot: true }
+        );
+        if (checkFwdOut.exitCode !== 0) {
+          await runAllowlistedCommand(
+            'iptables',
+            ['-I', 'FORWARD', '1', '-o', safeBridge, '-j', 'ACCEPT'],
+            { timeoutMs: 5000, asRoot: true }
+          );
+        }
+      }
+
+      if (!natConfigured && isBinaryAvailable('nft')) {
+        await runAllowlistedCommand('nft', ['add', 'table', 'ip', 'hkvm_lxc_nat'], {
+          timeoutMs: 5000,
+          asRoot: true,
+        });
+        await runAllowlistedCommand(
+          'nft',
+          [
+            'add',
+            'chain',
+            'ip',
+            'hkvm_lxc_nat',
+            'postrouting',
+            '{ type nat hook postrouting priority 100 ; }',
+          ],
+          { timeoutMs: 5000, asRoot: true }
+        );
+        await runAllowlistedCommand('nft', ['flush', 'chain', 'ip', 'hkvm_lxc_nat', 'postrouting'], {
+          timeoutMs: 5000,
+          asRoot: true,
+        });
+        const nftMasq = await runAllowlistedCommand(
+          'nft',
+          [
+            'add',
+            'rule',
+            'ip',
+            'hkvm_lxc_nat',
+            'postrouting',
+            'ip',
+            'saddr',
+            subnetCidr,
+            'ip',
+            'daddr',
+            '!=',
+            subnetCidr,
+            'masquerade',
+          ],
+          { timeoutMs: 5000, asRoot: true }
+        );
+        await runAllowlistedCommand(
+          'nft',
+          [
+            'add',
+            'chain',
+            'ip',
+            'hkvm_lxc_nat',
+            'forward',
+            '{ type filter hook forward priority -10 ; policy accept ; }',
+          ],
+          { timeoutMs: 5000, asRoot: true }
+        );
+        natConfigured = nftMasq.exitCode === 0;
+      }
+    }
+
+    return {
+      ready: true,
+      bridgeIp,
+      prefixLen,
+      subnetCidr,
+      hasDhcpServer: this.detectBridgeDhcpServer(safeBridge),
+      natConfigured,
+    };
+  }
+
+  /**
+   * Allocates a deterministic, collision-free IPv4 address from the bridge subnet when
+   * no DHCP daemon (e.g. `dnsmasq`) is running on the bridge.
+   */
+  public async allocateAutoBridgeIpv4(
+    containerName: string,
+    bridgeName: string,
+    bridgeIp: string,
+    prefixLen = 24
+  ): Promise<string | null> {
+    const safeName = SafeValidators.containerName(containerName);
+    const gwUint = ipv4ToUint32(bridgeIp);
+    if (!gwUint || prefixLen < 16 || prefixLen > 29) return null;
+
+    const mask = (0xffffffff << (32 - prefixLen)) >>> 0;
+    const netBase = (gwUint & mask) >>> 0;
+    const hostCount = (1 << (32 - prefixLen)) - 2;
+    if (hostCount < 4) return null;
+
+    const usedIps = new Set<string>([bridgeIp]);
+
+    // Scan existing container configs in lxcBaseDir
+    try {
+      if (privilegedFs.existsSync(this.lxcBaseDir)) {
+        for (const dirName of privilegedFs.readdirNamesSync(this.lxcBaseDir)) {
+          const cfgPath = path.join(this.lxcBaseDir, dirName, 'config');
+          if (!privilegedFs.existsSync(cfgPath)) continue;
+          try {
+            const txt = privilegedFs.readTextSync(cfgPath);
+            const m = txt.match(/^\s*lxc\.net\.0\.ipv4\.address\s*=\s*(\d+\.\d+\.\d+\.\d+)(?:\/(\d+))?/m);
+            if (!m) continue;
+            const ipOnly = m[1];
+            if (dirName === safeName) {
+              const candNet = (ipv4ToUint32(ipOnly) & mask) >>> 0;
+              if (candNet === netBase && ipOnly !== bridgeIp) {
+                return `${ipOnly}/${prefixLen}`;
+              }
+            } else {
+              usedIps.add(ipOnly);
+            }
+          } catch {
+            // ignore unreadable config
+          }
+        }
+      }
+    } catch {
+      // ignore scan failure
+    }
+
+    // Also avoid any active ARP neighbors on the bridge
+    if (isBinaryAvailable('ip') && this.isSystemLxcStore()) {
+      const neighRes = await runAllowlistedCommand(
+        'ip',
+        ['-4', 'neigh', 'show', 'dev', SafeValidators.bridgeOrIface(bridgeName)],
+        { timeoutMs: 4000 }
+      ).catch(() => null);
+      if (neighRes && neighRes.stdout) {
+        for (const line of neighRes.stdout.split('\n')) {
+          const m = line.trim().match(/^(\d+\.\d+\.\d+\.\d+)\b/);
+          if (m) usedIps.add(m[1]);
+        }
+      }
+    }
+
+    const minHost = Math.min(100, Math.max(2, Math.floor(hostCount / 4)));
+    const maxHost = Math.min(hostCount, 250);
+    const poolSize = Math.max(1, maxHost - minHost + 1);
+
+    let hash = 0;
+    for (let i = 0; i < safeName.length; i++) {
+      hash = (hash * 31 + safeName.charCodeAt(i)) >>> 0;
+    }
+
+    for (let i = 0; i < poolSize; i++) {
+      const hostOffset = minHost + ((hash + i) % poolSize);
+      const candidateIp = uint32ToIpv4((netBase + hostOffset) >>> 0);
+      if (!usedIps.has(candidateIp)) {
+        return `${candidateIp}/${prefixLen}`;
+      }
+    }
+
+    for (let hostOffset = 2; hostOffset <= hostCount; hostOffset++) {
+      const candidateIp = uint32ToIpv4((netBase + hostOffset) >>> 0);
+      if (!usedIps.has(candidateIp)) {
+        return `${candidateIp}/${prefixLen}`;
+      }
+    }
+
+    return null;
+  }
+
+  private resolveConfinedRootfsDir(containerName: string, relDir: string, createIfMissing = false): string | null {
+    const rootfs = path.resolve(this.getRootfsDir(containerName));
+    if (!privilegedFs.existsSync(rootfs)) return null;
+    const segments = relDir.split('/').filter(Boolean);
+    let cur = rootfs;
+    for (const seg of segments) {
+      const next = path.join(cur, seg);
+      if (!next.startsWith(rootfs + path.sep)) return null;
+      if (privilegedFs.existsSync(next)) {
+        const meta = privilegedFs.lstatMetaSync(next);
+        if (meta.isSymbolicLink || !meta.isDirectory) {
+          return null;
+        }
+      } else if (createIfMissing) {
+        privilegedFs.mkdirpSync(next, 0o755);
+      } else {
+        return null;
+      }
+      cur = next;
+    }
+    return cur;
+  }
+
+  /**
+   * Configures guest DNS (`/etc/resolv.conf` + `systemd-resolved` drop-in) and guest
+   * network manager config (`netplan`, `systemd-networkd`, `ifupdown`) strictly inside
+   * the confined container rootfs so guest boot daemons never wipe liblxc's assigned IPv4
+   * or point `/etc/resolv.conf` at a dead `127.0.0.53` stub.
+   */
+  public configureGuestNetworkingAndDns(
+    containerName: string,
+    opts: {
+      ipv4Cidr?: string | null;
+      gateway?: string | null;
+      useDhcp?: boolean;
+      dnsServers?: string[];
+    } = {}
+  ): string[] {
+    const safeName = SafeValidators.containerName(containerName);
+    const dnsList = (opts.dnsServers && opts.dnsServers.length > 0
+      ? opts.dnsServers
+      : resolveGuestDnsServers()
+    ).slice(0, 3);
+
+    const etcDir = this.resolveConfinedRootfsDir(safeName, 'etc', false);
+    if (!etcDir) return dnsList;
+
+    // 1. Replace broken/dangling symlink /etc/resolv.conf with real regular file
+    try {
+      const resolvPath = path.join(etcDir, 'resolv.conf');
+      privilegedFs.unlinkSync(resolvPath);
+      const resolvBody =
+        ['# Managed by HKVM Panel', ...dnsList.map((ns) => `nameserver ${ns}`), 'options timeout:2 attempts:2', ''].join(
+          '\n'
+        );
+      privilegedFs.writeFileSync(resolvPath, resolvBody, 0o644);
+    } catch {
+      // non-fatal on read-only rootfs
+    }
+
+    // 2. Configure systemd-resolved upstream drop-in if /etc/systemd exists
+    try {
+      const systemdDir = this.resolveConfinedRootfsDir(safeName, 'etc/systemd', false);
+      if (systemdDir) {
+        const dropinDir = this.resolveConfinedRootfsDir(
+          safeName,
+          'etc/systemd/resolved.conf.d',
+          true
+        );
+        if (dropinDir) {
+          const dropinContent = `[Resolve]\nDNS=${dnsList.join(' ')}\nFallbackDNS=1.0.0.1 8.8.4.4\n`;
+          privilegedFs.writeFileSync(
+            path.join(dropinDir, '99-hkvm-dns.conf'),
+            dropinContent,
+            0o644
+          );
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const ipv4Cidr = opts.ipv4Cidr ? opts.ipv4Cidr.trim() : null;
+    const gateway =
+      opts.gateway && opts.gateway !== 'auto' ? opts.gateway.trim() : null;
+
+    // 3. Synchronize Ubuntu Netplan (/etc/netplan/10-lxc.yaml) so systemd-networkd does not flush eth0!
+    try {
+      const netplanDir = this.resolveConfinedRootfsDir(safeName, 'etc/netplan', false);
+      if (netplanDir) {
+        const netplanFile = path.join(netplanDir, '10-lxc.yaml');
+        if (ipv4Cidr) {
+          const cidrFormatted = ipv4Cidr.includes('/') ? ipv4Cidr : `${ipv4Cidr}/24`;
+          const routeBlock = gateway
+            ? `      routes:\n        - to: default\n          via: ${gateway}\n`
+            : '';
+          const yaml = [
+            '# Managed by HKVM Panel',
+            'network:',
+            '  version: 2',
+            '  ethernets:',
+            '    eth0:',
+            '      dhcp4: false',
+            '      addresses:',
+            `        - ${cidrFormatted}`,
+            routeBlock ? routeBlock.trimEnd() : '',
+            '      nameservers:',
+            `        addresses: [${dnsList.join(', ')}]`,
+            '',
+          ]
+            .filter((l) => l !== '')
+            .join('\n') + '\n';
+          privilegedFs.unlinkSync(netplanFile);
+          privilegedFs.writeFileSync(netplanFile, yaml, 0o600);
+        } else if (opts.useDhcp) {
+          const yaml = [
+            '# Managed by HKVM Panel',
+            'network:',
+            '  version: 2',
+            '  ethernets:',
+            '    eth0:',
+            '      dhcp4: true',
+            '      nameservers:',
+            `        addresses: [${dnsList.join(', ')}]`,
+            '',
+          ].join('\n');
+          if (privilegedFs.existsSync(netplanFile)) {
+            const existingYaml = privilegedFs.readTextSync(netplanFile);
+            if (existingYaml.includes('Managed by HKVM Panel')) {
+              privilegedFs.writeFileSync(netplanFile, yaml, 0o600);
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 4. Synchronize systemd-networkd (/etc/systemd/network/05-hkvm-eth0.network) when netplan is absent
+    try {
+      const netplanDir = this.resolveConfinedRootfsDir(safeName, 'etc/netplan', false);
+      const networkdDir = this.resolveConfinedRootfsDir(safeName, 'etc/systemd/network', false);
+      if (!netplanDir && networkdDir) {
+        const unitPath = path.join(networkdDir, '05-hkvm-eth0.network');
+        if (ipv4Cidr) {
+          const cidrFormatted = ipv4Cidr.includes('/') ? ipv4Cidr : `${ipv4Cidr}/24`;
+          const lines = [
+            '# Managed by HKVM Panel',
+            '[Match]',
+            'Name=eth0',
+            '',
+            '[Network]',
+            'DHCP=no',
+            'KeepConfiguration=yes',
+            `Address=${cidrFormatted}`,
+          ];
+          if (gateway) lines.push(`Gateway=${gateway}`);
+          for (const ns of dnsList) lines.push(`DNS=${ns}`);
+          lines.push('');
+          privilegedFs.unlinkSync(unitPath);
+          privilegedFs.writeFileSync(unitPath, lines.join('\n'), 0o644);
+        } else if (opts.useDhcp && privilegedFs.existsSync(unitPath)) {
+          privilegedFs.unlinkSync(unitPath);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 5. Synchronize Debian / Alpine /etc/network/interfaces if present
+    try {
+      const netIfDir = this.resolveConfinedRootfsDir(safeName, 'etc/network', false);
+      if (netIfDir && ipv4Cidr) {
+        const ifacesPath = path.join(netIfDir, 'interfaces');
+        if (privilegedFs.existsSync(ifacesPath) && !privilegedFs.lstatMetaSync(ifacesPath).isSymbolicLink) {
+          const curTxt = privilegedFs.readTextSync(ifacesPath);
+          if (/iface\s+eth0\s+inet\s+dhcp/i.test(curTxt) || curTxt.includes('# HKVM-ETH0')) {
+            const [ipOnly, pfxRaw] = (ipv4Cidr.includes('/') ? ipv4Cidr : `${ipv4Cidr}/24`).split('/');
+            const mask = prefixLenToNetmask(parseInt(pfxRaw || '24', 10) || 24);
+            const staticStanza = [
+              '# HKVM-ETH0',
+              'auto eth0',
+              'iface eth0 inet static',
+              `    address ${ipOnly}`,
+              `    netmask ${mask}`,
+              ...(gateway ? [`    gateway ${gateway}`] : []),
+            ].join('\n');
+            const stripped = curTxt
+              .replace(/# HKVM-ETH0[\s\S]*?(?=\n(?:auto|allow-|iface|source)\b|$)/g, '')
+              .replace(/^\s*auto\s+eth0\s*$/gm, '')
+              .replace(/^\s*iface\s+eth0\s+inet\s+dhcp\s*$/gim, '');
+            privilegedFs.writeFileSync(
+              ifacesPath,
+              `${stripped.trimEnd()}\n\n${staticStanza}\n`,
+              0o644
+            );
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return dnsList;
   }
 
   public async listContainers(): Promise<LxcContainerRuntimeInfo[]> {
@@ -354,9 +994,37 @@ export class LxcContainerManager {
     return results;
   }
 
+  private readContainerNetFromConfig(containerName: string): {
+    bridge: string | null;
+    ipv4Cidr: string | null;
+    gateway: string | null;
+  } {
+    const safeName = SafeValidators.containerName(containerName);
+    const configPath = path.join(this.lxcBaseDir, safeName, 'config');
+    if (!privilegedFs.existsSync(configPath)) {
+      return { bridge: null, ipv4Cidr: null, gateway: null };
+    }
+    try {
+      const txt = privilegedFs.readTextSync(configPath);
+      const brMatches = [...txt.matchAll(/^\s*lxc\.net\.0\.link\s*=\s*(\S+)/gm)];
+      const ipMatches = [...txt.matchAll(/^\s*lxc\.net\.0\.ipv4\.address\s*=\s*(\S+)/gm)];
+      const gwMatches = [...txt.matchAll(/^\s*lxc\.net\.0\.ipv4\.gateway\s*=\s*(\S+)/gm)];
+      return {
+        bridge: brMatches.length > 0 ? brMatches[brMatches.length - 1][1].trim() : null,
+        ipv4Cidr: ipMatches.length > 0 ? ipMatches[ipMatches.length - 1][1].trim() : null,
+        gateway: gwMatches.length > 0 ? gwMatches[gwMatches.length - 1][1].trim() : null,
+      };
+    } catch {
+      return { bridge: null, ipv4Cidr: null, gateway: null };
+    }
+  }
+
   public async inspectContainer(containerName: string): Promise<LxcContainerRuntimeInfo> {
     const safeName = SafeValidators.containerName(containerName);
     const configPath = path.join(this.lxcBaseDir, safeName, 'config');
+    const cfgNet = this.readContainerNetFromConfig(safeName);
+    const configuredIpv4 = cfgNet.ipv4Cidr ? cfgNet.ipv4Cidr.split('/')[0] : null;
+    const configuredGateway = cfgNet.gateway || null;
 
     if (!isBinaryAvailable('lxc-info')) {
       const existsOnDisk = privilegedFs.existsSync(configPath);
@@ -364,13 +1032,15 @@ export class LxcContainerManager {
         name: safeName,
         state: existsOnDisk ? 'stopped' : 'missing',
         pid: null,
-        ips: [],
+        ips: configuredIpv4 ? [configuredIpv4] : [],
         cpuUseSeconds: 0,
         memoryBytes: 0,
         swapBytes: 0,
         rxBytes: 0,
         txBytes: 0,
         diskUsedBytes: this.measureDirBytesFast(path.join(this.lxcBaseDir, safeName, 'rootfs')),
+        configuredIpv4,
+        configuredGateway,
       };
     }
 
@@ -391,6 +1061,8 @@ export class LxcContainerManager {
         rxBytes: 0,
         txBytes: 0,
         diskUsedBytes: 0,
+        configuredIpv4,
+        configuredGateway,
       };
     }
 
@@ -452,6 +1124,8 @@ export class LxcContainerManager {
       rxBytes,
       txBytes,
       diskUsedBytes,
+      configuredIpv4,
+      configuredGateway,
     };
   }
 
@@ -956,31 +1630,71 @@ export class LxcContainerManager {
       }
     }
 
+    let configuredGuestIpv4: string | null = null;
+    let configuredGuestGateway: string | null = null;
+
     if (cfg.bridge) {
       const safeBridge = SafeValidators.bridgeOrIface(cfg.bridge);
-      const isSystemStore =
-        this.lxcBaseDir === '/var/lib/lxc' || this.lxcBaseDir.startsWith('/var/lib/lxc/');
-      const bridgeReady = isSystemStore ? await this.ensureBridgeAvailable(safeBridge) : true;
+      const isSystemStore = this.isSystemLxcStore();
+      const bridgeInfo: LxcBridgeNetworkInfo = isSystemStore
+        ? await this.ensureBridgeNetworkReady(safeBridge)
+        : {
+            ready: true,
+            bridgeIp: null,
+            prefixLen: 24,
+            subnetCidr: null,
+            hasDhcpServer: true,
+            natConfigured: false,
+          };
 
-      if (bridgeReady) {
+      if (bridgeInfo.ready) {
         lines.push(`lxc.net.0.type = veth`);
         lines.push(`lxc.net.0.link = ${safeBridge}`);
         lines.push(`lxc.net.0.flags = up`);
+        lines.push(`lxc.net.0.name = eth0`);
         if (cfg.macAddress && /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(cfg.macAddress)) {
           lines.push(`lxc.net.0.hwaddr = ${cfg.macAddress}`);
         }
+
         if (cfg.ipv4Address) {
-          const addrPart = cfg.ipv4Address.includes('/')
+          configuredGuestIpv4 = cfg.ipv4Address.includes('/')
             ? cfg.ipv4Address
             : `${SafeValidators.ipv4(cfg.ipv4Address)}/24`;
-          lines.push(`lxc.net.0.ipv4.address = ${addrPart}`);
-        }
-        if (cfg.ipv4Gateway) {
-          lines.push(
-            `lxc.net.0.ipv4.gateway = ${
-              cfg.ipv4Gateway === 'auto' ? 'auto' : SafeValidators.ipv4(cfg.ipv4Gateway)
-            }`
+        } else if (isSystemStore && !bridgeInfo.hasDhcpServer && bridgeInfo.bridgeIp) {
+          configuredGuestIpv4 = await this.allocateAutoBridgeIpv4(
+            safeName,
+            safeBridge,
+            bridgeInfo.bridgeIp,
+            bridgeInfo.prefixLen
           );
+        }
+
+        if (configuredGuestIpv4) {
+          lines.push(`lxc.net.0.ipv4.address = ${configuredGuestIpv4}`);
+        }
+
+        if (cfg.ipv4Gateway) {
+          configuredGuestGateway =
+            cfg.ipv4Gateway === 'auto' ? 'auto' : SafeValidators.ipv4(cfg.ipv4Gateway);
+        } else if (configuredGuestIpv4) {
+          if (bridgeInfo.bridgeIp) {
+            configuredGuestGateway = bridgeInfo.bridgeIp;
+          } else {
+            const [ipOnly, pfxRaw] = configuredGuestIpv4.split('/');
+            const pfx = parseInt(pfxRaw || '24', 10) || 24;
+            const sub = computeIpv4SubnetCidr(ipOnly, pfx);
+            if (sub) {
+              const netUint = ipv4ToUint32(sub.split('/')[0]);
+              const gwCandidate = uint32ToIpv4((netUint + 1) >>> 0);
+              configuredGuestGateway = gwCandidate !== ipOnly ? gwCandidate : 'auto';
+            } else {
+              configuredGuestGateway = 'auto';
+            }
+          }
+        }
+
+        if (configuredGuestGateway) {
+          lines.push(`lxc.net.0.ipv4.gateway = ${configuredGuestGateway}`);
         }
         if (cfg.ipv6Address) {
           lines.push(`lxc.net.0.ipv6.address = ${SafeValidators.ipv6OrCidr(cfg.ipv6Address)}`);
@@ -1007,6 +1721,181 @@ export class LxcContainerManager {
       `${stripped.trimEnd()}\n\n${lines.join('\n')}\n`,
       0o640
     );
+
+    // Ensure guest /etc/resolv.conf + netplan/networkd/interfaces match so DNS & routing work immediately
+    this.configureGuestNetworkingAndDns(safeName, {
+      ipv4Cidr: configuredGuestIpv4,
+      gateway: configuredGuestGateway && configuredGuestGateway !== 'auto' ? configuredGuestGateway : null,
+      useDhcp: !configuredGuestIpv4,
+    });
+  }
+
+  private async prepareContainerNetworkPreStart(containerName: string): Promise<{
+    bridge: string;
+    ipv4Cidr: string | null;
+    gateway: string | null;
+    dnsServers: string[];
+    natConfigured: boolean;
+  }> {
+    const safeName = SafeValidators.containerName(containerName);
+    const netCfg = this.readContainerNetFromConfig(safeName);
+    const bridge = netCfg.bridge || 'lxcbr0';
+    let ipv4Cidr = netCfg.ipv4Cidr;
+    let gateway = netCfg.gateway;
+    let natConfigured = false;
+
+    if (this.isSystemLxcStore() && netCfg.bridge) {
+      const bridgeInfo = await this.ensureBridgeNetworkReady(bridge);
+      natConfigured = bridgeInfo.natConfigured;
+
+      if (!ipv4Cidr && !bridgeInfo.hasDhcpServer && bridgeInfo.bridgeIp) {
+        const autoIp = await this.allocateAutoBridgeIpv4(
+          safeName,
+          bridge,
+          bridgeInfo.bridgeIp,
+          bridgeInfo.prefixLen
+        );
+        if (autoIp) {
+          ipv4Cidr = autoIp;
+          gateway = bridgeInfo.bridgeIp;
+          const configFile = path.join(this.getContainerDir(safeName), 'config');
+          if (privilegedFs.existsSync(configFile)) {
+            const cur = privilegedFs.readTextSync(configFile);
+            const markerEnd = '# --- END HKVM MANAGED CONFIG ---';
+            const injectLines = [
+              `lxc.net.0.name = eth0`,
+              `lxc.net.0.ipv4.address = ${ipv4Cidr}`,
+              `lxc.net.0.ipv4.gateway = ${gateway}`,
+            ].join('\n');
+            const cleaned = cur
+              .replace(/^\s*lxc\.net\.0\.(?:name|ipv4\.address|ipv4\.gateway)\s*=.*$/gm, '')
+              .replace(/\n{3,}/g, '\n\n');
+            const updated = cleaned.includes(markerEnd)
+              ? cleaned.replace(markerEnd, `${injectLines}\n${markerEnd}`)
+              : `${cleaned.trimEnd()}\n${injectLines}\n`;
+            privilegedFs.writeFileSync(configFile, updated, 0o640);
+          }
+        }
+      } else if (ipv4Cidr && !gateway && bridgeInfo.bridgeIp) {
+        gateway = bridgeInfo.bridgeIp;
+      }
+    }
+
+    const dnsServers = this.configureGuestNetworkingAndDns(safeName, {
+      ipv4Cidr,
+      gateway: gateway && gateway !== 'auto' ? gateway : null,
+      useDhcp: !ipv4Cidr,
+    });
+
+    return { bridge, ipv4Cidr, gateway, dnsServers, natConfigured };
+  }
+
+  private async applyLiveGuestNetworkIfNeeded(
+    containerName: string,
+    ipv4Cidr: string | null,
+    gateway: string | null,
+    dnsServers: string[],
+    force = false
+  ): Promise<boolean> {
+    if (!isBinaryAvailable('lxc-attach')) return false;
+    const safeName = SafeValidators.containerName(containerName);
+    const info = await this.inspectContainer(safeName);
+    if (info.state !== 'running') return false;
+
+    const rootOpt = { timeoutMs: 8000, asRoot: this.needsRootForStore() || undefined };
+    let applied = false;
+
+    await runAllowlistedCommand(
+      'lxc-attach',
+      [...this.lxcPathArgs(), '-n', safeName, '--', 'ip', 'link', 'set', 'eth0', 'up'],
+      rootOpt
+    ).catch(() => undefined);
+
+    if (ipv4Cidr) {
+      const ipOnly = ipv4Cidr.split('/')[0];
+      const cidrFull = ipv4Cidr.includes('/') ? ipv4Cidr : `${ipv4Cidr}/24`;
+      if (force || !info.ips.includes(ipOnly)) {
+        const addrRes = await runAllowlistedCommand(
+          'lxc-attach',
+          [...this.lxcPathArgs(), '-n', safeName, '--', 'ip', 'addr', 'replace', cidrFull, 'dev', 'eth0'],
+          rootOpt
+        ).catch(() => null);
+        if (addrRes && addrRes.exitCode === 0) applied = true;
+      }
+      if (gateway && gateway !== 'auto') {
+        const routeRes = await runAllowlistedCommand(
+          'lxc-attach',
+          [
+            ...this.lxcPathArgs(),
+            '-n',
+            safeName,
+            '--',
+            'ip',
+            'route',
+            'replace',
+            'default',
+            'via',
+            gateway,
+            'dev',
+            'eth0',
+          ],
+          rootOpt
+        ).catch(() => null);
+        if (routeRes && routeRes.exitCode === 0) applied = true;
+      }
+    }
+
+    if (dnsServers.length > 0 && (force || this.isSystemLxcStore())) {
+      const resolvBody = [
+        '# Managed by HKVM Panel',
+        ...dnsServers.map((ns) => `nameserver ${ns}`),
+        'options timeout:2 attempts:2',
+        '',
+      ].join('\n');
+      await runAllowlistedCommand(
+        'lxc-attach',
+        [...this.lxcPathArgs(), '-n', safeName, '--', 'rm', '-f', '/etc/resolv.conf'],
+        rootOpt
+      ).catch(() => undefined);
+      const teeRes = await runAllowlistedCommand(
+        'lxc-attach',
+        [...this.lxcPathArgs(), '-n', safeName, '--', 'tee', '/etc/resolv.conf'],
+        { ...rootOpt, stdinData: resolvBody }
+      ).catch(() => null);
+      if (teeRes && teeRes.exitCode === 0) applied = true;
+    }
+
+    return applied;
+  }
+
+  /**
+   * Repairs host bridge/NAT/FORWARD rules, auto-assigns an IPv4 address if the bridge lacks
+   * a DHCP daemon, writes reliable non-loopback `/etc/resolv.conf` + netplan/networkd config,
+   * and applies IP/route/DNS live inside a running container without requiring a reboot.
+   */
+  public async repairContainerNetworking(containerName: string): Promise<LxcNetworkRepairResult> {
+    const safeName = SafeValidators.containerName(containerName);
+    const pre = await this.prepareContainerNetworkPreStart(safeName);
+    const liveApplied = await this.applyLiveGuestNetworkIfNeeded(
+      safeName,
+      pre.ipv4Cidr,
+      pre.gateway,
+      pre.dnsServers,
+      true
+    );
+    const info = await this.inspectContainer(safeName);
+    const resolvedIp =
+      info.ips[0] || (pre.ipv4Cidr ? pre.ipv4Cidr.split('/')[0] : null) || info.configuredIpv4 || null;
+    return {
+      containerName: safeName,
+      state: info.state,
+      bridge: pre.bridge,
+      ipv4Address: resolvedIp,
+      gateway: pre.gateway && pre.gateway !== 'auto' ? pre.gateway : null,
+      dnsServers: pre.dnsServers,
+      natConfigured: pre.natConfigured,
+      liveApplied,
+    };
   }
 
   public async startContainer(containerName: string): Promise<void> {
@@ -1018,6 +1907,8 @@ export class LxcContainerManager {
       await this.unfreezeContainer(safeName);
       return;
     }
+
+    const preNet = await this.prepareContainerNetworkPreStart(safeName).catch(() => null);
 
     const logFile = privilegedFs.existsSync('/var/log/lxc')
       ? `/var/log/lxc/${safeName}.log`
@@ -1073,6 +1964,16 @@ export class LxcContainerManager {
         }
         throw new Error(`lxc-start failed: ${(res.stderr || res.stdout).trim()}${logDetails}`);
       }
+    }
+
+    if (preNet && this.isSystemLxcStore()) {
+      await this.applyLiveGuestNetworkIfNeeded(
+        safeName,
+        preNet.ipv4Cidr,
+        preNet.gateway,
+        preNet.dnsServers,
+        false
+      ).catch(() => undefined);
     }
   }
 

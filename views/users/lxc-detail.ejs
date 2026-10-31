@@ -773,17 +773,20 @@
               <div class="lxc-card-head">
                 <div>
                   <h3 class="lxc-card-title"><svg width="16" height="16"><use href="#lx-net"/></svg> Networking &amp; Nested Virtualization</h3>
-                  <p class="lxc-card-sub">Bridge connectivity, Docker/Podman cgroup nesting, and <code>/dev/kvm</code> passthrough.</p>
+                  <p class="lxc-card-sub">Bridge connectivity, NAT &amp; DNS resolver health, Docker nesting, and <code>/dev/kvm</code> passthrough.</p>
                 </div>
-                <% if (isStaff) { %>
-                <button type="button" class="lxc-chip-btn" onclick="jumpToPane('resources')">Configure &rarr;</button>
-                <% } %>
+                <div style="display:flex;gap:7px;flex-wrap:wrap;">
+                  <button type="button" id="btnRepairNet" class="lxc-chip-btn" onclick="repairNetwork()">Repair Network &amp; DNS</button>
+                  <% if (isStaff) { %>
+                  <button type="button" class="lxc-chip-btn" onclick="jumpToPane('resources')">Configure &rarr;</button>
+                  <% } %>
+                </div>
               </div>
               <div class="lxc-kv-list">
                 <div class="lxc-kv-row"><span class="lxc-kv-k">Compute Node</span><span class="lxc-kv-v"><%= instance.nodeName %> (#<%= instance.nodeId %>)</span></div>
                 <div class="lxc-kv-row"><span class="lxc-kv-k">Linux Bridge</span><span class="lxc-kv-v"><code><%= _cfg.bridge || 'lxcbr0' %></code><%= _cfg.vlanId ? ' (VLAN ' + _cfg.vlanId + ')' : '' %></span></div>
-                <div class="lxc-kv-row"><span class="lxc-kv-k">IPv4 Address</span><span class="lxc-kv-v"><code><%= instance.primaryIp || 'DHCP / Dynamic' %></code></span></div>
-                <div class="lxc-kv-row"><span class="lxc-kv-k">IPv4 Gateway</span><span class="lxc-kv-v"><code><%= _cfg.gateway || 'Auto / Bridge Default' %></code></span></div>
+                <div class="lxc-kv-row"><span class="lxc-kv-k">IPv4 Address</span><span class="lxc-kv-v"><code id="kvIpv4"><%= instance.primaryIp || 'DHCP / Dynamic' %></code></span></div>
+                <div class="lxc-kv-row"><span class="lxc-kv-k">IPv4 Gateway</span><span class="lxc-kv-v"><code id="kvGateway"><%= _cfg.gateway || 'Auto / Bridge Default' %></code></span></div>
                 <div class="lxc-kv-row"><span class="lxc-kv-k">MAC Address</span><span class="lxc-kv-v"><code><%= _cfg.macAddress || 'Auto' %></code></span></div>
                 <div class="lxc-kv-row">
                   <span class="lxc-kv-k">Container Nesting (Docker/Podman)</span>
@@ -1096,6 +1099,10 @@
                   <svg width="13" height="13"><use href="#lx-restart"/></svg>
                   <span>Save &amp; Restart Container</span>
                 </button>
+                <button type="button" class="lxc-btn lxc-btn-freeze" onclick="repairNetwork()">
+                  <svg width="13" height="13"><use href="#lx-net"/></svg>
+                  <span>Repair Network &amp; DNS</span>
+                </button>
               </div>
             </form>
           </div>
@@ -1181,6 +1188,12 @@ async function refreshTelemetry() {
     document.getElementById('stNet').textContent =
       'RX ' + formatBytesHuman(t.netRxBytes) + ' / TX ' + formatBytesHuman(t.netTxBytes);
 
+    if (t.primaryIp) {
+      const hdrIp = document.getElementById('hdrIp');
+      const kvIp = document.getElementById('kvIpv4');
+      if (hdrIp) hdrIp.textContent = t.primaryIp;
+      if (kvIp) kvIp.textContent = t.primaryIp;
+    }
     const cpuBar = document.getElementById('stCpuBar');
     const ramBar = document.getElementById('stRamBar');
     const diskBar = document.getElementById('stDiskBar');
@@ -1200,6 +1213,32 @@ async function doLxcAction(action) {
     if (out && out.instance) applyStatusUi(out.instance.status, null);
     refreshTelemetry();
   } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function repairNetwork() {
+  const btn = document.getElementById('btnRepairNet');
+  if (btn) btn.disabled = true;
+  try {
+    const out = await hkvmApi(`/api/v1/lxc/${LXC_ID}/repair-network`, { method: 'POST', body: {} });
+    const r = out.repair || {};
+    if (r.ipv4Address) {
+      const hdrIp = document.getElementById('hdrIp');
+      const kvIp = document.getElementById('kvIpv4');
+      if (hdrIp) hdrIp.textContent = r.ipv4Address;
+      if (kvIp) kvIp.textContent = r.ipv4Address;
+    }
+    if (r.gateway) {
+      const kvGw = document.getElementById('kvGateway');
+      if (kvGw) kvGw.textContent = r.gateway;
+    }
+    const dnsTxt = Array.isArray(r.dnsServers) && r.dnsServers.length ? r.dnsServers.join(', ') : '1.1.1.1, 8.8.8.8';
+    hkvmToast('Network & DNS repaired (' + (r.ipv4Address || 'DHCP') + ' • DNS: ' + dnsTxt + ')');
+    refreshTelemetry();
+  } catch (e) {
+    hkvmToast(e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 function genDetailPassword() {

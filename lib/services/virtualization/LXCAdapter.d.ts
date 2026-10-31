@@ -1,5 +1,6 @@
 import { UnifiedDatabase } from '../../db/database';
 import { NodeManager } from '../nodes/NodeClient';
+import { LxcNetworkRepairResult } from '../../node-agent/container-manager';
 import { InstanceCapabilityProfile, InstanceTelemetry, LifecycleAction, UnifiedInstanceRecord, VirtualizationAdapter } from './VirtualizationAdapter';
 export interface CreateLxcInstanceInput {
     userId: number;
@@ -110,4 +111,13 @@ export declare class LXCAdapter implements VirtualizationAdapter {
     writeFile(refId: number, subPath: string, content: Buffer | string): Promise<void>;
     deleteFile(refId: number, subPath: string): Promise<void>;
     getTelemetry(refId: number): Promise<InstanceTelemetry>;
+    repairLxcNetworking(refId: number): Promise<{
+        repair: LxcNetworkRepairResult;
+        instance: UnifiedInstanceRecord;
+    }>;
+    /**
+     * Automatically repairs bridge NAT/FORWARD rules, missing IPv4 assignments, and guest
+     * `/etc/resolv.conf` on active local LXC containers during HKVM server startup.
+     */
+    healLocalContainersNetworking(): Promise<void>;
 }

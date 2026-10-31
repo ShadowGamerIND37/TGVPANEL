@@ -67,6 +67,7 @@ export interface InstanceTelemetry {
   diskTotalGb: number;
   netRxBytes: number;
   netTxBytes: number;
+  primaryIp?: string | null;
   measuredAt: string;
 }
 

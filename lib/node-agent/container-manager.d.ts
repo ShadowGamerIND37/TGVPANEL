@@ -68,8 +68,38 @@ export interface LxcContainerRuntimeInfo {
     rxBytes: number;
     txBytes: number;
     diskUsedBytes: number;
+    configuredIpv4?: string | null;
+    configuredGateway?: string | null;
     startupWarning?: string;
 }
+export interface LxcBridgeNetworkInfo {
+    ready: boolean;
+    bridgeIp: string | null;
+    prefixLen: number;
+    subnetCidr: string | null;
+    hasDhcpServer: boolean;
+    natConfigured: boolean;
+}
+export interface LxcNetworkRepairResult {
+    containerName: string;
+    state: LxcContainerRuntimeInfo['state'];
+    bridge: string;
+    ipv4Address: string | null;
+    gateway: string | null;
+    dnsServers: string[];
+    natConfigured: boolean;
+    liveApplied: boolean;
+}
+export declare function ipv4ToUint32(ip: string): number;
+export declare function uint32ToIpv4(num: number): string;
+export declare function prefixLenToNetmask(prefixLen: number): string;
+export declare function computeIpv4SubnetCidr(ip: string, prefixLen?: number): string | null;
+/**
+ * Resolves up to 3 reliable upstream IPv4 DNS servers suitable for inside an LXC container
+ * (respecting glibc MAXNS=3 while filtering out host loopback 127.0.0.53 and WSL2's
+ * non-bridge-routable 10.255.255.254 tunnel listener).
+ */
+export declare function resolveGuestDnsServers(hostResolvConfContent?: string): string[];
 /**
  * Translates human/LXD version identifiers (e.g. `ubuntu` + `24.04` or `debian` + `12`)
  * into canonical `images.linuxcontainers.org` release names expected by `lxc-create -t download`
@@ -97,8 +127,36 @@ export declare class LxcContainerManager {
     private lxcPathArgs;
     private assertLxcInstalled;
     private ensureHostLxcDirectories;
-    private ensureBridgeAvailable;
+    private isSystemLxcStore;
+    private bridgeHasPhysicalSlave;
+    private detectBridgeDhcpServer;
+    /**
+     * Ensures the Linux bridge exists, is UP, has an IPv4 gateway address (when operating as
+     * a virtual NAT bridge such as `lxcbr0`), enables `net.ipv4.ip_forward=1`, and installs
+     * idempotent outbound NAT MASQUERADE + top-priority FORWARD ACCEPT rules so Docker's
+     * `FORWARD DROP` policy or UFW never blocks LXC container internet/DNS access.
+     */
+    ensureBridgeNetworkReady(bridgeName: string): Promise<LxcBridgeNetworkInfo>;
+    /**
+     * Allocates a deterministic, collision-free IPv4 address from the bridge subnet when
+     * no DHCP daemon (e.g. `dnsmasq`) is running on the bridge.
+     */
+    allocateAutoBridgeIpv4(containerName: string, bridgeName: string, bridgeIp: string, prefixLen?: number): Promise<string | null>;
+    private resolveConfinedRootfsDir;
+    /**
+     * Configures guest DNS (`/etc/resolv.conf` + `systemd-resolved` drop-in) and guest
+     * network manager config (`netplan`, `systemd-networkd`, `ifupdown`) strictly inside
+     * the confined container rootfs so guest boot daemons never wipe liblxc's assigned IPv4
+     * or point `/etc/resolv.conf` at a dead `127.0.0.53` stub.
+     */
+    configureGuestNetworkingAndDns(containerName: string, opts?: {
+        ipv4Cidr?: string | null;
+        gateway?: string | null;
+        useDhcp?: boolean;
+        dnsServers?: string[];
+    }): string[];
     listContainers(): Promise<LxcContainerRuntimeInfo[]>;
+    private readContainerNetFromConfig;
     inspectContainer(containerName: string): Promise<LxcContainerRuntimeInfo>;
     /**
      * Fallback live memory (VmRSS) & CPU time aggregator across `<initPid>` and all its
@@ -136,6 +194,14 @@ export declare class LxcContainerManager {
             readOnly?: boolean;
         }>;
     }): Promise<void>;
+    private prepareContainerNetworkPreStart;
+    private applyLiveGuestNetworkIfNeeded;
+    /**
+     * Repairs host bridge/NAT/FORWARD rules, auto-assigns an IPv4 address if the bridge lacks
+     * a DHCP daemon, writes reliable non-loopback `/etc/resolv.conf` + netplan/networkd config,
+     * and applies IP/route/DNS live inside a running container without requiring a reboot.
+     */
+    repairContainerNetworking(containerName: string): Promise<LxcNetworkRepairResult>;
     startContainer(containerName: string): Promise<void>;
     stopContainer(containerName: string, force?: boolean): Promise<void>;
     restartContainer(containerName: string): Promise<void>;
