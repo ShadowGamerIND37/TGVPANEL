@@ -60,13 +60,16 @@ export declare class LXCAdapter implements VirtualizationAdapter {
         hostProvisioned: boolean;
         warning?: string;
     }>;
+    private ensureTemplateStagedOnRemoteNode;
     /**
-     * Discovers any existing native LXC containers in `/var/lib/lxc` on the local node
-     * that are not yet tracked in `lxc_instances` (excluding in-flight creations) and imports them.
+     * Discovers any existing native LXC containers across the local node and all online remote
+     * Node Agents (or a specific target `nodeId`) that are not yet tracked in `lxc_instances`
+     * and imports them cleanly with accurate `node_id` ownership.
      */
-    syncHostContainers(defaultUserId?: number): Promise<{
+    syncHostContainers(defaultUserId?: number, targetNodeId?: number): Promise<{
         imported: string[];
         count: number;
+        byNode?: Record<number, string[]>;
     }>;
     private dispatchNodeContainerAction;
     performLifecycleAction(refId: number, action: LifecycleAction, options?: {

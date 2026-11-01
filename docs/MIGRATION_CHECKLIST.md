@@ -17,7 +17,7 @@ Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Block
 | **Phase 7** | Integrate unified REST API v1, Auth, 2FA, RBAC, CSRF, API Keys, Webhooks & Impersonation | `Tested` | `src/api/v1/router.ts`, `src/api/web-routes.ts`, `src/security/*` tested in **T02**, **T04**, **T05**, **T06**, **T11**. |
 | **Phase 8** | Upgrade Admin (23 sidebar items) & User EJS Frontend | `Tested` | Preserved EJS + dark/light CSS variables, local `/vendor/xterm/`, `public/js/tgvpanel-v3.js`, all 23 Admin routes + User routes verified `200 OK` with `TGVPANEL` branding in **T12**. |
 | **Phase 9** | Build `scripts/install.sh` & `scripts/update.sh` | `Tested` | Capability detection (`/dev/kvm`, `qemu-*`, `lxc-*`, `cgroups v2`), 4 install modes, offline Node header support, `tgvpanel.service` systemd units, syntax verified via `bash -n`. |
-| **Phase 10** | Run acceptance tests, security audit & final verification | `Tested` | `npm test` -> **20/20 Acceptance Suites Passed** (`T01`–`T20`); zero plaintext secrets. |
+| **Phase 10** | Run acceptance tests, security audit & final verification | `Tested` | `npm test` -> **22/22 Acceptance Suites Passed** (`T01`–`T22`); zero plaintext secrets. |
 
 ---
 
@@ -36,4 +36,4 @@ Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Block
 | Real xterm.js Consoles (KVM Serial, KVM SSH, LXC PTY, Restricted Admin Node Shell) | Console Module | `context.ts`, `container-console.ts`, `shell-manager.ts` | `Tested` | Bundled local `/vendor/xterm/`; real `node-pty` WebSocket shell tested (**T12**, **T14**). |
 | Storage Pools, Network Bridges/NAT, IPv4/IPv6 CIDR, Port Forwards, Firewall Rollback | Storage & Network | `StorageManager.ts`, `NetworkManager.ts` | `Tested` | Pool/IP/port/firewall CRUD, DNS relay, Netplan sync & `iptables-save`/`iptables-restore` rollback (**T10**, **T16**, **T17**). |
 | Unified Snapshots, SHA-256 Verified Backups & Offline Verified Migration | Backup & Migration | `BackupSnapshotManager.ts`, `MigrationManager.ts` | `Tested` | Real `tar.gz` backup + SHA-256 verification & 7-stage offline migration with pre-commit rollback (**T11**, **T14**). |
-| Multi-Node Agent, Circuit Breakers, Key Rotation, Monitoring, Alerts & Webhooks | Nodes & Monitoring | `NodeClient.ts`, `MonitoringService.ts`, `agent.ts` | `Tested` | Live + historical node/VPS metrics, threshold alerts, HMAC-SHA256 webhooks (**T07**, **T11**). |
+| Multi-Node Agent, 1-Command Pairing (`--join`), TOFU TLS Pinning, Push Heartbeats, Remote Storage/Ports/Firewall, Circuit Breakers & Monitoring | Nodes & Monitoring | `NodeClient.ts`, `MonitoringService.ts`, `agent.ts`, `menu.sh` | `Tested` | Self-signed HTTPS + TOFU X.509 pinning, single-use join tokens, active agent->controller heartbeats, remote `statfs`/NAT/firewall/custom-template staging, multi-node `sync-host`, cross-node backup restore & bridged WSS PTY (**T07**, **T11**, **T21**, **T22**). |

@@ -1,7 +1,10 @@
 import { UnifiedDatabase } from '../../db/database';
+import { NodeManager } from '../nodes/NodeClient';
 export declare class NetworkManager {
     private db;
-    constructor(db: UnifiedDatabase);
+    private nodeManager?;
+    constructor(db: UnifiedDatabase, nodeManager?: NodeManager);
+    private isRemoteNode;
     listNetworkPools(nodeId?: number): Promise<any[]>;
     createNetworkPool(input: {
         nodeId: number;
@@ -48,6 +51,8 @@ export declare class NetworkManager {
         kernelNatApplied: boolean;
     }>;
     deletePortForward(forwardId: number, actorUserId: number, isAdmin: boolean): Promise<void>;
+    relocateInstancePortForwards(instanceType: 'lxc' | 'kvm', instanceRefId: number, targetNodeId: number, newGuestIp?: string | null): Promise<void>;
+    private applyNatRuleForNode;
     private findAvailableHostPort;
     /**
      * Snapshots current `iptables-save` state before mutating NAT rules and restores automatically
@@ -68,4 +73,5 @@ export declare class NetworkManager {
         comment?: string;
     }): Promise<any>;
     deleteFirewallRule(ruleId: number): Promise<void>;
+    private applyFirewallRuleForNode;
 }

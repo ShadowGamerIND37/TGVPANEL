@@ -14,9 +14,12 @@ export interface NodeRecord {
     maintenance_mode: number;
     verify_ssl: number;
     mtls_enabled: number;
+    tls_pinned?: number;
     status: string;
     agent_version: string | null;
     last_heartbeat: string | null;
+    last_error?: string | null;
+    last_error_at?: string | null;
     circuit_state: 'closed' | 'open' | 'half-open';
     consecutive_failures: number;
     cpu_cores: number;
@@ -59,6 +62,8 @@ export interface EndpointProbeResult {
     latencyMs: number;
     httpStatus: number | null;
     agentDetected: boolean;
+    selfSignedAgentDetected?: boolean;
+    clockSkewSec?: number | null;
     tls?: {
         authorized: boolean;
         authorizationError?: string | null;
@@ -66,11 +71,16 @@ export interface EndpointProbeResult {
         issuerCN?: string | null;
         validTo?: string | null;
         protocol?: string | null;
+        fingerprintSha256?: string | null;
+        certPem?: string | null;
     } | null;
     message: string;
 }
+export declare function normalizeNodeEndpointUrl(rawUrl: string): string;
+export declare function buildAgentTargetUrl(baseNodeUrl: string, apiPathWithQuery: string): URL;
 /**
- * Communicates with remote Node Agents over HTTPS/HTTP using replay-protected HMAC-SHA256 signatures
+ * Communicates with remote Node Agents over HTTPS/HTTP using replay-protected HMAC-SHA256 signatures,
+ * optional TOFU certificate pinning / mTLS, active push-heartbeats, single-use join tokens,
  * and per-node circuit breakers, while routing `is_local = 1` requests directly to `LocalNodeRuntime`.
  */
 export declare class NodeManager {
@@ -78,6 +88,7 @@ export declare class NodeManager {
     readonly localRuntime: LocalNodeRuntime;
     private circuits;
     private latencies;
+    private seenAgentHeartbeatNonces;
     private readonly failureThreshold;
     private readonly openCooldownMs;
     constructor(db: UnifiedDatabase, localRuntime?: LocalNodeRuntime);
@@ -94,6 +105,7 @@ export declare class NodeManager {
         location?: string;
         url: string;
         verifySsl?: boolean;
+        tlsCaPem?: string | null;
         mtlsEnabled?: boolean;
         supportsKvm?: boolean;
         supportsLxc?: boolean;
@@ -115,6 +127,7 @@ export declare class NodeManager {
         url?: string;
         maintenanceMode?: boolean;
         verifySsl?: boolean;
+        tlsCaPem?: string | null;
         maxInstances?: number;
         supportsKvm?: boolean;
         supportsLxc?: boolean;
@@ -122,15 +135,94 @@ export declare class NodeManager {
         notes?: string;
     }): Promise<NodeRecord>;
     deleteNode(nodeId: number): Promise<void>;
+    buildEnvSnippet(params: {
+        nodeId: number;
+        port: string | number;
+        apiKey: string;
+        hmacSecret: string;
+        controllerUrl?: string | null;
+        isHttps?: boolean;
+    }): string;
+    getBootstrapCredentials(nodeId: number, controllerUrl?: string): Promise<{
+        nodeId: number;
+        nodeName: string;
+        url: string;
+        port: number;
+        isHttps: boolean;
+        apiKey: string;
+        hmacSecret: string;
+        envSnippet: string;
+    }>;
+    createJoinToken(params: {
+        nodeId: number;
+        controllerUrl: string;
+        createdByUserId?: number;
+        ttlMinutes?: number;
+    }): Promise<{
+        nodeId: number;
+        nodeName: string;
+        token: string;
+        expiresAt: string;
+        ttlMinutes: number;
+        controllerUrl: string;
+        curlJoinCommand: string;
+        localJoinCommand: string;
+    }>;
+    redeemJoinToken(params: {
+        rawToken: string;
+        endpointUrl?: string;
+        ipAddress?: string;
+        hostname?: string;
+        agentPort?: number;
+        tlsCertPem?: string | null;
+        verifySsl?: boolean;
+        callerIp?: string;
+    }): Promise<{
+        nodeId: number;
+        nodeName: string;
+        apiKey: string;
+        hmacSecret: string;
+        controllerUrl: string | null;
+        url: string;
+    }>;
+    /**
+     * Trust-On-First-Use (TOFU) TLS certificate fetcher & pinner for self-signed HTTPS Node Agents.
+     */
+    trustNodeTlsCertificate(nodeId: number): Promise<{
+        node: NodeRecord;
+        fingerprintSha256: string;
+        subjectCN: string | null;
+        validTo: string | null;
+        probeOk: boolean;
+    }>;
+    /**
+     * Authenticates and processes an active outbound push-heartbeat sent by a remote Node Agent.
+     */
+    receiveAgentHeartbeat(params: {
+        headers: Record<string, string | string[] | undefined>;
+        rawBody: string;
+        body: {
+            nodeId?: string | number;
+            health?: NodeHealthReport;
+            stats?: HostResourceStats;
+        };
+    }): Promise<{
+        ok: boolean;
+        nodeId: number;
+    }>;
     rotateNodeCredentials(nodeId: number): Promise<{
         apiKey: string;
         hmacSecret: string;
         pushedToAgent: boolean;
+        envSnippet?: string;
     }>;
+    private persistNodeHealthAndStats;
     /**
      * Refreshes health, capabilities, and real host stats for a node (local or remote).
      */
-    checkNodeHealthAndStats(nodeId: number): Promise<{
+    checkNodeHealthAndStats(nodeId: number, options?: {
+        bypassCircuit?: boolean;
+    }): Promise<{
         node: NodeRecord;
         health: NodeHealthReport;
         stats: HostResourceStats;
@@ -138,7 +230,9 @@ export declare class NodeManager {
     }>;
     resetCircuitBreaker(nodeId: number): Promise<NodeRecord>;
     /**
-     * Pre-flight HTTP/HTTPS + TLS reachability probe for remote Node Agent URLs.
+     * Pre-flight HTTP/HTTPS + TLS reachability & clock-drift probe for remote Node Agent URLs.
+     * When strict TLS rejects a self-signed certificate, performs a safe certificate inspection
+     * so the UI can offer one-click TOFU certificate pinning.
      */
     probeEndpointConnection(input: {
         url: string;
@@ -161,6 +255,9 @@ export declare class NodeManager {
     private checkCircuitAllowed;
     private recordCircuitSuccess;
     private recordCircuitFailure;
-    requestRemoteNode<T = any>(nodeId: number, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', pathWithQuery: string, body?: unknown, timeoutMs?: number): Promise<T>;
+    private buildTlsOptionsForNode;
+    requestRemoteNode<T = any>(nodeId: number, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', pathWithQuery: string, body?: unknown, timeoutMs?: number, options?: {
+        bypassCircuit?: boolean;
+    }): Promise<T>;
     openRemoteAgentWebSocket(nodeId: number, wsPath: string, query?: Record<string, string | number>): Promise<WebSocket>;
 }

@@ -42,6 +42,11 @@ export interface StandaloneAgentOptions {
     requireMtls?: boolean;
     lxcBaseDir?: string;
     backupDir?: string;
+    dataDir?: string;
+    interactiveHostShell?: boolean;
+    controllerUrl?: string;
+    controllerVerifySsl?: boolean;
+    heartbeatIntervalMs?: number;
 }
 export declare function createNodeAgentServer(opts?: StandaloneAgentOptions): {
     app: import("express-serve-static-core").Express;
@@ -50,4 +55,6 @@ export declare function createNodeAgentServer(opts?: StandaloneAgentOptions): {
     authenticator: NodeAgentAuthenticator;
     host: string;
     port: number;
+    tlsActive: boolean;
+    sendHeartbeatOnce: () => Promise<boolean>;
 };

@@ -73,14 +73,15 @@ export async function initializeUnifiedHkvmRuntime(
   const lxcAdapter = new LXCAdapter(db, nodeManager);
   const virtManager = new VirtualizationManager(kvmAdapter, lxcAdapter);
   const instanceManager = new InstanceManager(db, virtManager);
-  const storageManager = new StorageManager(db);
-  const networkManager = new NetworkManager(db);
+  const storageManager = new StorageManager(db, nodeManager);
+  const networkManager = new NetworkManager(db, nodeManager);
   const backupManager = new BackupSnapshotManager(db, nodeManager, virtManager);
   const migrationManager = new MigrationManager(
     db,
     nodeManager,
     storageManager,
-    lxcAdapter
+    lxcAdapter,
+    networkManager
   );
   const monitoringService = new MonitoringService(db, nodeManager, instanceManager);
 

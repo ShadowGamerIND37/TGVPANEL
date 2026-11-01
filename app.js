@@ -331,7 +331,14 @@ const OS_TEMPLATES = {
 };
 
 // Middleware
-app.use(express.json({ limit: '50mb' }));
+app.use(
+  express.json({
+    limit: '50mb',
+    verify: (req, _res, buf) => {
+      req.rawBody = buf.toString('utf8');
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.get('/js/hkvm-v3.js', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'js', 'tgvpanel-v3.js'));

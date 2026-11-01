@@ -1324,6 +1324,7 @@
         </div>
         <div class="st-actions">
           <button type="button" class="btn btn-outline" onclick="togglePlacementAdvisor()">Placement Advisor</button>
+          <button type="button" class="btn btn-outline" id="syncClusterContainersBtn" onclick="syncClusterContainers()">Sync Containers</button>
           <a href="/admin/node-console" class="btn btn-outline">Host Shell</a>
           <button type="button" class="btn btn-outline" id="refreshAllNodesBtn" onclick="refreshAllNodesHealth()">Check All Nodes</button>
           <button type="button" class="btn btn-primary" onclick="toggleNodeRegisterPanel()">+ Register Remote Node</button>
@@ -1472,17 +1473,32 @@
             </div>
           </form>
 
-          <div id="nodeCredsWrap" style="display:none;margin-top:16px;padding:15px;border-radius:11px;border:1px solid rgba(16,185,129,0.35);background:rgba(16,185,129,0.06);">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <span class="st-tag emerald">One-Time Secret</span>
-                <strong style="font-size:13px;color:var(--text-primary);">Node Agent Bootstrap / Rotated Credentials</strong>
+          <div id="nodeCredsWrap" style="display:none;margin-top:16px;padding:16px;border-radius:11px;border:1px solid rgba(16,185,129,0.35);background:rgba(16,185,129,0.06);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <span class="st-tag emerald" id="nodeCredsBadge">1-Command Auto-Join</span>
+                <strong style="font-size:13.5px;color:var(--text-primary);" id="nodeCredsTitle">Pair Remote Node &amp; Bootstrap Credentials</strong>
               </div>
-              <div style="display:flex;gap:8px;">
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="st-copy-mini" id="copyJoinCmdBtn" style="display:none;" onclick="copyTextWithToast(document.getElementById('nodeJoinCmdOutput').textContent, '1-Command Auto-Join copied!')">Copy Auto-Join Command</button>
                 <button type="button" class="st-copy-mini" onclick="copyTextWithToast(document.getElementById('nodeCredsOutput').textContent, 'Node .env credentials copied!')">Copy .env Block</button>
                 <button type="button" class="st-copy-mini" onclick="document.getElementById('nodeCredsWrap').style.display='none'">Dismiss</button>
               </div>
             </div>
+            <div id="nodeJoinTokenSection" style="display:none;margin-bottom:12px;padding:12px;border-radius:9px;background:rgba(6,182,212,0.08);border:1px solid rgba(6,182,212,0.28);">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+                <div style="font-size:12px;color:var(--text-primary);font-weight:700;">
+                  Recommended: Run this single command on the remote Linux server (auto-installs, generates &amp; pins TLS cert, configures <code>.env</code>, and starts 24/7):
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;">
+                  <input id="joinCtrlUrlInput" style="font-size:11.5px;padding:4px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:rgba(0,0,0,0.25);color:var(--text-primary);min-width:210px;" placeholder="https://panel.example.com">
+                  <button type="button" class="st-copy-mini" onclick="regenerateJoinTokenForActiveNode()">Refresh Token</button>
+                </div>
+              </div>
+              <div id="nodeJoinCmdOutput" class="v3-code" style="margin:0;color:#67e8f9;"></div>
+              <div id="nodeJoinExpMeta" style="font-size:11px;color:var(--text-muted);margin-top:5px;"></div>
+            </div>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:5px;">Manual <code>/opt/tgvpanel/.env</code> configuration (alternative to Auto-Join):</div>
             <div id="nodeCredsOutput" class="v3-code" style="display:none;margin:0;"></div>
           </div>
         </div>
@@ -2321,18 +2337,14 @@
                 <span style="background:#10b981;"></span>
               </div>
               <strong style="font-size:13.5px;color:#f8fafc;">Interactive Host PTY Shell</strong>
-              <% if (interactiveEnabled) { %>
-                <span class="v3-pill running" style="font-size:10.5px;">ENABLED &bull; LINE-AUDITED</span>
-                <span id="ncPtyStateBadge" class="v3-pill stopped" style="font-size:10.5px;">Idle (Not Connected)</span>
-              <% } else { %>
-                <span class="v3-pill warning" style="font-size:10.5px;gap:5px;">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                  LOCKED BY SERVER POLICY
-                </span>
-              <% } %>
+              <span id="ncPtyEnabledBadge" class="v3-pill running" style="font-size:10.5px;<%= interactiveEnabled ? '' : 'display:none;' %>">ENABLED &bull; LINE-AUDITED</span>
+              <span id="ncPtyStateBadge" class="v3-pill stopped" style="font-size:10.5px;<%= interactiveEnabled ? '' : 'display:none;' %>">Idle (Not Connected)</span>
+              <span id="ncPtyLockedBadge" class="v3-pill warning" style="font-size:10.5px;gap:5px;<%= interactiveEnabled ? 'display:none;' : '' %>">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                LOCKED BY NODE POLICY
+              </span>
             </div>
-            <% if (interactiveEnabled) { %>
-            <div class="nc-term-tools">
+            <div class="nc-term-tools" id="ncPtyToolbar" style="<%= interactiveEnabled ? '' : 'display:none;' %>">
               <button type="button" class="nc-tool-btn primary" id="ncPtyConnectBtn" onclick="connectNodeShell()">&#9654; Connect Shell</button>
               <button type="button" class="nc-tool-btn" onclick="clearNodeShell()">Clear</button>
               <button type="button" class="nc-tool-btn" onclick="adjustNodeShellFont(-1)">A-</button>
@@ -2340,11 +2352,9 @@
               <button type="button" class="nc-tool-btn" id="ncPtyFsBtn" onclick="toggleNodeShellFullscreen()">&#9974; Fullscreen</button>
               <button type="button" class="nc-tool-btn danger" id="ncPtyDisconnectBtn" onclick="disconnectNodeShell()" style="display:none;">Disconnect</button>
             </div>
-            <% } %>
           </div>
 
-          <% if (!interactiveEnabled) { %>
-          <div class="nc-pty-locked">
+          <div class="nc-pty-locked" id="ncPtyLockedPane" style="<%= interactiveEnabled ? 'display:none;' : '' %>">
             <div>
               <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
                 <span style="width:32px;height:32px;border-radius:9px;background:rgba(245,158,11,0.16);border:1px solid rgba(245,158,11,0.35);color:#fbbf24;display:inline-flex;align-items:center;justify-content:center;">
@@ -2353,7 +2363,7 @@
                 <h4 style="margin:0;font-size:15px;font-weight:700;color:#f8fafc;">Zero-Trust Host PTY Protection Active</h4>
               </div>
               <p style="font-size:13px;line-height:1.6;color:#94a3b8;margin:0 0 14px;">
-                Unrestricted root PTY access to the hypervisor host is disabled by default so that all routine troubleshooting runs safely through the <strong>Allowlisted Diagnostic Workbench</strong> above without exposing raw shell execution.
+                Unrestricted root PTY access on the selected node is disabled by default so routine troubleshooting runs safely through the <strong>Allowlisted Diagnostic Workbench</strong> above. Switch Target Node if another node has PTY enabled, or opt in on that node's <code>.env</code>.
               </p>
               <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <span class="v3-pill running" style="font-size:11px;">&#10003; 13 Allowlisted Presets Active</span>
@@ -2363,22 +2373,20 @@
             </div>
             <div class="nc-env-snippet">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                <span style="font-size:11px;color:#94a3b8;font-weight:600;">Opt-in via server <code>.env</code> &amp; restart TGVPANEL:</span>
+                <span style="font-size:11px;color:#94a3b8;font-weight:600;">Opt-in via node <code>.env</code> &amp; restart service:</span>
                 <button type="button" class="nc-tool-btn primary" style="padding:3px 9px;font-size:11px;" onclick="copyNodeShellEnvFlag()">Copy .env Flag</button>
               </div>
               <div style="color:#64748b;margin-bottom:3px;"># Enable audited super-admin host PTY shell</div>
               <div style="color:#22d3ee;font-weight:700;">TGVPANEL_ENABLE_NODE_SHELL=true</div>
             </div>
           </div>
-          <% } else { %>
-          <div id="nodeXtermBox" style="height:430px;background:#06070c;padding:8px;">
+          <div id="nodeXtermBox" style="height:430px;background:#06070c;padding:8px;<%= interactiveEnabled ? '' : 'display:none;' %>">
             <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#64748b;gap:10px;text-align:center;">
               <div style="font-family:monospace;font-size:13px;color:#94a3b8;">root@host:~# <span style="color:#22d3ee;">[Audited node-pty session ready]</span></div>
               <div style="font-size:12.5px;max-width:440px;">Click <strong>Connect Shell</strong> in the top-right bar to spawn a live WebSocket <code>xterm-256color</code> session on the selected node. Every command line is recorded in the Security Audit Trail.</div>
               <button type="button" class="btn btn-primary" onclick="connectNodeShell()" style="margin-top:4px;">&#9654; Launch Audited Host Shell</button>
             </div>
           </div>
-          <% } %>
         </div>
       </div>
       <% } %>
@@ -3233,21 +3241,35 @@ function toggleNodeRegisterPanel() {
   if (inp) setTimeout(() => inp.focus(), 180);
 }
 
+let __pendingPinnedTlsPem = null;
+let __lastProbedTlsPem = null;
+let __activePairNodeId = null;
+
 function autoFillAgentUrl() {
   const ip = (document.getElementById('nIp')?.value || '').trim();
   const urlEl = document.getElementById('nUrl');
   const hostEl = document.getElementById('nHost');
-  if (ip && hostEl && !hostEl.dataset.touched && !hostEl.value) {
-    hostEl.placeholder = ip;
+  const sslEl = document.getElementById('nVerifySsl');
+  if (ip && hostEl && !hostEl.dataset.touched) {
+    hostEl.value = ip;
   }
   if (ip && urlEl && !urlEl.dataset.touched) {
     urlEl.value = 'https://' + ip + ':8443';
+    if (sslEl && !sslEl.dataset.touched && !__pendingPinnedTlsPem && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
+      sslEl.checked = false;
+    }
   }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   const uEl = document.getElementById('nUrl');
-  if (uEl) uEl.addEventListener('input', () => { uEl.dataset.touched = '1'; });
+  const hEl = document.getElementById('nHost');
+  const sEl = document.getElementById('nVerifySsl');
+  if (uEl) uEl.addEventListener('input', () => { uEl.dataset.touched = '1'; __pendingPinnedTlsPem = null; });
+  if (hEl) hEl.addEventListener('input', () => { hEl.dataset.touched = '1'; });
+  if (sEl) sEl.addEventListener('change', () => { sEl.dataset.touched = '1'; });
+  const jCtrl = document.getElementById('joinCtrlUrlInput');
+  if (jCtrl && !jCtrl.value) jCtrl.value = window.location.origin;
 });
 
 function setNodeViewMode(mode, btnEl) {
@@ -3338,6 +3360,27 @@ async function loadPlacementAdvisor() {
   }
 }
 
+function pinProbedSelfSignedCert() {
+  if (!__lastProbedTlsPem) return;
+  __pendingPinnedTlsPem = __lastProbedTlsPem;
+  const sslEl = document.getElementById('nVerifySsl');
+  if (sslEl) sslEl.checked = true;
+  const banner = document.getElementById('nodeProbeBanner');
+  if (banner) {
+    banner.style.border = '1px solid rgba(16,185,129,0.45)';
+    banner.style.background = 'rgba(16,185,129,0.1)';
+    banner.innerHTML = '<strong style="color:#34d399;">&#10003; Self-signed Node Agent X.509 certificate pinned!</strong> Click <strong>Register Node</strong> below to save with cryptographic TLS certificate pinning.';
+  }
+  hkvmToast('Node X.509 TLS certificate pinned for registration');
+}
+
+function useUnverifiedSelfSignedTls() {
+  __pendingPinnedTlsPem = null;
+  const sslEl = document.getElementById('nVerifySsl');
+  if (sslEl) { sslEl.checked = false; sslEl.dataset.touched = '1'; }
+  testNewNodeConnection();
+}
+
 async function testNewNodeConnection() {
   const urlVal = (document.getElementById('nUrl')?.value || '').trim();
   const verifySsl = document.getElementById('nVerifySsl') ? document.getElementById('nVerifySsl').checked : true;
@@ -3353,6 +3396,10 @@ async function testNewNodeConnection() {
       method: 'POST',
       body: { url: urlVal, verifySsl }
     });
+    if (res.url && document.getElementById('nUrl')) {
+      document.getElementById('nUrl').value = res.url;
+    }
+    __lastProbedTlsPem = res.tls?.certPem || null;
     if (banner) {
       banner.style.display = 'block';
       if (res.reachable) {
@@ -3361,7 +3408,22 @@ async function testNewNodeConnection() {
         const tlsExtra = res.tls
           ? ` &bull; TLS: <code>${hkvmEsc(res.tls.protocol || 'TLS')}</code> (CN: ${hkvmEsc(res.tls.subjectCN || 'n/a')}, ${res.tls.authorized ? 'CA-verified' : 'self-signed'})`
           : '';
-        banner.innerHTML = `<strong style="color:#34d399;">&#10003; ${hkvmEsc(res.message)}</strong>${tlsExtra}`;
+        const skewExtra = typeof res.clockSkewSec === 'number' ? ` &bull; Clock drift: <code>${res.clockSkewSec}s</code>` : '';
+        const pinAction = (res.tls && !res.tls.authorized && res.tls.certPem)
+          ? ` <button type="button" class="st-copy-mini" style="margin-left:8px;" onclick="pinProbedSelfSignedCert()">Pin TLS Cert</button>`
+          : '';
+        banner.innerHTML = `<strong style="color:#34d399;">&#10003; ${hkvmEsc(res.message)}</strong>${tlsExtra}${skewExtra}${pinAction}`;
+      } else if (res.selfSignedAgentDetected && res.tls?.certPem) {
+        banner.style.border = '1px solid rgba(245,158,11,0.45)';
+        banner.style.background = 'rgba(245,158,11,0.09)';
+        const fpShort = res.tls.fingerprintSha256 ? res.tls.fingerprintSha256.slice(0, 16) + '...' : 'self-signed';
+        banner.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+          <div><strong style="color:#fbbf24;">&#9888; ${hkvmEsc(res.message)}</strong><div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">Cert CN: <code>${hkvmEsc(res.tls.subjectCN || 'n/a')}</code> &bull; SHA-256: <code>${hkvmEsc(fpShort)}</code></div></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-primary" style="font-size:12px;padding:6px 12px;" onclick="pinProbedSelfSignedCert()">Pin &amp; Trust Self-Signed Cert</button>
+            <button type="button" class="btn btn-outline" style="font-size:12px;padding:6px 10px;" onclick="useUnverifiedSelfSignedTls()">Skip Strict Verify</button>
+          </div>
+        </div>`;
       } else {
         banner.style.border = '1px solid rgba(239,68,68,0.4)';
         banner.style.background = 'rgba(239,68,68,0.08)';
@@ -3463,7 +3525,9 @@ function renderNodesTable() {
     const protoBadge = n.is_local
       ? '<span class="st-tag cyan">IN-PROCESS</span>'
       : (isHttps
-          ? '<span class="st-tag emerald">' + (n.verify_ssl ? 'TLS VERIFIED' : 'TLS SELF-SIGNED') + '</span>'
+          ? (n.tls_pinned
+              ? '<span class="st-tag emerald">&#128274; TLS PINNED</span>'
+              : '<span class="st-tag emerald">' + (n.verify_ssl ? 'TLS VERIFIED' : 'TLS SELF-SIGNED') + '</span>')
           : '<span class="st-tag amber">PLAIN HTTP</span>');
 
     const kvmTag = n.kvm_available
@@ -3553,12 +3617,19 @@ function renderNodesTable() {
           <span class="st-tag ${statusTag}"><span class="st-dot ${statusDot}" style="width:6px;height:6px;"></span> ${hkvmEsc(statusLabel)}</span>
           ${cTag}
           <span style="font-size:10.5px;color:var(--text-muted);">Seen: ${hkvmEsc(hbText)}</span>
+          ${(!n.is_local && n.status !== 'online' && n.last_error) ? `
+            <div style="font-size:10.5px;color:#f87171;max-width:210px;line-height:1.35;" title="${hkvmEsc(n.last_error)}">
+              &#9888; ${hkvmEsc(String(n.last_error).slice(0, 72))}${String(n.last_error).length > 72 ? '…' : ''}
+              ${/TLS|self-signed|certificate/i.test(String(n.last_error)) ? `<button type="button" class="st-copy-mini" style="margin-top:3px;padding:2px 6px;font-size:10px;" onclick="trustNodeTls(${n.id})">Trust TLS</button>` : ''}
+            </div>
+          ` : ''}
         </div>
       </td>
       <td style="text-align:right;">
         <div class="v3-btn-row" style="justify-content:flex-end;">
           <button class="btn btn-primary" onclick="openNodeInspector(${n.id})" style="font-size:12px;padding:6px 11px;">Inspect</button>
           <button class="btn btn-outline" id="chkNodeBtn_${n.id}" onclick="checkNode(${n.id})" style="font-size:12px;padding:6px 10px;">Probe</button>
+          ${!n.is_local ? `<button class="btn btn-outline" onclick="openNodePairDrawer(${n.id})" style="font-size:12px;padding:6px 10px;" title="Generate 1-Command Auto-Join script or view .env credentials">Pair</button>` : ''}
           <button class="btn btn-outline" onclick="toggleNodeCordon(${n.id}, ${!n.maintenance_mode})" style="font-size:12px;padding:6px 10px;">${n.maintenance_mode ? 'Uncordon' : 'Cordon'}</button>
           <button class="btn btn-outline" onclick="rotateNode(${n.id})" style="font-size:12px;padding:6px 10px;">Keys</button>
           ${!n.is_local ? `<button class="btn btn-outline" style="color:#ef4444;font-size:12px;padding:6px 10px;" onclick="delNode(${n.id})">Remove</button>` : ''}
@@ -3627,9 +3698,16 @@ function renderNodesCards() {
 
       ${n.notes ? `<div style="font-size:11.5px;color:var(--text-muted);border-left:2px solid rgba(99,102,241,0.4);padding-left:8px;">${hkvmEsc(n.notes)}</div>` : ''}
 
+      ${(!n.is_local && n.status !== 'online' && n.last_error) ? `
+        <div style="font-size:11px;color:#f87171;padding:7px 9px;border-radius:8px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.28);">
+          &#9888; ${hkvmEsc(n.last_error)}
+        </div>
+      ` : ''}
+
       <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:auto;padding-top:10px;border-top:1px solid var(--border-subtle);">
         <button class="btn btn-primary" style="flex:1;font-size:12px;padding:7px 10px;" onclick="openNodeInspector(${n.id})">Inspect &amp; Configure</button>
         <button class="btn btn-outline" style="font-size:12px;padding:7px 10px;" onclick="checkNode(${n.id})">Probe</button>
+        ${!n.is_local ? `<button class="btn btn-outline" style="font-size:12px;padding:7px 10px;" onclick="openNodePairDrawer(${n.id})">Pair</button>` : ''}
         <button class="btn btn-outline" style="font-size:12px;padding:7px 10px;" onclick="toggleNodeCordon(${n.id}, ${!n.maintenance_mode})">${n.maintenance_mode ? 'Uncordon' : 'Cordon'}</button>
       </div>
     </div>`;
@@ -3741,6 +3819,18 @@ function renderInspectorBody() {
     const warnings = (h && Array.isArray(h.warnings)) ? h.warnings : [];
 
     body.innerHTML = `
+      ${(!n.is_local && n.last_error) ? `
+        <div style="margin-bottom:14px;padding:12px 14px;border-radius:10px;border:1px solid rgba(239,68,68,0.4);background:rgba(239,68,68,0.08);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div>
+            <strong style="color:#f87171;font-size:12.5px;">&#9888; Connection / Auth Diagnostic:</strong>
+            <div style="font-size:12px;color:#fca5a5;margin-top:3px;">${hkvmEsc(n.last_error)}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            ${String(n.url || '').startsWith('https://') ? `<button type="button" class="btn btn-primary" style="font-size:12px;padding:6px 11px;" onclick="trustNodeTls(${n.id})">Pin &amp; Trust TLS Cert</button>` : ''}
+            <button type="button" class="btn btn-outline" style="font-size:12px;padding:6px 11px;" onclick="closeNodeInspector();openNodePairDrawer(${n.id});">1-Command Auto-Join / .env</button>
+          </div>
+        </div>
+      ` : ''}
       ${warnings.length ? `<div style="margin-bottom:14px;padding:11px 14px;border-radius:10px;border:1px solid rgba(245,158,11,0.35);background:rgba(245,158,11,0.08);font-size:12px;color:#fbbf24;">${warnings.map(w => '&#9888; ' + hkvmEsc(w)).join('<br>')}</div>` : ''}
       <div class="st-kpi-grid" style="margin-bottom:16px;">
         <div class="st-kpi-card">
@@ -3898,11 +3988,11 @@ function renderInspectorBody() {
     const presets = [
       { key: 'uptime', label: 'System Uptime' },
       { key: 'uname', label: 'Kernel uname -a' },
-      { key: 'free', label: 'Memory (free -m)' },
-      { key: 'df', label: 'Disk Usage (df -h)' },
-      { key: 'ip_addr', label: 'Network IPs' },
-      { key: 'bridge', label: 'Linux Bridges' },
-      { key: 'lxc_ls', label: 'LXC Containers' },
+      { key: 'memory', label: 'Memory (free -h)' },
+      { key: 'disk', label: 'Disk Usage (df -hT)' },
+      { key: 'network_links', label: 'Network IPs' },
+      { key: 'bridges', label: 'Linux Bridges' },
+      { key: 'lxc_list', label: 'LXC Containers' },
       { key: 'sysctl_net', label: 'IPv4 Forwarding' }
     ];
     body.innerHTML = `
@@ -3916,11 +4006,13 @@ function renderInspectorBody() {
 
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-radius:11px;border:1px solid var(--border-subtle);background:rgba(255,255,255,0.02);">
         <div>
-          <strong style="font-size:13px;color:var(--text-primary);">Circuit Breaker &amp; HMAC Credential Controls</strong>
-          <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Circuit state: <strong>${hkvmEsc(n.circuit_state || 'closed')}</strong> (${Number(n.consecutive_failures || 0)} consecutive errors)</div>
+          <strong style="font-size:13px;color:var(--text-primary);">Circuit Breaker, TLS Pinning &amp; HMAC Pairing Controls</strong>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Circuit state: <strong>${hkvmEsc(n.circuit_state || 'closed')}</strong> (${Number(n.consecutive_failures || 0)} consecutive errors)${n.tls_pinned ? ' &bull; <span style="color:#34d399;">TLS X.509 Pinned</span>' : ''}</div>
         </div>
         <div class="v3-btn-row">
           <button type="button" class="btn btn-outline" onclick="resetNodeCircuit(${n.id})">Reset Circuit &amp; Probe</button>
+          ${(!n.is_local && String(n.url || '').startsWith('https://')) ? `<button type="button" class="btn btn-outline" onclick="trustNodeTls(${n.id})">Pin TLS Cert</button>` : ''}
+          ${!n.is_local ? `<button type="button" class="btn btn-outline" onclick="closeNodeInspector();openNodePairDrawer(${n.id});">Pair / .env</button>` : ''}
           <button type="button" class="btn btn-outline" onclick="rotateNode(${n.id})">Rotate HMAC Keys</button>
           <a href="/admin/node-console" class="btn btn-outline">Open Interactive Shell &rarr;</a>
         </div>
@@ -3963,7 +4055,7 @@ async function runInspectorDiag(preset) {
   try {
     const res = await hkvmApi('/api/v1/nodes/' + __inspectorNodeId + '/diagnostics/' + encodeURIComponent(preset), { method: 'POST' });
     if (out) {
-      out.textContent = '$ ' + (res.command || preset) + '  (' + (res.durationMs ?? 0) + 'ms, exit ' + (res.exitCode ?? 0) + ')\n\n' + (res.stdout || res.stderr || '(no output)');
+      out.textContent = '$ ' + (res.command || preset) + '  (' + (res.durationMs ?? 0) + 'ms, exit ' + (res.exitCode ?? 0) + ')\n\n' + (res.output || res.stdout || res.stderr || '(no output)');
     }
   } catch (err) {
     if (out) out.textContent = 'Diagnostic failed: ' + err.message;
@@ -4028,28 +4120,100 @@ async function submitAddNode(e) {
         supportsKvm: document.getElementById('nSupKvm') ? document.getElementById('nSupKvm').checked : true,
         supportsLxc: document.getElementById('nSupLxc') ? document.getElementById('nSupLxc').checked : true,
         notes: (document.getElementById('nNotes')?.value || '').trim() || undefined,
+        tlsCaPem: __pendingPinnedTlsPem || undefined,
         verifySsl: document.getElementById('nVerifySsl') ? document.getElementById('nVerifySsl').checked : true
       }
     });
-    let parsedPort = '8443';
-    try {
-      const u = new URL(document.getElementById('nUrl').value.trim());
-      parsedPort = u.port || (u.protocol === 'https:' ? '443' : '80');
-    } catch (_e) {}
-    const wrap = document.getElementById('nodeCredsWrap');
-    const box = document.getElementById('nodeCredsOutput');
-    if (wrap) wrap.style.display = 'block';
-    box.style.display = 'block';
-    box.textContent =
-      '# Remote Node Bootstrap Credentials — paste into /opt/tgvpanel/.env (or menu.sh Option 2):\n' +
-      'TGVPANEL_NODE_ID=' + out.node.id + '\n' +
-      'TGVPANEL_AGENT_HOST=0.0.0.0\n' +
-      'TGVPANEL_AGENT_PORT=' + parsedPort + '\n' +
-      'TGVPANEL_NODE_API_KEY=' + out.bootstrapCredentials.apiKey + '\n' +
-      'TGVPANEL_NODE_HMAC_SECRET=' + out.bootstrapCredentials.hmacSecret;
-    hkvmToast('Node "' + out.node.name + '" registered! Copy your bootstrap credentials below.');
-    loadNodes();
+    __pendingPinnedTlsPem = null;
+    await loadNodes();
+    await openNodePairDrawer(out.node.id, out.bootstrapCredentials);
+    hkvmToast('Node "' + out.node.name + '" registered! Run the 1-Command Auto-Join below on your remote server.');
   } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function openNodePairDrawer(nodeId, freshCreds) {
+  __activePairNodeId = nodeId;
+  const wrap = document.getElementById('nodeCredsWrap');
+  const box = document.getElementById('nodeCredsOutput');
+  const joinSec = document.getElementById('nodeJoinTokenSection');
+  const joinOut = document.getElementById('nodeJoinCmdOutput');
+  const joinMeta = document.getElementById('nodeJoinExpMeta');
+  const copyJoinBtn = document.getElementById('copyJoinCmdBtn');
+  const titleEl = document.getElementById('nodeCredsTitle');
+  const ctrlInput = document.getElementById('joinCtrlUrlInput');
+  const ctrlUrl = (ctrlInput?.value || window.location.origin).trim() || window.location.origin;
+
+  if (wrap) wrap.style.display = 'block';
+  if (box) box.style.display = 'block';
+
+  try {
+    const [boot, joinRes] = await Promise.all([
+      hkvmApi('/api/v1/nodes/' + nodeId + '/bootstrap?controllerUrl=' + encodeURIComponent(ctrlUrl)),
+      hkvmApi('/api/v1/nodes/' + nodeId + '/join-token', {
+        method: 'POST',
+        body: { controllerUrl: ctrlUrl, ttlMinutes: 30 }
+      })
+    ]);
+    if (titleEl) titleEl.textContent = 'Pair Remote Node #' + nodeId + ' (' + (boot.nodeName || '') + ')';
+    if (box) box.textContent = boot.envSnippet;
+    if (joinSec && joinOut) {
+      joinSec.style.display = 'block';
+      joinOut.textContent = joinRes.curlJoinCommand;
+      if (copyJoinBtn) copyJoinBtn.style.display = 'inline-flex';
+      if (joinMeta) {
+        joinMeta.textContent = 'Single-use token valid for ' + joinRes.ttlMinutes + ' minutes (expires ' + new Date(joinRes.expiresAt).toLocaleTimeString() + '). Local checkout command: ' + joinRes.localJoinCommand;
+      }
+    }
+    if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (err) {
+    if (freshCreds && box) {
+      box.textContent =
+        '# Remote Node Bootstrap Credentials — paste into /opt/tgvpanel/.env:\n' +
+        'TGVPANEL_NODE_ID=' + nodeId + '\n' +
+        'TGVPANEL_AGENT_HOST=0.0.0.0\n' +
+        'TGVPANEL_AGENT_PORT=8443\n' +
+        'TGVPANEL_NODE_API_KEY=' + freshCreds.apiKey + '\n' +
+        'TGVPANEL_NODE_HMAC_SECRET=' + freshCreds.hmacSecret;
+    } else {
+      hkvmToast(err.message, 'error');
+    }
+  }
+}
+
+async function regenerateJoinTokenForActiveNode() {
+  if (!__activePairNodeId) return;
+  await openNodePairDrawer(__activePairNodeId);
+  hkvmToast('Generated fresh 30-minute single-use Join Token');
+}
+
+async function trustNodeTls(nodeId) {
+  try {
+    const res = await hkvmApi('/api/v1/nodes/' + nodeId + '/trust-tls', { method: 'POST' });
+    const fpShort = res.fingerprintSha256 ? res.fingerprintSha256.slice(0, 16) + '…' : '';
+    hkvmToast('Pinned TLS certificate (' + fpShort + ')' + (res.probeOk ? ' — Node #' + nodeId + ' is ONLINE!' : ''));
+    await loadNodes();
+    if (__inspectorNodeId === nodeId) await reloadInspectorNode();
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  }
+}
+
+async function syncClusterContainers(targetNodeId) {
+  const btn = document.getElementById('syncClusterContainersBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing...'; }
+  try {
+    const res = await hkvmApi('/api/v1/lxc/sync-host', {
+      method: 'POST',
+      body: targetNodeId ? { nodeId: targetNodeId } : {}
+    });
+    hkvmToast(res.count > 0 ? ('Imported ' + res.count + ' container(s): ' + (res.imported || []).join(', ')) : 'Cluster containers synchronized (0 untracked found)');
+    await loadNodes();
+    if (__inspectorNodeId) await reloadInspectorNode();
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sync Containers'; }
+  }
 }
 
 async function checkNode(id) {
@@ -4974,10 +5138,28 @@ async function refreshNodeConsoleTelemetry() {
     }
     const upMeta = document.getElementById('ncUptimeMeta');
     if (upMeta) {
-      upMeta.textContent = `Uptime ${formatUptimeHuman(st.uptimeSeconds || hl.uptimeSeconds)}`;
+      const skewStr = typeof hl.agentTimeEpochSec === 'number'
+        ? ` • Clock skew ${hl.agentTimeEpochSec - Math.floor(Date.now() / 1000)}s`
+        : '';
+      upMeta.textContent = `Uptime ${formatUptimeHuman(st.uptimeSeconds || hl.uptimeSeconds)}${skewStr}`;
     }
     const verEl = document.getElementById('ncAgentVer');
     if (verEl && hl.agentVersion) verEl.textContent = 'v' + hl.agentVersion;
+
+    // Dynamically toggle Interactive Host PTY Shell availability per selected node!
+    if (typeof hl.interactiveShellEnabled === 'boolean') {
+      const ptyOn = Boolean(hl.interactiveShellEnabled);
+      const showEl = (id, vis, disp = '') => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = vis ? disp : 'none';
+      };
+      showEl('ncPtyEnabledBadge', ptyOn, 'inline-flex');
+      showEl('ncPtyStateBadge', ptyOn, 'inline-flex');
+      showEl('ncPtyLockedBadge', !ptyOn, 'inline-flex');
+      showEl('ncPtyToolbar', ptyOn, 'flex');
+      showEl('ncPtyLockedPane', !ptyOn, '');
+      showEl('nodeXtermBox', ptyOn, 'block');
+    }
 
     const cpuPct = Math.min(100, Math.max(0, Number(st.cpuPercent || 0)));
     document.getElementById('ncCpuVal').textContent = cpuPct.toFixed(1) + '%';
