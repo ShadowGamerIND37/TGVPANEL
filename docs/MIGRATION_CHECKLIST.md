@@ -17,7 +17,7 @@ Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Block
 | **Phase 7** | Integrate unified REST API v1, Auth, 2FA, RBAC, CSRF, API Keys, Webhooks & Impersonation | `Tested` | `src/api/v1/router.ts`, `src/api/web-routes.ts`, `src/security/*` tested in **T02**, **T04**, **T05**, **T06**, **T11**. |
 | **Phase 8** | Upgrade Admin (23 sidebar items) & User EJS Frontend | `Tested` | Preserved EJS + dark/light CSS variables, local `/vendor/xterm/`, `public/js/tgvpanel-v3.js`, all 23 Admin routes + User routes verified `200 OK` with `TGVPANEL` branding in **T12**. |
 | **Phase 9** | Build `scripts/install.sh` & `scripts/update.sh` | `Tested` | Capability detection (`/dev/kvm`, `qemu-*`, `lxc-*`, `cgroups v2`), 4 install modes, offline Node header support, `tgvpanel.service` systemd units, syntax verified via `bash -n`. |
-| **Phase 10** | Run acceptance tests, security audit & final verification | `Tested` | `npm test` -> **22/22 Acceptance Suites Passed** (`T01`–`T22`); zero plaintext secrets. |
+| **Phase 10** | Run acceptance tests, security audit & final verification | `Tested` | `npm test` -> **23/23 Acceptance Suites Passed** (`T01`–`T23`); zero plaintext secrets. |
 
 ---
 

@@ -1178,11 +1178,24 @@ function applyStatusUi(status, pid) {
   }
 }
 
+function formatCpuLoadPercent(pct, status) {
+  const s = String(status || 'stopped').toLowerCase();
+  const n = Number(pct || 0);
+  if (s !== 'running' || !Number.isFinite(n) || n <= 0) return '0%';
+  if (n < 1) return n.toFixed(2) + '%';
+  return n.toFixed(1).replace(/\.0$/, '') + '%';
+}
+
+let _telemetryInFlight = false;
+
 async function refreshTelemetry() {
+  if (_telemetryInFlight) return;
+  _telemetryInFlight = true;
   try {
     const { telemetry: t } = await hkvmApi(`/api/v1/instances/lxc/${LXC_ID}/telemetry`);
     applyStatusUi(t.status, t.pid);
-    document.getElementById('stCpu').textContent = t.cpuPercent + '%';
+    const rawCpuPct = Math.min(100, Math.max(0, Number(t.cpuPercent || 0)));
+    document.getElementById('stCpu').textContent = formatCpuLoadPercent(rawCpuPct, t.status);
     document.getElementById('stRam').textContent = t.ramUsedMb + ' MB (' + t.ramPercent + '%)';
     document.getElementById('stDisk').textContent = t.diskUsedGb + ' GB';
     document.getElementById('stNet').textContent =
@@ -1197,13 +1210,18 @@ async function refreshTelemetry() {
     const cpuBar = document.getElementById('stCpuBar');
     const ramBar = document.getElementById('stRamBar');
     const diskBar = document.getElementById('stDiskBar');
-    if (cpuBar) cpuBar.style.width = Math.min(100, Math.max(0, Number(t.cpuPercent || 0))) + '%';
+    if (cpuBar) {
+      cpuBar.style.width = (rawCpuPct > 0 ? Math.max(1.5, rawCpuPct) : 0) + '%';
+    }
     if (ramBar) ramBar.style.width = Math.min(100, Math.max(0, Number(t.ramPercent || 0))) + '%';
     if (diskBar) {
       const diskPct = DISK_QUOTA_GB > 0 ? Math.min(100, Math.round((Number(t.diskUsedGb || 0) / DISK_QUOTA_GB) * 100)) : 0;
       diskBar.style.width = diskPct + '%';
     }
-  } catch (_e) {}
+  } catch (_e) {
+  } finally {
+    _telemetryInFlight = false;
+  }
 }
 
 async function doLxcAction(action) {
@@ -1541,7 +1559,12 @@ async function saveResources(e, restartAfter) {
 document.addEventListener('DOMContentLoaded', () => {
   applyStatusUi('<%= instance.status %>', null);
   refreshTelemetry();
-  setInterval(refreshTelemetry, 10000);
+  setInterval(() => {
+    if (!document.hidden) refreshTelemetry();
+  }, 4000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshTelemetry();
+  });
 });
 </script>
 </body>

@@ -63,6 +63,7 @@ export interface LxcContainerRuntimeInfo {
     pid: number | null;
     ips: string[];
     cpuUseSeconds: number;
+    cpuCoresUsed?: number;
     memoryBytes: number;
     swapBytes: number;
     rxBytes: number;
@@ -162,9 +163,32 @@ export declare function cleanupLegacyHostLeafCgroup(baseDir?: string): void;
  */
 export declare function ensureCgroupV2SubtreeDelegation(targetBaseDir?: string): void;
 export declare function resolveLiveContainerCgroupV2Dir(pid: number | null | undefined): string | null;
+/**
+ * Resolves a running container's root payload cgroup v2 directory (e.g.
+ * `/sys/fs/cgroup/hkvm.lxc/lxc.payload.<name>`), stripping nested guest `systemd`
+ * child cgroups such as `/init.scope` so `cpu.stat`, `memory.current`, `memory.max`,
+ * and `cpu.max` reflect the entire container (`init.scope` + `system.slice` + `user.slice`
+ * + nested Docker) rather than only idle PID 1. Returns `null` if the container shares
+ * the host/daemon cgroup on an undelegated host.
+ */
+export declare function resolveContainerPayloadCgroupV2Dir(containerName: string, pid?: number | null): string | null;
+/**
+ * Reads high-resolution kernel CPU & memory accounting directly from cgroup v2 (`cpu.stat`
+ * `usage_usec`, `memory.current`, `memory.swap.current`) or cgroup v1 (`cpuacct.usage`,
+ * `memory.usage_in_bytes`). Works on both LXC 5.x (where `lxc-info` ignores cgroup v2
+ * `cpu.stat` & `memory.current`) and LXC 6.x (avoiding `lxc-info`'s 32-bit `strtof` `%.2f`
+ * precision loss).
+ */
+export declare function readContainerCgroupResourceStats(containerName: string, pid?: number | null): {
+    cpuUseSeconds: number | null;
+    memoryBytes: number | null;
+    swapBytes: number | null;
+    source: 'cgroup-v2' | 'cgroup-v1' | null;
+};
 export declare class LxcContainerManager {
     private lxcBaseDir;
     private inFlightCreations;
+    private prevCpuSamples;
     constructor(lxcBaseDir?: string);
     isCreationInFlight(containerName: string): boolean;
     getBaseDir(): string;
@@ -210,13 +234,31 @@ export declare class LxcContainerManager {
     }): string[];
     listContainers(): Promise<LxcContainerRuntimeInfo[]>;
     private readContainerNetFromConfig;
-    inspectContainer(containerName: string): Promise<LxcContainerRuntimeInfo>;
+    inspectContainer(containerName: string, options?: {
+        sampleCpu?: boolean;
+    }): Promise<LxcContainerRuntimeInfo>;
+    private readHighResContainerTelemetrySample;
     /**
-     * Fallback live memory (VmRSS) & CPU time aggregator across `<initPid>` and all its
-     * descendant processes in `/proc` for hosts (e.g. WSL2 / un-delegated cgroup v2) where
-     * `lxc-info` does not emit `Memory use:` / `CPU use:`.
+     * Computes real-time active CPU cores utilized (`deltaCpuSec / deltaWallSec`) using the
+     * host's monotonic clock. Performs a fast 120ms kernel cgroup/`/proc` micro-sample on
+     * cold starts when `sampleIfCold` is enabled so opening an LXC VPS page immediately
+     * displays live CPU Load instead of `0%`.
      */
-    private measureContainerProcTree;
+    computeContainerCpuCoresUsed(safeName: string, pid: number | null, source: string, cpuSec1: number, monoMs1: number, sampleIfCold: boolean, readSecondSample?: () => {
+        cpuUseSeconds: number;
+        source: string;
+        monoMs: number;
+    }): Promise<number>;
+    /**
+     * Fallback live memory (VmRSS) & monotonic CPU time aggregator across `<initPid>` and all
+     * its descendant processes in `/proc` for hosts (e.g. WSL2 / un-delegated cgroup v2) where
+     * per-container cgroup accounting is unavailable. Includes `cutime + cstime` so reaped
+     * short-lived child processes never make cumulative CPU ticks drop backwards.
+     */
+    measureContainerProcTree(rootPid: number): {
+        memoryBytes: number;
+        cpuUseSeconds: number;
+    };
     private parseHumanSizeToBytes;
     private measureDirBytesFast;
     private getRootfsUsedBytes;

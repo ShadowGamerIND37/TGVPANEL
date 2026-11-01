@@ -1084,7 +1084,9 @@ if [ "$STATE" = "RUNNING" ] || [ "$STATE" = "FROZEN" ]; then
   CFG_IP="$(grep -E '^[[:space:]]*lxc\\.net\\.0\\.ipv4\\.address' "$CT/config" 2>/dev/null | tail -n 1 | awk -F= '{print $2}' | tr -d ' ' | cut -d/ -f1)"
   echo "IP:             \${CFG_IP:-10.88.10.200}"
   if [ ! -f "$CT/.omit_mem_use" ]; then
-    echo "CPU use:        1.35 seconds"
+    if [ ! -f "$CT/.omit_cpu_use" ]; then
+      echo "CPU use:        1.35 seconds"
+    fi
     echo "Memory use:     64.25 MiB"
   fi
   echo "TX bytes:       18.00 KiB"
@@ -3002,6 +3004,230 @@ exec "$@"
         });
       });
       assert.ok(ptyOutput.includes('MULTI_NODE_WSS_PTY_OK'), 'Expected live PTY output bridged over WSS from remote node');
+    });
+
+    await runStep('T23: LXC VPS live CPU Load telemetry (systemd init.scope cgroup v2, cold first-load sample, memory>0 /proc cutime fallback & remote HTTPS node)', async () => {
+      const { spawn, execFileSync } = require('child_process');
+      const {
+        resolveContainerPayloadCgroupV2Dir,
+        readContainerCgroupResourceStats,
+        ensureCgroupV2SubtreeDelegation,
+        LxcContainerManager,
+      } = require('../lib/node-agent/container-manager');
+      const { privilegedFs, isRunningAsRoot, canPasswordlessSudo } =
+        require('../lib/node-agent/command-runner');
+
+      await adminClient.request('GET', '/lxc');
+
+      // Provision a dedicated 1-vCPU LXC container for CPU telemetry verification
+      const ctName = 'cpu-load-e2e-01';
+      const createRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: ctName,
+        hostname: 'cpu-load-e2e.tgvpanel.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 1,
+        cpuLimitPercent: 100,
+        ramMb: 1024,
+        swapMb: 256,
+        diskGb: 10,
+        startAfterCreate: true,
+      });
+      assert.strictEqual(createRes.status, 201, `Create ${ctName} failed: ${createRes.text}`);
+      const lxcId = createRes.json.instance.refId;
+      const ctDir = path.join(process.env.TGVPANEL_LXC_PATH, ctName);
+
+      // Verify /lxc/:id UI template includes live formatCpuLoadPercent & 4s polling
+      const detailHtml = await adminClient.request('GET', `/lxc/${lxcId}`);
+      assert.strictEqual(detailHtml.status, 200);
+      assert.ok(detailHtml.text.includes('formatCpuLoadPercent'), 'Expected formatCpuLoadPercent in /lxc/:id view');
+
+      // Scenario 1: Real cgroup v2 `systemd` layout (`lxc.payload.<ct>/init.scope` idle PID 1
+      // + `lxc.payload.<ct>/system.slice/worker.service` busy CPU worker) + cold first-load telemetry!
+      if ((isRunningAsRoot() || canPasswordlessSudo()) && fs.existsSync('/sys/fs/cgroup/cgroup.controllers')) {
+        ensureCgroupV2SubtreeDelegation();
+        const payloadCg = `/sys/fs/cgroup/hkvm.lxc/lxc.payload.${ctName}`;
+        const guestInitScope = `${payloadCg}/init.scope`;
+        const guestWorkerSvc = `${payloadCg}/system.slice/worker.service`;
+        let busyWorker = null;
+        try {
+          const ctInitPid = parseInt(fs.readFileSync(path.join(ctDir, '.pid'), 'utf8').trim(), 10);
+          assert.ok(ctInitPid > 1, 'Expected running container init PID');
+
+          execFileSync('sudo', ['-n', 'mkdir', '-p', guestInitScope, guestWorkerSvc]);
+          // Move idle container PID 1 into `<payload>/init.scope` just like systemd does on boot
+          privilegedFs.writeFileSync(path.join(guestInitScope, 'cgroup.procs'), `${ctInitPid}\n`);
+
+          // Spawn a real CPU-burning worker inside `<payload>/system.slice/worker.service`
+          busyWorker = spawn(process.execPath, ['-e', 'const end = Date.now() + 8000; while (Date.now() < end) { Math.sqrt(Math.random()); }'], {
+            stdio: 'ignore',
+          });
+          privilegedFs.writeFileSync(path.join(guestWorkerSvc, 'cgroup.procs'), `${busyWorker.pid}\n`);
+
+          const resolvedPayloadDir = resolveContainerPayloadCgroupV2Dir(ctName, ctInitPid);
+          assert.strictEqual(
+            resolvedPayloadDir,
+            payloadCg,
+            `Expected resolveContainerPayloadCgroupV2Dir to strip /init.scope and return ${payloadCg}, got ${resolvedPayloadDir}`
+          );
+
+          const cgStat1 = readContainerCgroupResourceStats(ctName, ctInitPid);
+          assert.strictEqual(cgStat1.source, 'cgroup-v2');
+          assert.ok(cgStat1.cpuUseSeconds !== null && cgStat1.cpuUseSeconds >= 0);
+
+          // Cold first-visit telemetry request MUST immediately return > 5% CPU (not 0%!)
+          const coldTel = await adminClient.request('GET', `/api/v1/instances/lxc/${lxcId}/telemetry`);
+          assert.strictEqual(coldTel.status, 200, `Cold telemetry failed: ${coldTel.text}`);
+          assert.ok(
+            coldTel.json.telemetry.cpuPercent > 5,
+            `Expected cold first-visit LXC CPU Load > 5%, got ${coldTel.json.telemetry.cpuPercent}%`
+          );
+
+          // Warm second telemetry poll after 250ms MUST also return > 5% CPU
+          await new Promise((r) => setTimeout(r, 260));
+          const warmTel = await adminClient.request('GET', `/api/v1/instances/lxc/${lxcId}/telemetry`);
+          assert.strictEqual(warmTel.status, 200);
+          assert.ok(
+            warmTel.json.telemetry.cpuPercent > 5,
+            `Expected warm LXC CPU Load > 5%, got ${warmTel.json.telemetry.cpuPercent}%`
+          );
+        } finally {
+          if (busyWorker) {
+            try { busyWorker.kill('SIGKILL'); } catch (_) {}
+          }
+          // Evacuate container init PID back to /sys/fs/cgroup/init.scope so we can cleanly rmdir test cgroups
+          try {
+            const ctInitPid = parseInt(fs.readFileSync(path.join(ctDir, '.pid'), 'utf8').trim(), 10);
+            if (ctInitPid > 1) {
+              privilegedFs.writeFileSync('/sys/fs/cgroup/init.scope/cgroup.procs', `${ctInitPid}\n`);
+            }
+          } catch (_) {}
+          await new Promise((r) => setTimeout(r, 80));
+          for (const d of [
+            `${payloadCg}/system.slice/worker.service`,
+            `${payloadCg}/system.slice`,
+            `${payloadCg}/init.scope`,
+            payloadCg,
+          ]) {
+            try { execFileSync('sudo', ['-n', 'rmdir', d]); } catch (_) {}
+          }
+        }
+      }
+
+      // Scenario 2: Undelegated /proc fallback when `Memory use:` > 0 AND `CPU use:` is missing,
+      // PLUS monotonic `cutime + cstime` preservation across exited & reaped child processes!
+      const parentProc = spawn(
+        process.execPath,
+        [
+          '-e',
+          `
+          const { spawnSync } = require('child_process');
+          // 1) Burn CPU in a short-lived child that exits and is immediately reaped
+          spawnSync(process.execPath, ['-e', 'const t = Date.now() + 180; while (Date.now() < t) { Math.imul(12345, 67890); }']);
+          process.stdout.write('REAPED\\n');
+          // 2) Spawn a live busy child for live /proc telemetry measurement
+          const { spawn } = require('child_process');
+          const c = spawn(process.execPath, ['-e', 'const t = Date.now() + 5000; while (Date.now() < t) { Math.sqrt(987654321); }'], { stdio: 'ignore' });
+          setTimeout(() => { try { c.kill('SIGKILL'); } catch (_) {} process.exit(0); }, 5000);
+          `,
+        ],
+        { stdio: ['ignore', 'pipe', 'ignore'] }
+      );
+      try {
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(() => reject(new Error('Timed out waiting for REAPED signal')), 4000);
+          parentProc.stdout.on('data', (d) => {
+            if (d.toString().includes('REAPED')) {
+              clearTimeout(t);
+              resolve();
+            }
+          });
+        });
+
+        const localCm = new LxcContainerManager(process.env.TGVPANEL_LXC_PATH);
+        const procAfterReap = localCm.measureContainerProcTree(parentProc.pid);
+        assert.ok(
+          procAfterReap.cpuUseSeconds >= 0.05,
+          `Expected reaped child CPU ticks (cutime+cstime) preserved >= 0.05s, got ${procAfterReap.cpuUseSeconds}s`
+        );
+
+        // Point container `.pid` at `parentProc.pid` (which lives in shared host cgroup, NOT lxc.payload.*)
+        // AND touch `.omit_cpu_use` so `lxc-info` emits `Memory use: 64.25 MiB` (>0) while omitting `CPU use:`!
+        const origPid = privilegedFs.readTextSync(path.join(ctDir, '.pid'));
+        const omitCpuMarker = path.join(ctDir, '.omit_cpu_use');
+        execFileSync('sudo', ['-n', 'touch', omitCpuMarker]);
+        privilegedFs.writeFileSync(path.join(ctDir, '.pid'), `${parentProc.pid}\n`);
+        try {
+          const procTel = await adminClient.request('GET', `/api/v1/instances/lxc/${lxcId}/telemetry`);
+          assert.strictEqual(procTel.status, 200);
+          assert.ok(
+            procTel.json.telemetry.ramUsedMb >= 60,
+            `Expected Memory use > 60 MB preserved, got ${procTel.json.telemetry.ramUsedMb} MB`
+          );
+          assert.ok(
+            procTel.json.telemetry.cpuPercent > 3,
+            `Expected /proc CPU Load > 3% even when Memory use > 0 and lxc-info omits CPU use, got ${procTel.json.telemetry.cpuPercent}%`
+          );
+        } finally {
+          privilegedFs.writeFileSync(path.join(ctDir, '.pid'), origPid);
+          execFileSync('sudo', ['-n', 'rm', '-f', omitCpuMarker]);
+        }
+      } finally {
+        try { execFileSync('pkill', ['-KILL', '-P', String(parentProc.pid)]); } catch (_) {}
+        try { parentProc.kill('SIGKILL'); } catch (_) {}
+      }
+
+      // Scenario 3: Remote Node Agent live CPU Load telemetry (`?telemetry=1` over HMAC HTTP)
+      if ((isRunningAsRoot() || canPasswordlessSudo()) && fs.existsSync('/sys/fs/cgroup/cgroup.controllers')) {
+        const remCtName = 'cpu-rem-e2e-01';
+        const remCreate = await adminClient.request('POST', '/api/v1/lxc', {
+          containerName: remCtName,
+          hostname: 'cpu-rem-e2e.tgvpanel.local',
+          templateSlug: 'ubuntu:24.04',
+          nodeId: remoteNodeId,
+          cpuCores: 2,
+          cpuLimitPercent: 100,
+          ramMb: 1024,
+          swapMb: 256,
+          diskGb: 10,
+          startAfterCreate: true,
+        });
+        assert.strictEqual(remCreate.status, 201, `Remote create failed: ${remCreate.text}`);
+        const remLxcId = remCreate.json.instance.refId;
+        const remCtDir = path.join(tmpRoot, 'agent-lxc', remCtName);
+        const remPayloadCg = `/sys/fs/cgroup/hkvm.lxc/lxc.payload.${remCtName}`;
+        let remWorker = null;
+        try {
+          const remInitPid = parseInt(privilegedFs.readTextSync(path.join(remCtDir, '.pid')).trim(), 10);
+          execFileSync('sudo', ['-n', 'mkdir', '-p', `${remPayloadCg}/init.scope`]);
+          privilegedFs.writeFileSync(`${remPayloadCg}/init.scope/cgroup.procs`, `${remInitPid}\n`);
+          remWorker = spawn(process.execPath, ['-e', 'const end = Date.now() + 8000; while (Date.now() < end) { Math.sqrt(Math.random()); }'], {
+            stdio: 'ignore',
+          });
+          privilegedFs.writeFileSync(`${remPayloadCg}/cgroup.procs`, `${remWorker.pid}\n`);
+
+          const remColdTel = await adminClient.request('GET', `/api/v1/instances/lxc/${remLxcId}/telemetry`);
+          assert.strictEqual(remColdTel.status, 200, `Remote cold telemetry failed: ${remColdTel.text}`);
+          assert.ok(
+            remColdTel.json.telemetry.cpuPercent > 5,
+            `Expected remote LXC CPU Load > 5% on cold first open, got ${remColdTel.json.telemetry.cpuPercent}%`
+          );
+        } finally {
+          if (remWorker) {
+            try { remWorker.kill('SIGKILL'); } catch (_) {}
+          }
+          try {
+            const remInitPid = parseInt(privilegedFs.readTextSync(path.join(remCtDir, '.pid')).trim(), 10);
+            if (remInitPid > 1) {
+              privilegedFs.writeFileSync('/sys/fs/cgroup/init.scope/cgroup.procs', `${remInitPid}\n`);
+            }
+          } catch (_) {}
+          await new Promise((r) => setTimeout(r, 80));
+          for (const d of [`${remPayloadCg}/init.scope`, remPayloadCg]) {
+            try { execFileSync('sudo', ['-n', 'rmdir', d]); } catch (_) {}
+          }
+        }
+      }
     });
   } finally {
     const { execFileSync } = require('child_process');

@@ -238,7 +238,10 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
 
   app.get('/api/v1/containers/:name', async (req, res) => {
     try {
-      const info = await runtime.containerManager.inspectContainer(req.params.name);
+      const sampleCpu = String(req.query.telemetry || '') === '1';
+      const info = await runtime.containerManager.inspectContainer(req.params.name, {
+        sampleCpu,
+      });
       res.json(info);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
