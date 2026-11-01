@@ -30,10 +30,44 @@ export interface NodeRecord {
     supports_lxc?: number;
     kvm_available?: number;
     lxc_available?: number;
+    nested_virt?: number;
     cgroup_version?: string | null;
     qemu_version?: string | null;
     lxc_version?: string | null;
     kernel_version?: string | null;
+    storage_backends?: string | null;
+    network_backends?: string | null;
+    kvm_count?: number;
+    kvm_running?: number;
+    lxc_count?: number;
+    lxc_running?: number;
+    total_instances?: number;
+    running_instances?: number;
+    allocated_vcpus?: number;
+    allocated_ram_mb?: number;
+    allocated_disk_gb?: number;
+    live_cpu_percent?: number | null;
+    live_ram_used_mb?: number | null;
+    live_disk_used_gb?: number | null;
+    live_load_1?: number | null;
+    latency_ms?: number | null;
+}
+export interface EndpointProbeResult {
+    reachable: boolean;
+    url: string;
+    protocol: 'http' | 'https';
+    latencyMs: number;
+    httpStatus: number | null;
+    agentDetected: boolean;
+    tls?: {
+        authorized: boolean;
+        authorizationError?: string | null;
+        subjectCN?: string | null;
+        issuerCN?: string | null;
+        validTo?: string | null;
+        protocol?: string | null;
+    } | null;
+    message: string;
 }
 /**
  * Communicates with remote Node Agents over HTTPS/HTTP using replay-protected HMAC-SHA256 signatures
@@ -43,9 +77,13 @@ export declare class NodeManager {
     private db;
     readonly localRuntime: LocalNodeRuntime;
     private circuits;
+    private latencies;
     private readonly failureThreshold;
     private readonly openCooldownMs;
     constructor(db: UnifiedDatabase, localRuntime?: LocalNodeRuntime);
+    private normalizeTagsJson;
+    private enrichNodeRow;
+    private readonly nodeSelectSql;
     listNodes(): Promise<NodeRecord[]>;
     getNodeById(nodeId: number): Promise<NodeRecord | undefined>;
     getDefaultNodeForEngine(engine: 'kvm' | 'lxc'): Promise<NodeRecord>;
@@ -60,7 +98,7 @@ export declare class NodeManager {
         supportsKvm?: boolean;
         supportsLxc?: boolean;
         maxInstances?: number;
-        tags?: string[];
+        tags?: string[] | string;
         notes?: string;
     }): Promise<{
         node: NodeRecord;
@@ -80,6 +118,7 @@ export declare class NodeManager {
         maxInstances?: number;
         supportsKvm?: boolean;
         supportsLxc?: boolean;
+        tags?: string[] | string;
         notes?: string;
     }): Promise<NodeRecord>;
     deleteNode(nodeId: number): Promise<void>;
@@ -95,7 +134,30 @@ export declare class NodeManager {
         node: NodeRecord;
         health: NodeHealthReport;
         stats: HostResourceStats;
+        latencyMs: number;
     }>;
+    resetCircuitBreaker(nodeId: number): Promise<NodeRecord>;
+    /**
+     * Pre-flight HTTP/HTTPS + TLS reachability probe for remote Node Agent URLs.
+     */
+    probeEndpointConnection(input: {
+        url: string;
+        verifySsl?: boolean;
+        timeoutMs?: number;
+    }): Promise<EndpointProbeResult>;
+    /**
+     * Computes transparent smart placement scores across cluster nodes for KVM or LXC workloads.
+     */
+    rankPlacementCandidates(engine: 'kvm' | 'lxc'): Promise<{
+        nodeId: number;
+        name: string;
+        location: string;
+        isLocal: boolean;
+        eligible: boolean;
+        hardwareReady: boolean;
+        score: number;
+        reasons: string[];
+    }[]>;
     private checkCircuitAllowed;
     private recordCircuitSuccess;
     private recordCircuitFailure;

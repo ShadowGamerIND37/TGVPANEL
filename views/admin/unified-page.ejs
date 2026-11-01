@@ -672,6 +672,68 @@
     .lic-kv-row:last-child { border-bottom: none; }
     .lic-kv-k { color: var(--text-muted); font-weight: 500; }
     .lic-kv-v { color: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+    /* Nodes Cluster Cards Grid + Inspector Modal + Placement Advisor */
+    .nd-cards-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 15px; padding: 18px 20px;
+    }
+    .nd-card {
+      background: var(--bg-secondary, rgba(255,255,255,0.02)); border: 1px solid var(--border-card);
+      border-radius: 13px; padding: 17px 18px; display: flex; flex-direction: column; gap: 13px;
+      transition: border-color 0.18s ease, transform 0.18s ease; position: relative;
+    }
+    .nd-card:hover { border-color: rgba(6, 182, 212, 0.42); transform: translateY(-1px); }
+    .nd-card.cordoned { border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.03); }
+    .nd-mini-metrics {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;
+      padding: 11px 12px; border-radius: 10px; background: rgba(0,0,0,0.22); border: 1px solid var(--border-subtle);
+    }
+    .nd-mini-k { font-size: 10.5px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; }
+    .nd-mini-v { font-size: 13px; font-weight: 800; color: var(--text-primary); margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+    .nd-tag-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .nd-tag-chip {
+      padding: 2px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 600;
+      background: rgba(99, 102, 241, 0.11); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.25);
+    }
+
+    .nd-modal-backdrop {
+      position: fixed; inset: 0; z-index: 9500; background: rgba(0, 0, 0, 0.76);
+      backdrop-filter: blur(5px); display: none; align-items: center; justify-content: center; padding: 18px;
+    }
+    .nd-modal-backdrop.open { display: flex; }
+    .nd-modal {
+      width: 100%; max-width: 960px; max-height: 90vh; display: flex; flex-direction: column;
+      background: var(--bg-modal, #0d0f14); border: 1px solid var(--border-card); border-radius: 16px;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.85); overflow: hidden;
+    }
+    .nd-modal-head {
+      padding: 16px 22px; border-bottom: 1px solid var(--border-subtle);
+      display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+    }
+    .nd-modal-tabs {
+      display: flex; gap: 6px; padding: 10px 22px; border-bottom: 1px solid var(--border-subtle);
+      background: rgba(255,255,255,0.015); overflow-x: auto;
+    }
+    .nd-tab-btn {
+      padding: 7px 14px; border-radius: 8px; border: 1px solid transparent; background: transparent;
+      color: var(--text-muted); font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    .nd-tab-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+    .nd-tab-btn.active {
+      background: rgba(6, 182, 212, 0.15); color: #22d3ee; border-color: rgba(6, 182, 212, 0.35);
+    }
+    .nd-modal-body { padding: 20px 22px; overflow-y: auto; flex: 1; }
+    .nd-diag-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 8px; margin-bottom: 14px;
+    }
+    .nd-diag-btn {
+      padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border-color);
+      background: rgba(255,255,255,0.025); color: var(--text-primary); font-size: 12px; font-weight: 600;
+      cursor: pointer; text-align: left; transition: all 0.14s ease;
+    }
+    .nd-diag-btn:hover { border-color: #22d3ee; background: rgba(6, 182, 212, 0.1); color: #22d3ee; }
   </style>
 </head>
 <body>
@@ -1257,11 +1319,12 @@
           </span>
           <div>
             <h2 class="st-hero-title">Hypervisor &amp; Container Nodes</h2>
-            <p class="st-hero-sub">Distributed compute fabric with replay-protected HMAC-SHA256 Node Agents, automatic circuit breakers, real-time capability discovery, and zero-downtime key rotation.</p>
+            <p class="st-hero-sub">Distributed compute fabric with live telemetry, maintenance cordoning, smart workload placement, pre-flight TLS probes, node evacuation, and HMAC key rotation.</p>
           </div>
         </div>
         <div class="st-actions">
-          <a href="/admin/node-console" class="btn btn-outline">Host Diagnostics &amp; Shell</a>
+          <button type="button" class="btn btn-outline" onclick="togglePlacementAdvisor()">Placement Advisor</button>
+          <a href="/admin/node-console" class="btn btn-outline">Host Shell</a>
           <button type="button" class="btn btn-outline" id="refreshAllNodesBtn" onclick="refreshAllNodesHealth()">Check All Nodes</button>
           <button type="button" class="btn btn-primary" onclick="toggleNodeRegisterPanel()">+ Register Remote Node</button>
         </div>
@@ -1278,23 +1341,24 @@
         </div>
         <div class="st-kpi-card">
           <div class="st-kpi-top">
-            <span class="st-kpi-label">Aggregate Compute</span>
+            <span class="st-kpi-label">Compute &amp; Workloads</span>
             <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg></span>
           </div>
           <div class="st-kpi-val" id="nkCoresVal">--</div>
-          <div class="st-kpi-foot"><span id="nkCpuModelSub">Detecting CPU topology...</span></div>
+          <div class="st-kpi-foot"><span id="nkCpuModelSub">Detecting workloads...</span></div>
         </div>
         <div class="st-kpi-card">
           <div class="st-kpi-top">
-            <span class="st-kpi-label">Cluster Memory</span>
+            <span class="st-kpi-label">Memory Allocation</span>
             <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9M2 15h20M4 5h16a2 2 0 0 1 2 2v8H2V7a2 2 0 0 1 2-2Z"/></svg></span>
           </div>
           <div class="st-kpi-val" id="nkRamVal">--</div>
-          <div class="st-kpi-foot"><span id="nkStorageSub">Disk capacity: --</span></div>
+          <div class="st-bar-track"><div class="st-bar-fill" id="nkRamAllocBar" style="width:0%"></div></div>
+          <div class="st-kpi-foot"><span id="nkStorageSub">Allocated: --</span></div>
         </div>
         <div class="st-kpi-card">
           <div class="st-kpi-top">
-            <span class="st-kpi-label">Engine &amp; Circuit Health</span>
+            <span class="st-kpi-label">Fabric &amp; Latency</span>
             <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
           </div>
           <div class="st-kpi-val" id="nkEnginesVal">--</div>
@@ -1302,13 +1366,31 @@
         </div>
       </div>
 
+      <!-- SMART PLACEMENT ADVISOR DRAWER -->
+      <div class="st-panel" id="placementAdvisorPanel" style="display:none;border-color:rgba(6,182,212,0.35);">
+        <div class="st-panel-head">
+          <div>
+            <h3 class="st-panel-title">Smart Workload Placement Advisor</h3>
+            <p class="st-panel-sub">Real-time scheduler ranking based on node health, maintenance cordon state, free RAM headroom, CPU load, and instance slot quota.</p>
+          </div>
+          <div class="st-actions">
+            <button type="button" class="st-copy-mini" onclick="loadPlacementAdvisor()">Recalculate</button>
+            <button type="button" class="st-copy-mini" onclick="document.getElementById('placementAdvisorPanel').style.display='none'">Close</button>
+          </div>
+        </div>
+        <div class="st-panel-body" id="placementAdvisorBody">
+          <span style="color:var(--text-muted);font-size:12.5px;">Computing placement scores...</span>
+        </div>
+      </div>
+
+      <!-- REGISTER REMOTE NODE AGENT -->
       <div class="st-panel" id="nodeRegisterCard">
         <div class="st-panel-head">
           <div class="st-panel-title-wrap">
             <span class="lxc-step-badge">+</span>
             <div>
               <h3 class="st-panel-title">Register Remote Node Agent</h3>
-              <p class="st-panel-sub">Attach a new Linux hypervisor/container host over TLS or private WireGuard mesh.</p>
+              <p class="st-panel-sub">Attach a new Linux hypervisor/container host over TLS or private WireGuard mesh with pre-flight reachability verification.</p>
             </div>
           </div>
           <span class="st-tag cyan">HMAC-SHA256 + ±300s Replay Guard</span>
@@ -1326,7 +1408,7 @@
           </div>
 
           <form onsubmit="submitAddNode(event)">
-            <div class="v3-form-grid" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px;">
+            <div class="v3-form-grid" style="grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 13px;">
               <div class="v3-field">
                 <label>Node Name</label>
                 <input id="nName" required placeholder="eu-fra-node-02" oninput="autoFillAgentUrl()">
@@ -1348,15 +1430,44 @@
                 <input id="nLoc" value="Frankfurt, DE" placeholder="Frankfurt, DE">
               </div>
               <div class="v3-field">
+                <label>Max Instances Quota</label>
+                <input id="nMaxInst" type="number" min="1" max="5000" value="100">
+              </div>
+              <div class="v3-field">
+                <label>Cluster Tags <span style="font-weight:400;color:var(--text-muted);">(comma-separated)</span></label>
+                <input id="nTags" placeholder="nvme, production, eu-central">
+              </div>
+              <div class="v3-field">
+                <label>Allowed Engines</label>
+                <div style="display:flex;gap:8px;">
+                  <label class="st-switch-box" style="flex:1;" for="nSupKvm">
+                    <span style="font-size:12px;font-weight:600;">KVM</span>
+                    <input type="checkbox" id="nSupKvm" checked>
+                  </label>
+                  <label class="st-switch-box" style="flex:1;" for="nSupLxc">
+                    <span style="font-size:12px;font-weight:600;">LXC</span>
+                    <input type="checkbox" id="nSupLxc" checked>
+                  </label>
+                </div>
+              </div>
+              <div class="v3-field">
                 <label>Certificate Policy</label>
                 <label class="st-switch-box" for="nVerifySsl">
-                  <span style="font-size:12px;color:var(--text-primary);font-weight:600;">Verify TLS Cert <span style="font-weight:400;color:var(--text-muted);">(off for self-signed)</span></span>
+                  <span style="font-size:12px;color:var(--text-primary);font-weight:600;">Verify TLS <span style="font-weight:400;color:var(--text-muted);">(off for self-signed)</span></span>
                   <input type="checkbox" id="nVerifySsl" checked>
                 </label>
               </div>
+              <div class="v3-field" style="grid-column: span 2;">
+                <label>Operator Notes <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                <input id="nNotes" placeholder="Rack B4 • 2x NVMe RAID1 • 10GbE uplink">
+              </div>
             </div>
-            <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:16px;padding-top:14px;border-top:1px solid var(--border-subtle);">
+
+            <div id="nodeProbeBanner" style="display:none;margin-top:14px;padding:11px 14px;border-radius:10px;font-size:12.5px;"></div>
+
+            <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;margin-top:16px;padding-top:14px;border-top:1px solid var(--border-subtle);">
               <span style="font-size:12px;color:var(--text-muted);margin-right:auto;">Credentials are encrypted at rest with AES-256-GCM and shown once on creation.</span>
+              <button type="button" class="btn btn-outline" id="testNodeConnBtn" onclick="testNewNodeConnection()">Test Reachability</button>
               <button type="submit" class="btn btn-primary" style="min-width:170px;">Register Node</button>
             </div>
           </form>
@@ -1377,36 +1488,77 @@
         </div>
       </div>
 
+      <!-- REGISTERED NODES DIRECTORY (TABLE + CARDS VIEW + TAG FILTERS) -->
       <div class="st-panel">
         <div class="st-panel-head">
           <div>
             <h3 class="st-panel-title">Registered Compute Nodes</h3>
-            <p class="st-panel-sub">Live status, hypervisor engines, hardware inventory, and circuit-breaker state per node.</p>
+            <p class="st-panel-sub">Click <strong>Inspect</strong> on any node for live telemetry, hosted instances, maintenance cordoning, LXC evacuation, tags, and host diagnostics.</p>
           </div>
           <div class="st-actions">
+            <div class="st-seg-bar" id="nodeViewModeSeg">
+              <button type="button" class="st-seg-btn active" onclick="setNodeViewMode('table', this)">Table</button>
+              <button type="button" class="st-seg-btn" onclick="setNodeViewMode('cards', this)">Cards</button>
+            </div>
             <div class="st-seg-bar" id="nodeFilterSeg">
               <button type="button" class="st-seg-btn active" onclick="setNodeStatusFilter('all', this)">All</button>
               <button type="button" class="st-seg-btn" onclick="setNodeStatusFilter('online', this)">Online</button>
+              <button type="button" class="st-seg-btn" onclick="setNodeStatusFilter('maintenance', this)">Cordoned</button>
               <button type="button" class="st-seg-btn" onclick="setNodeStatusFilter('offline', this)">Offline</button>
             </div>
-            <input type="text" id="nodeSearchInput" class="st-search-input" placeholder="Filter by name, IP, location..." oninput="renderNodesTable()">
+            <input type="text" id="nodeSearchInput" class="st-search-input" placeholder="Search name, IP, tag, CPU..." oninput="renderNodesView()">
           </div>
         </div>
-        <div class="v3-table-wrap">
+        <div id="nodeTagFilterRow" style="display:none;padding:10px 20px;border-bottom:1px solid var(--border-subtle);background:rgba(255,255,255,0.01);gap:6px;flex-wrap:wrap;align-items:center;"></div>
+        <div class="v3-table-wrap" id="nodesTableWrap">
           <table class="st-table">
             <thead>
               <tr>
-                <th>Node Identity</th>
-                <th>Agent Endpoint</th>
+                <th>Node Identity &amp; Tags</th>
+                <th>Endpoint &amp; Latency</th>
                 <th>Engines</th>
-                <th>Circuit Breaker</th>
-                <th>Hardware Capacity</th>
-                <th>Status</th>
+                <th>Workloads &amp; Live Load</th>
+                <th>Hardware &amp; Allocation</th>
+                <th>Circuit &amp; Status</th>
                 <th style="text-align:right;">Actions</th>
               </tr>
             </thead>
             <tbody id="nodesBody"><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:28px;">Loading cluster topology...</td></tr></tbody>
           </table>
+        </div>
+        <div class="nd-cards-grid" id="nodesCardsWrap" style="display:none;"></div>
+      </div>
+
+      <!-- NODE DEEP-DIVE INSPECTOR & OPERATIONS MODAL -->
+      <div class="nd-modal-backdrop" id="nodeInspectorModal" onclick="if(event.target===this)closeNodeInspector()">
+        <div class="nd-modal">
+          <div class="nd-modal-head">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <span class="st-hero-icon" style="width:38px;height:38px;" id="niHeadBadge">#1</span>
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  <h3 style="margin:0;font-size:17px;font-weight:800;color:var(--text-primary);" id="niHeadTitle">Node Inspector</h3>
+                  <span class="st-tag emerald" id="niHeadStatus">ONLINE</span>
+                  <span class="st-tag amber" id="niHeadMaint" style="display:none;">MAINTENANCE (CORDONED)</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;" id="niHeadSub">Loading node details...</div>
+              </div>
+            </div>
+            <div class="st-actions">
+              <button type="button" class="btn btn-outline" id="niToggleMaintBtn" onclick="toggleInspectorNodeMaintenance()" style="font-size:12px;padding:6px 11px;">Cordon</button>
+              <button type="button" class="btn btn-outline" onclick="reloadInspectorNode()" style="font-size:12px;padding:6px 11px;">Refresh Live</button>
+              <button type="button" class="btn btn-outline" onclick="closeNodeInspector()" style="font-size:12px;padding:6px 11px;">&#10005; Close</button>
+            </div>
+          </div>
+          <div class="nd-modal-tabs" id="niTabBar">
+            <button type="button" class="nd-tab-btn active" onclick="switchInspectorTab('overview', this)">Overview &amp; Live Telemetry</button>
+            <button type="button" class="nd-tab-btn" onclick="switchInspectorTab('workloads', this)">Hosted Workloads &amp; Drain</button>
+            <button type="button" class="nd-tab-btn" onclick="switchInspectorTab('settings', this)">Configure, Quotas &amp; Tags</button>
+            <button type="button" class="nd-tab-btn" onclick="switchInspectorTab('diagnostics', this)">Diagnostics &amp; Security</button>
+          </div>
+          <div class="nd-modal-body" id="niModalBody">
+            <div style="text-align:center;padding:36px;color:var(--text-muted);">Loading live node dossier...</div>
+          </div>
         </div>
       </div>
       <% } %>
@@ -2996,8 +3148,23 @@ async function submitCreateLxc(e) {
 
 let __cachedNodes = [];
 let __nodeStatusFilter = 'all';
+let __nodeTagFilter = '';
+let __nodeViewMode = 'table';
+let __inspectorNodeId = null;
+let __inspectorData = null;
+let __inspectorTab = 'overview';
 let __cachedPools = [];
 let __storageScopeFilter = 'all';
+
+function parseNodeTags(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  try {
+    const p = JSON.parse(String(raw));
+    if (Array.isArray(p)) return p.map(String).filter(Boolean);
+  } catch (_) {}
+  return String(raw).split(',').map(s => s.trim()).filter(Boolean);
+}
 
 function copyTextWithToast(text, msg) {
   const val = String(text || '').trim();
@@ -3083,11 +3250,129 @@ document.addEventListener('DOMContentLoaded', () => {
   if (uEl) uEl.addEventListener('input', () => { uEl.dataset.touched = '1'; });
 });
 
+function setNodeViewMode(mode, btnEl) {
+  __nodeViewMode = mode === 'cards' ? 'cards' : 'table';
+  document.querySelectorAll('#nodeViewModeSeg .st-seg-btn').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  const tw = document.getElementById('nodesTableWrap');
+  const cw = document.getElementById('nodesCardsWrap');
+  if (tw) tw.style.display = __nodeViewMode === 'table' ? '' : 'none';
+  if (cw) cw.style.display = __nodeViewMode === 'cards' ? 'grid' : 'none';
+  renderNodesView();
+}
+
 function setNodeStatusFilter(filter, btnEl) {
   __nodeStatusFilter = filter;
   document.querySelectorAll('#nodeFilterSeg .st-seg-btn').forEach(b => b.classList.remove('active'));
   if (btnEl) btnEl.classList.add('active');
-  renderNodesTable();
+  renderNodesView();
+}
+
+function setNodeTagFilter(tag) {
+  __nodeTagFilter = (__nodeTagFilter === tag) ? '' : tag;
+  renderNodeTagFilters();
+  renderNodesView();
+}
+
+function renderNodeTagFilters() {
+  const row = document.getElementById('nodeTagFilterRow');
+  if (!row) return;
+  const allTags = Array.from(new Set(__cachedNodes.flatMap(n => parseNodeTags(n.tags)))).sort();
+  if (!allTags.length) {
+    row.style.display = 'none';
+    return;
+  }
+  row.style.display = 'flex';
+  row.innerHTML =
+    '<span style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-right:4px;">Tags:</span>' +
+    `<button type="button" class="lxc-chip ${!__nodeTagFilter ? 'active' : ''}" onclick="setNodeTagFilter('')">All Tags</button>` +
+    allTags.map(t => `<button type="button" class="lxc-chip ${__nodeTagFilter === t ? 'active' : ''}" onclick="setNodeTagFilter('${hkvmEsc(t)}')">#${hkvmEsc(t)}</button>`).join('');
+}
+
+async function togglePlacementAdvisor() {
+  const p = document.getElementById('placementAdvisorPanel');
+  if (!p) return;
+  if (p.style.display === 'none') {
+    p.style.display = 'block';
+    await loadPlacementAdvisor();
+  } else {
+    p.style.display = 'none';
+  }
+}
+
+async function loadPlacementAdvisor() {
+  const body = document.getElementById('placementAdvisorBody');
+  if (!body) return;
+  body.innerHTML = '<span style="color:var(--text-muted);font-size:12.5px;">Evaluating live cluster telemetry &amp; quotas...</span>';
+  try {
+    const data = await hkvmApi('/api/v1/nodes/placement');
+    const renderRankList = (title, tagCls, items) => {
+      return `<div style="padding:14px 16px;border-radius:11px;background:rgba(255,255,255,0.02);border:1px solid var(--border-subtle);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <strong style="font-size:13.5px;color:var(--text-primary);">${title}</strong>
+          <span class="st-tag ${tagCls}">${items.filter(x => x.eligible).length} Eligible</span>
+        </div>
+        ${items.map((c, idx) => `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:${idx === 0 ? 'none' : '1px dashed var(--border-subtle)'};">
+            <div>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <span class="st-tag ${c.eligible ? (idx === 0 ? 'emerald' : 'cyan') : 'muted'}">${c.eligible ? '#' + (idx + 1) : 'Excluded'}</span>
+                <strong style="font-size:13px;">${hkvmEsc(c.name)}</strong>
+                <span style="font-size:11px;color:var(--text-muted);">${hkvmEsc(c.location || '')}</span>
+              </div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">${hkvmEsc((c.reasons || []).join(' • '))}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <div style="font-size:15px;font-weight:800;color:${c.eligible ? '#34d399' : 'var(--text-muted)'};">${c.score}<span style="font-size:10.5px;color:var(--text-muted);">/100</span></div>
+            </div>
+          </div>
+        `).join('')}
+      </div>`;
+    };
+    body.innerHTML = `<div class="st-chart-grid" style="margin-bottom:0;">
+      ${renderRankList('QEMU / KVM VM Placement', 'indigo', data.kvm || [])}
+      ${renderRankList('Native LXC Container Placement', 'cyan', data.lxc || [])}
+    </div>`;
+  } catch (err) {
+    body.innerHTML = `<span style="color:#f87171;font-size:12.5px;">${hkvmEsc(err.message)}</span>`;
+  }
+}
+
+async function testNewNodeConnection() {
+  const urlVal = (document.getElementById('nUrl')?.value || '').trim();
+  const verifySsl = document.getElementById('nVerifySsl') ? document.getElementById('nVerifySsl').checked : true;
+  const banner = document.getElementById('nodeProbeBanner');
+  const btn = document.getElementById('testNodeConnBtn');
+  if (!urlVal) {
+    hkvmToast('Enter the Agent Endpoint URL first', 'warning');
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Probing...'; }
+  try {
+    const res = await hkvmApi('/api/v1/nodes/test-connection', {
+      method: 'POST',
+      body: { url: urlVal, verifySsl }
+    });
+    if (banner) {
+      banner.style.display = 'block';
+      if (res.reachable) {
+        banner.style.border = '1px solid rgba(16,185,129,0.4)';
+        banner.style.background = 'rgba(16,185,129,0.08)';
+        const tlsExtra = res.tls
+          ? ` &bull; TLS: <code>${hkvmEsc(res.tls.protocol || 'TLS')}</code> (CN: ${hkvmEsc(res.tls.subjectCN || 'n/a')}, ${res.tls.authorized ? 'CA-verified' : 'self-signed'})`
+          : '';
+        banner.innerHTML = `<strong style="color:#34d399;">&#10003; ${hkvmEsc(res.message)}</strong>${tlsExtra}`;
+      } else {
+        banner.style.border = '1px solid rgba(239,68,68,0.4)';
+        banner.style.background = 'rgba(239,68,68,0.08)';
+        banner.innerHTML = `<strong style="color:#f87171;">&#10005; ${hkvmEsc(res.message)}</strong>`;
+      }
+    }
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Test Reachability'; }
+  }
 }
 
 async function loadNodes() {
@@ -3096,48 +3381,77 @@ async function loadNodes() {
 
   const total = __cachedNodes.length;
   const online = __cachedNodes.filter(n => n.status === 'online').length;
+  const cordoned = __cachedNodes.filter(n => n.maintenance_mode).length;
   const localCnt = __cachedNodes.filter(n => n.is_local).length;
   const remoteCnt = total - localCnt;
   const totalCores = __cachedNodes.reduce((s, n) => s + Number(n.cpu_cores || 0), 0);
+  const allocCores = __cachedNodes.reduce((s, n) => s + Number(n.allocated_vcpus || 0), 0);
+  const totalInst = __cachedNodes.reduce((s, n) => s + Number(n.total_instances || 0), 0);
+  const runInst = __cachedNodes.reduce((s, n) => s + Number(n.running_instances || 0), 0);
   const totalRamMb = __cachedNodes.reduce((s, n) => s + Number(n.ram_total_mb || 0), 0);
-  const totalDiskGb = __cachedNodes.reduce((s, n) => s + Number(n.disk_total_gb || 0), 0);
+  const allocRamMb = __cachedNodes.reduce((s, n) => s + Number(n.allocated_ram_mb || 0), 0);
   const kvmReady = __cachedNodes.filter(n => n.kvm_available).length;
   const lxcReady = __cachedNodes.filter(n => n.lxc_available).length;
   const openCircuits = __cachedNodes.filter(n => n.circuit_state === 'open').length;
-  const cpuModels = Array.from(new Set(__cachedNodes.map(n => n.cpu_model).filter(Boolean)));
+  const latSamples = __cachedNodes.map(n => n.latency_ms).filter(v => typeof v === 'number' && v > 0);
+  const avgLat = latSamples.length ? Math.round(latSamples.reduce((a, b) => a + b, 0) / latSamples.length) : null;
 
   const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   setTxt('nkTotalVal', online + ' / ' + total + ' Online');
-  setTxt('nkTotalSub', localCnt + ' local • ' + remoteCnt + ' remote');
+  setTxt('nkTotalSub', localCnt + ' local • ' + remoteCnt + ' remote' + (cordoned ? ' • ' + cordoned + ' cordoned' : ''));
   const pill = document.getElementById('nkOnlinePill');
   if (pill) {
     pill.className = 'st-tag ' + (online === total && total > 0 ? 'emerald' : (online > 0 ? 'amber' : 'red'));
-    pill.textContent = online === total && total > 0 ? 'All Healthy' : (total - online) + ' Degraded';
+    pill.textContent = cordoned > 0 ? (cordoned + ' Maint') : (online === total && total > 0 ? 'All Healthy' : (total - online) + ' Degraded');
   }
-  setTxt('nkCoresVal', totalCores + ' vCPU Cores');
-  setTxt('nkCpuModelSub', cpuModels[0] ? String(cpuModels[0]).slice(0, 38) : 'Host CPU telemetry ready');
-  setTxt('nkRamVal', fmtMbAsGb(totalRamMb));
-  setTxt('nkStorageSub', 'Cluster root disk: ' + totalDiskGb.toFixed(1) + ' GB');
-  setTxt('nkEnginesVal', 'KVM ' + kvmReady + ' • LXC ' + lxcReady);
-  setTxt('nkCircuitSub', openCircuits === 0 ? 'All circuit breakers closed' : openCircuits + ' circuit breaker(s) open');
 
-  renderNodesTable();
+  setTxt('nkCoresVal', totalCores + ' Cores • ' + totalInst + ' Guests');
+  setTxt('nkCpuModelSub', runInst + ' running • ' + allocCores + ' vCPU provisioned');
+
+  const ramPct = totalRamMb > 0 ? Math.min(100, (allocRamMb / totalRamMb) * 100) : 0;
+  setTxt('nkRamVal', fmtMbAsGb(totalRamMb));
+  setTxt('nkStorageSub', fmtMbAsGb(allocRamMb) + ' provisioned (' + ramPct.toFixed(0) + '%)');
+  const rBar = document.getElementById('nkRamAllocBar');
+  if (rBar) {
+    rBar.style.width = ramPct.toFixed(1) + '%';
+    rBar.className = 'st-bar-fill ' + barToneClass(ramPct);
+  }
+
+  setTxt('nkEnginesVal', 'KVM ' + kvmReady + ' • LXC ' + lxcReady);
+  setTxt('nkCircuitSub', (openCircuits === 0 ? 'Circuits closed' : openCircuits + ' circuit open') + (avgLat ? ' • ~' + avgLat + 'ms RTT' : ''));
+
+  renderNodeTagFilters();
+  renderNodesView();
+}
+
+function getFilteredNodesList() {
+  const q = (document.getElementById('nodeSearchInput')?.value || '').trim().toLowerCase();
+  return __cachedNodes.filter(n => {
+    if (__nodeStatusFilter === 'online' && (n.status !== 'online' || n.maintenance_mode)) return false;
+    if (__nodeStatusFilter === 'maintenance' && !n.maintenance_mode) return false;
+    if (__nodeStatusFilter === 'offline' && n.status === 'online') return false;
+    const tags = parseNodeTags(n.tags);
+    if (__nodeTagFilter && !tags.includes(__nodeTagFilter)) return false;
+    if (q) {
+      const hay = [n.name, n.hostname, n.ip_address, n.location, n.url, n.cpu_model, n.notes, ...tags].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderNodesView() {
+  if (__nodeViewMode === 'cards') {
+    renderNodesCards();
+  } else {
+    renderNodesTable();
+  }
 }
 
 function renderNodesTable() {
   const tbody = document.getElementById('nodesBody');
   if (!tbody) return;
-  const q = (document.getElementById('nodeSearchInput')?.value || '').trim().toLowerCase();
-
-  const list = __cachedNodes.filter(n => {
-    if (__nodeStatusFilter === 'online' && n.status !== 'online') return false;
-    if (__nodeStatusFilter === 'offline' && n.status === 'online') return false;
-    if (q) {
-      const hay = [n.name, n.hostname, n.ip_address, n.location, n.url, n.cpu_model].join(' ').toLowerCase();
-      if (!hay.includes(q)) return false;
-    }
-    return true;
-  });
+  const list = getFilteredNodesList();
 
   if (!list.length) {
     tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:26px;">No nodes match the selected filter.</td></tr>';
@@ -3153,10 +3467,10 @@ function renderNodesTable() {
           : '<span class="st-tag amber">PLAIN HTTP</span>');
 
     const kvmTag = n.kvm_available
-      ? '<span class="st-tag indigo">&#10003; KVM' + (n.qemu_version ? ' ' + hkvmEsc(String(n.qemu_version).split(' ')[0]) : '') + '</span>'
+      ? '<span class="st-tag indigo">&#10003; KVM' + (Number(n.supports_kvm ?? 1) === 0 ? ' (off)' : '') + '</span>'
       : '<span class="st-tag muted">KVM N/A</span>';
     const lxcTag = n.lxc_available
-      ? '<span class="st-tag cyan">&#10003; LXC' + (n.lxc_version ? ' ' + hkvmEsc(String(n.lxc_version)) : '') + '</span>'
+      ? '<span class="st-tag cyan">&#10003; LXC' + (Number(n.supports_lxc ?? 1) === 0 ? ' (off)' : '') + '</span>'
       : '<span class="st-tag muted">LXC N/A</span>';
     const cgTag = n.cgroup_version === 'v2' ? '<span class="st-tag emerald">cgroup v2</span>' : '';
 
@@ -3165,24 +3479,32 @@ function renderNodesTable() {
       ? '<span class="st-tag emerald"><span class="st-dot online" style="width:6px;height:6px;"></span> Closed</span>'
       : (cState === 'half-open'
           ? '<span class="st-tag amber">Half-Open</span>'
-          : '<span class="st-tag red">Open (' + Number(n.consecutive_failures || 0) + ' err)</span>');
+          : `<span class="st-tag red" style="cursor:pointer;" title="Click to reset circuit breaker" onclick="resetNodeCircuit(${n.id})">Open (${Number(n.consecutive_failures || 0)} err) &#8635;</span>`);
 
-    const statusDot = n.status === 'online' ? 'online' : (n.status === 'degraded' ? 'warn' : 'offline');
-    const statusTag = n.status === 'online' ? 'emerald' : (n.status === 'degraded' ? 'amber' : 'muted');
+    const statusDot = n.maintenance_mode ? 'warn' : (n.status === 'online' ? 'online' : 'offline');
+    const statusTag = n.maintenance_mode ? 'amber' : (n.status === 'online' ? 'emerald' : 'muted');
+    const statusLabel = n.maintenance_mode ? 'CORDONED' : String(n.status || 'unknown').toUpperCase();
     const hbText = n.last_heartbeat ? fmtRelTimestamp(n.last_heartbeat) : (n.is_local ? 'live' : 'never');
+    const tags = parseNodeTags(n.tags);
+    const maxInst = Number(n.max_instances || 100);
+    const curInst = Number(n.total_instances || 0);
+    const liveCpu = n.live_cpu_percent !== null && n.live_cpu_percent !== undefined ? Number(n.live_cpu_percent) : null;
+    const liveRamPct = (n.live_ram_used_mb && n.ram_total_mb) ? Math.min(100, (Number(n.live_ram_used_mb) / Number(n.ram_total_mb)) * 100) : null;
 
-    return `<tr>
+    return `<tr style="${n.maintenance_mode ? 'background:rgba(245,158,11,0.035);' : ''}">
       <td>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <span style="width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.28);color:#818cf8;font-weight:800;font-size:12px;flex-shrink:0;">#${n.id}</span>
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <span onclick="openNodeInspector(${n.id})" style="cursor:pointer;width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.28);color:#818cf8;font-weight:800;font-size:12px;flex-shrink:0;">#${n.id}</span>
           <div>
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              <strong style="font-size:13.5px;color:var(--text-primary);">${hkvmEsc(n.name)}</strong>
+              <a href="javascript:void(0)" onclick="openNodeInspector(${n.id})" style="font-size:13.5px;font-weight:700;color:var(--text-primary);text-decoration:none;">${hkvmEsc(n.name)}</a>
               ${n.is_local ? '<span class="st-tag cyan">LOCAL</span>' : '<span class="st-tag violet">REMOTE</span>'}
+              ${n.maintenance_mode ? '<span class="st-tag amber">MAINT</span>' : ''}
             </div>
             <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">
               ${hkvmEsc(n.location || 'Datacenter')} &bull; <code>${hkvmEsc(n.ip_address || n.hostname || '127.0.0.1')}</code>
             </div>
+            ${tags.length ? `<div class="nd-tag-bar" style="margin-top:5px;">${tags.map(t => `<span class="nd-tag-chip">#${hkvmEsc(t)}</span>`).join('')}</div>` : ''}
           </div>
         </div>
       </td>
@@ -3191,39 +3513,489 @@ function renderNodesTable() {
           <span class="st-mono-chip">${hkvmEsc(n.url)}</span>
           <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
             ${protoBadge}
-            ${n.agent_version ? '<span style="font-size:11px;color:var(--text-muted);">v' + hkvmEsc(n.agent_version) + '</span>' : ''}
+            ${n.latency_ms ? `<span class="st-tag muted">${n.latency_ms}ms</span>` : ''}
           </div>
         </div>
       </td>
       <td>
-        <div style="display:flex;gap:5px;flex-wrap:wrap;max-width:220px;">
+        <div style="display:flex;gap:5px;flex-wrap:wrap;max-width:205px;">
           ${kvmTag}
           ${lxcTag}
           ${cgTag}
         </div>
       </td>
-      <td>${cTag}</td>
+      <td style="min-width:155px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;">
+          <span><strong>${curInst}</strong> <span style="color:var(--text-muted);">/ ${maxInst} guests</span></span>
+          <span style="font-size:11px;color:#34d399;">${Number(n.running_instances || 0)} up</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+          ${Number(n.kvm_count || 0)} KVM &bull; ${Number(n.lxc_count || 0)} LXC
+        </div>
+        ${liveCpu !== null ? `
+          <div style="display:flex;align-items:center;gap:6px;margin-top:5px;">
+            <span style="font-size:10.5px;color:var(--text-muted);width:54px;">CPU ${liveCpu.toFixed(0)}%</span>
+            <div class="st-bar-track" style="margin:0;height:5px;flex:1;"><div class="st-bar-fill ${barToneClass(liveCpu)}" style="width:${Math.min(100, liveCpu).toFixed(1)}%"></div></div>
+          </div>
+        ` : ''}
+      </td>
       <td>
         <div style="font-weight:700;font-size:12.5px;color:var(--text-primary);">
           ${Number(n.cpu_cores || 0)} vCPU &bull; ${fmtMbAsGb(n.ram_total_mb)} &bull; ${Number(n.disk_total_gb || 0).toFixed(1)} GB
         </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${hkvmEsc(n.cpu_model || '')}">
-          ${hkvmEsc(n.cpu_model || (n.kernel_version ? 'Linux ' + n.kernel_version : 'Click Check Health to probe'))}
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+          Alloc: ${Number(n.allocated_vcpus || 0)}c / ${fmtMbAsGb(n.allocated_ram_mb)} / ${Number(n.allocated_disk_gb || 0).toFixed(0)}G
+          ${liveRamPct !== null ? ` &bull; Host RAM ${liveRamPct.toFixed(0)}%` : ''}
         </div>
       </td>
       <td>
-        <span class="st-tag ${statusTag}"><span class="st-dot ${statusDot}" style="width:6px;height:6px;"></span> ${hkvmEsc(String(n.status || 'unknown').toUpperCase())}</span>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Seen: ${hkvmEsc(hbText)}</div>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;">
+          <span class="st-tag ${statusTag}"><span class="st-dot ${statusDot}" style="width:6px;height:6px;"></span> ${hkvmEsc(statusLabel)}</span>
+          ${cTag}
+          <span style="font-size:10.5px;color:var(--text-muted);">Seen: ${hkvmEsc(hbText)}</span>
+        </div>
       </td>
       <td style="text-align:right;">
         <div class="v3-btn-row" style="justify-content:flex-end;">
-          <button class="btn btn-outline" id="chkNodeBtn_${n.id}" onclick="checkNode(${n.id})" style="font-size:12px;padding:6px 10px;">Check Health</button>
-          <button class="btn btn-outline" onclick="rotateNode(${n.id})" style="font-size:12px;padding:6px 10px;">Rotate Keys</button>
+          <button class="btn btn-primary" onclick="openNodeInspector(${n.id})" style="font-size:12px;padding:6px 11px;">Inspect</button>
+          <button class="btn btn-outline" id="chkNodeBtn_${n.id}" onclick="checkNode(${n.id})" style="font-size:12px;padding:6px 10px;">Probe</button>
+          <button class="btn btn-outline" onclick="toggleNodeCordon(${n.id}, ${!n.maintenance_mode})" style="font-size:12px;padding:6px 10px;">${n.maintenance_mode ? 'Uncordon' : 'Cordon'}</button>
+          <button class="btn btn-outline" onclick="rotateNode(${n.id})" style="font-size:12px;padding:6px 10px;">Keys</button>
           ${!n.is_local ? `<button class="btn btn-outline" style="color:#ef4444;font-size:12px;padding:6px 10px;" onclick="delNode(${n.id})">Remove</button>` : ''}
         </div>
       </td>
     </tr>`;
   }).join('');
+}
+
+function renderNodesCards() {
+  const wrap = document.getElementById('nodesCardsWrap');
+  if (!wrap) return;
+  const list = getFilteredNodesList();
+  if (!list.length) {
+    wrap.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:28px;">No nodes match the selected filter.</div>';
+    return;
+  }
+
+  wrap.innerHTML = list.map(n => {
+    const tags = parseNodeTags(n.tags);
+    const cpuPct = Number(n.live_cpu_percent || 0);
+    const ramPct = n.ram_total_mb > 0 ? Math.min(100, (Number(n.live_ram_used_mb || 0) / Number(n.ram_total_mb)) * 100) : 0;
+    const dskPct = n.disk_total_gb > 0 ? Math.min(100, (Number(n.live_disk_used_gb || 0) / Number(n.disk_total_gb)) * 100) : 0;
+    const statusCls = n.maintenance_mode ? 'amber' : (n.status === 'online' ? 'emerald' : 'muted');
+    const statusLbl = n.maintenance_mode ? 'CORDONED' : String(n.status || 'unknown').toUpperCase();
+
+    return `<div class="nd-card ${n.maintenance_mode ? 'cordoned' : ''}">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;">
+        <div>
+          <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+            <strong style="font-size:15px;color:var(--text-primary);">${hkvmEsc(n.name)}</strong>
+            <span class="st-tag ${n.is_local ? 'cyan' : 'violet'}">${n.is_local ? 'LOCAL' : 'REMOTE #' + n.id}</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">
+            ${hkvmEsc(n.location || 'Datacenter')} &bull; <code>${hkvmEsc(n.ip_address || '127.0.0.1')}</code>
+            ${n.latency_ms ? ' &bull; ' + n.latency_ms + 'ms' : ''}
+          </div>
+        </div>
+        <span class="st-tag ${statusCls}">${hkvmEsc(statusLbl)}</span>
+      </div>
+
+      <div class="nd-mini-metrics">
+        <div>
+          <div class="nd-mini-k">Host CPU</div>
+          <div class="nd-mini-v">${n.live_cpu_percent !== null && n.live_cpu_percent !== undefined ? cpuPct.toFixed(1) + '%' : Number(n.cpu_cores || 0) + 'c'}</div>
+          <div class="st-bar-track" style="height:4px;margin-top:5px;"><div class="st-bar-fill ${barToneClass(cpuPct)}" style="width:${Math.min(100, cpuPct).toFixed(0)}%"></div></div>
+        </div>
+        <div>
+          <div class="nd-mini-k">Host RAM</div>
+          <div class="nd-mini-v">${n.live_ram_used_mb ? ramPct.toFixed(0) + '%' : fmtMbAsGb(n.ram_total_mb)}</div>
+          <div class="st-bar-track" style="height:4px;margin-top:5px;"><div class="st-bar-fill ${barToneClass(ramPct)}" style="width:${ramPct.toFixed(0)}%"></div></div>
+        </div>
+        <div>
+          <div class="nd-mini-k">Workloads</div>
+          <div class="nd-mini-v">${Number(n.total_instances || 0)} / ${Number(n.max_instances || 100)}</div>
+          <div style="font-size:10.5px;color:#34d399;margin-top:3px;">${Number(n.kvm_count || 0)} KVM • ${Number(n.lxc_count || 0)} LXC</div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+        ${n.kvm_available ? '<span class="st-tag indigo">&#10003; KVM</span>' : '<span class="st-tag muted">KVM N/A</span>'}
+        ${n.lxc_available ? '<span class="st-tag cyan">&#10003; LXC</span>' : '<span class="st-tag muted">LXC N/A</span>'}
+        ${n.cgroup_version === 'v2' ? '<span class="st-tag emerald">cgroup v2</span>' : ''}
+        ${tags.map(t => `<span class="nd-tag-chip">#${hkvmEsc(t)}</span>`).join('')}
+      </div>
+
+      ${n.notes ? `<div style="font-size:11.5px;color:var(--text-muted);border-left:2px solid rgba(99,102,241,0.4);padding-left:8px;">${hkvmEsc(n.notes)}</div>` : ''}
+
+      <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:auto;padding-top:10px;border-top:1px solid var(--border-subtle);">
+        <button class="btn btn-primary" style="flex:1;font-size:12px;padding:7px 10px;" onclick="openNodeInspector(${n.id})">Inspect &amp; Configure</button>
+        <button class="btn btn-outline" style="font-size:12px;padding:7px 10px;" onclick="checkNode(${n.id})">Probe</button>
+        <button class="btn btn-outline" style="font-size:12px;padding:7px 10px;" onclick="toggleNodeCordon(${n.id}, ${!n.maintenance_mode})">${n.maintenance_mode ? 'Uncordon' : 'Cordon'}</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleNodeCordon(nodeId, enableMaint) {
+  try {
+    await hkvmApi('/api/v1/nodes/' + nodeId, {
+      method: 'PATCH',
+      body: { maintenanceMode: Boolean(enableMaint) }
+    });
+    hkvmToast(enableMaint ? 'Node #' + nodeId + ' cordoned (Maintenance Mode active)' : 'Node #' + nodeId + ' uncordoned & active for scheduling');
+    await loadNodes();
+    if (__inspectorNodeId === nodeId) await reloadInspectorNode();
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  }
+}
+
+async function resetNodeCircuit(nodeId) {
+  try {
+    const res = await hkvmApi('/api/v1/nodes/' + nodeId + '/reset-circuit', {
+      method: 'POST',
+      body: { probe: true }
+    });
+    hkvmToast(res.probeOk ? 'Circuit breaker reset — node is online!' : 'Circuit reset, but node probe still unreachable', res.probeOk ? 'info' : 'warning');
+    await loadNodes();
+    if (__inspectorNodeId === nodeId) await reloadInspectorNode();
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  }
+}
+
+async function openNodeInspector(nodeId) {
+  __inspectorNodeId = nodeId;
+  __inspectorTab = 'overview';
+  const modal = document.getElementById('nodeInspectorModal');
+  if (modal) modal.classList.add('open');
+  document.querySelectorAll('#niTabBar .nd-tab-btn').forEach((b, idx) => b.classList.toggle('active', idx === 0));
+  await reloadInspectorNode();
+}
+
+function closeNodeInspector() {
+  __inspectorNodeId = null;
+  const modal = document.getElementById('nodeInspectorModal');
+  if (modal) modal.classList.remove('open');
+}
+
+function switchInspectorTab(tab, btnEl) {
+  __inspectorTab = tab;
+  document.querySelectorAll('#niTabBar .nd-tab-btn').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  renderInspectorBody();
+}
+
+async function reloadInspectorNode() {
+  if (!__inspectorNodeId) return;
+  const body = document.getElementById('niModalBody');
+  if (body && !__inspectorData) {
+    body.innerHTML = '<div style="text-align:center;padding:36px;color:var(--text-muted);">Probing live node telemetry &amp; workload inventory...</div>';
+  }
+  try {
+    __inspectorData = await hkvmApi('/api/v1/nodes/' + __inspectorNodeId + '/detail');
+    const n = __inspectorData.node;
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setTxt('niHeadBadge', '#' + n.id);
+    setTxt('niHeadTitle', n.name + (n.is_local ? ' (Controller Host)' : ''));
+    setTxt('niHeadSub', (n.location || 'Datacenter') + ' • ' + n.url + (__inspectorData.latencyMs ? ' • ' + __inspectorData.latencyMs + 'ms RTT' : ''));
+    const stEl = document.getElementById('niHeadStatus');
+    if (stEl) {
+      stEl.className = 'st-tag ' + (n.status === 'online' ? 'emerald' : 'red');
+      stEl.textContent = String(n.status || 'unknown').toUpperCase();
+    }
+    const mEl = document.getElementById('niHeadMaint');
+    if (mEl) mEl.style.display = n.maintenance_mode ? 'inline-flex' : 'none';
+    const mBtn = document.getElementById('niToggleMaintBtn');
+    if (mBtn) mBtn.textContent = n.maintenance_mode ? 'Uncordon Node' : 'Cordon (Maintenance)';
+
+    renderInspectorBody();
+    loadNodes();
+  } catch (err) {
+    if (body) body.innerHTML = `<div style="padding:24px;color:#f87171;">Failed to load node details: ${hkvmEsc(err.message)}</div>`;
+  }
+}
+
+async function toggleInspectorNodeMaintenance() {
+  if (!__inspectorData?.node) return;
+  await toggleNodeCordon(__inspectorData.node.id, !__inspectorData.node.maintenance_mode);
+}
+
+function renderInspectorBody() {
+  const body = document.getElementById('niModalBody');
+  if (!body || !__inspectorData) return;
+  const { node: n, liveStats: s, liveHealth: h, instances = [], storagePools = [], latencyMs } = __inspectorData;
+
+  if (__inspectorTab === 'overview') {
+    const cpuPct = s ? Number(s.cpuPercent || 0) : Number(n.live_cpu_percent || 0);
+    const ramUsed = s ? Number(s.ramUsedMb || 0) : Number(n.live_ram_used_mb || 0);
+    const ramTot = Math.max(1, s ? Number(s.ramTotalMb || 1) : Number(n.ram_total_mb || 1));
+    const ramPct = Math.min(100, (ramUsed / ramTot) * 100);
+    const swapUsed = s ? Number(s.swapUsedMb || 0) : 0;
+    const swapTot = s ? Number(s.swapTotalMb || 0) : 0;
+    const diskUsed = s ? Number(s.diskUsedGb || 0) : Number(n.live_disk_used_gb || 0);
+    const diskTot = Math.max(0.1, s ? Number(s.diskTotalGb || 0.1) : Number(n.disk_total_gb || 0.1));
+    const diskPct = Math.min(100, (diskUsed / diskTot) * 100);
+    const upSec = s ? Number(s.uptimeSeconds || 0) : (h ? Number(h.uptimeSeconds || 0) : 0);
+    const upHuman = upSec > 0 ? (Math.floor(upSec / 3600) + 'h ' + Math.floor((upSec % 3600) / 60) + 'm') : 'n/a';
+    const warnings = (h && Array.isArray(h.warnings)) ? h.warnings : [];
+
+    body.innerHTML = `
+      ${warnings.length ? `<div style="margin-bottom:14px;padding:11px 14px;border-radius:10px;border:1px solid rgba(245,158,11,0.35);background:rgba(245,158,11,0.08);font-size:12px;color:#fbbf24;">${warnings.map(w => '&#9888; ' + hkvmEsc(w)).join('<br>')}</div>` : ''}
+      <div class="st-kpi-grid" style="margin-bottom:16px;">
+        <div class="st-kpi-card">
+          <div class="st-kpi-top"><span class="st-kpi-label">Host CPU</span><span class="st-tag cyan">${Number(n.cpu_cores || 0)} Cores</span></div>
+          <div class="st-kpi-val">${cpuPct.toFixed(1)}%</div>
+          <div class="st-bar-track"><div class="st-bar-fill ${barToneClass(cpuPct)}" style="width:${Math.min(100, cpuPct).toFixed(1)}%"></div></div>
+          <div class="st-kpi-foot"><span>Load: ${s ? `${s.loadAvg1} / ${s.loadAvg5} / ${s.loadAvg15}` : (n.live_load_1 ?? '--')}</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top"><span class="st-kpi-label">Physical Memory</span><span class="st-tag indigo">${ramPct.toFixed(1)}%</span></div>
+          <div class="st-kpi-val">${fmtMbAsGb(ramUsed)}</div>
+          <div class="st-bar-track"><div class="st-bar-fill ${barToneClass(ramPct)}" style="width:${ramPct.toFixed(1)}%"></div></div>
+          <div class="st-kpi-foot"><span>of ${fmtMbAsGb(ramTot)} • Swap ${swapUsed}/${swapTot}MB</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top"><span class="st-kpi-label">Root Filesystem</span><span class="st-tag violet">${diskPct.toFixed(1)}%</span></div>
+          <div class="st-kpi-val">${diskUsed.toFixed(1)} / ${diskTot.toFixed(1)}G</div>
+          <div class="st-bar-track"><div class="st-bar-fill ${barToneClass(diskPct)}" style="width:${diskPct.toFixed(1)}%"></div></div>
+          <div class="st-kpi-foot"><span>${Math.max(0, diskTot - diskUsed).toFixed(2)} GB free</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top"><span class="st-kpi-label">Network &amp; Uptime</span><span class="st-tag emerald">${latencyMs ? latencyMs + 'ms' : 'local'}</span></div>
+          <div class="st-kpi-val">${upHuman}</div>
+          <div class="st-kpi-foot"><span>${s ? ('RX ' + fmtBytesCompact(s.netRxBytes) + ' • TX ' + fmtBytesCompact(s.netTxBytes)) : 'Telemetry synced'}</span></div>
+        </div>
+      </div>
+
+      <div class="st-chart-grid" style="margin-bottom:0;">
+        <div class="st-panel" style="margin-bottom:0;">
+          <div class="st-panel-head"><h4 class="st-panel-title">Hypervisor &amp; Kernel Stack</h4></div>
+          <div class="st-panel-body">
+            <div class="lic-kv-list">
+              <div class="lic-kv-row"><span class="lic-kv-k">CPU Model</span><span class="lic-kv-v">${hkvmEsc(n.cpu_model || 'Unknown')}</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Linux Kernel</span><span class="lic-kv-v">${hkvmEsc(n.kernel_version || 'Probing...')}</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">QEMU / KVM</span><span class="lic-kv-v">${n.kvm_available ? hkvmEsc(n.qemu_version || 'Available') : 'Unavailable'}</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Native LXC</span><span class="lic-kv-v">${n.lxc_available ? hkvmEsc(n.lxc_version || 'Available') : 'Unavailable'}</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Cgroup Hierarchy</span><span class="lic-kv-v">${hkvmEsc(n.cgroup_version || 'v2')}</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Storage Backends</span><span class="lic-kv-v">${hkvmEsc((n.parsedStorageBackends || []).join(', ') || 'dir, qcow2')}</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="st-panel" style="margin-bottom:0;">
+          <div class="st-panel-head"><h4 class="st-panel-title">Provisioned Quota vs Physical Capacity</h4></div>
+          <div class="st-panel-body">
+            <div class="lic-kv-list">
+              <div class="lic-kv-row"><span class="lic-kv-k">Instance Slots</span><span class="lic-kv-v">${Number(n.total_instances || 0)} / ${Number(n.max_instances || 100)} (${Number(n.running_instances || 0)} running)</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Provisioned vCPUs</span><span class="lic-kv-v">${Number(n.allocated_vcpus || 0)} vCPU / ${Number(n.cpu_cores || 0)} Physical</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Provisioned Guest RAM</span><span class="lic-kv-v">${fmtMbAsGb(n.allocated_ram_mb)} / ${fmtMbAsGb(n.ram_total_mb)}</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Provisioned Guest Disk</span><span class="lic-kv-v">${Number(n.allocated_disk_gb || 0).toFixed(1)} GB (${storagePools.length} pool${storagePools.length === 1 ? '' : 's'})</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Circuit Breaker</span><span class="lic-kv-v">${hkvmEsc(String(n.circuit_state || 'closed').toUpperCase())} (${Number(n.consecutive_failures || 0)} failures)</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Tags</span><span class="lic-kv-v">${(n.parsedTags || []).length ? n.parsedTags.map(t => '#' + hkvmEsc(t)).join(' ') : 'None'}</span></div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (__inspectorTab === 'workloads') {
+    const otherNodes = __cachedNodes.filter(x => x.id !== n.id && x.status === 'online' && !x.maintenance_mode);
+    const lxcCountOnNode = instances.filter(i => i.engine === 'lxc').length;
+
+    body.innerHTML = `
+      <div class="st-panel" style="margin-bottom:16px;">
+        <div class="st-panel-head">
+          <div>
+            <h4 class="st-panel-title">Node Drain &amp; Verified LXC Evacuation</h4>
+            <p class="st-panel-sub">Cordons this node and migrates its LXC containers to another online node using the 7-stage SHA-256 verified transfer pipeline.</p>
+          </div>
+          <span class="st-tag cyan">${lxcCountOnNode} LXC Evacuable</span>
+        </div>
+        <div class="st-panel-body">
+          ${otherNodes.length && lxcCountOnNode > 0 ? `
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+              <div class="v3-field" style="flex:1;min-width:200px;">
+                <label>Destination Online Node</label>
+                <select id="niEvacTarget">${otherNodes.map(o => `<option value="${o.id}">${hkvmEsc(o.name)} (${hkvmEsc(o.location || o.ip_address)})</option>`).join('')}</select>
+              </div>
+              <div class="v3-field" style="width:160px;">
+                <label>Target Bridge</label>
+                <input id="niEvacBridge" value="lxcbr0">
+              </div>
+              <button type="button" class="btn btn-primary" id="niEvacBtn" onclick="evacuateInspectorLxc()">Cordon &amp; Evacuate ${lxcCountOnNode} LXC</button>
+            </div>
+          ` : `<div style="font-size:12.5px;color:var(--text-muted);">${lxcCountOnNode === 0 ? 'No LXC containers currently reside on this node.' : 'Register and bring online at least one additional uncordoned node to enable cross-node LXC evacuation.'}</div>`}
+          <div id="niEvacResult" style="display:none;margin-top:12px;" class="v3-code"></div>
+        </div>
+      </div>
+
+      <div class="st-panel" style="margin-bottom:0;">
+        <div class="st-panel-head">
+          <h4 class="st-panel-title">Hosted Instances on ${hkvmEsc(n.name)} (${instances.length})</h4>
+        </div>
+        <div class="v3-table-wrap">
+          <table class="st-table">
+            <thead><tr><th>Engine</th><th>Instance</th><th>Resources</th><th>IPv4</th><th>Status</th><th style="text-align:right;">Manage</th></tr></thead>
+            <tbody>
+              ${instances.length ? instances.map(i => `<tr>
+                <td><span class="st-tag ${i.engine === 'kvm' ? 'indigo' : 'cyan'}">${hkvmEsc(i.engine.toUpperCase())}</span></td>
+                <td><strong>${hkvmEsc(i.name)}</strong><div style="font-size:11px;color:var(--text-muted);">${hkvmEsc(i.osLabel)}</div></td>
+                <td>${i.cpuCores} vCPU &bull; ${fmtMbAsGb(i.ramMb)} &bull; ${i.diskGb} GB</td>
+                <td><code>${hkvmEsc(i.ipAddress || 'DHCP')}</code></td>
+                <td><span class="v3-pill ${i.status}">${hkvmEsc(i.status)}</span></td>
+                <td style="text-align:right;"><a class="btn btn-outline" style="font-size:12px;padding:5px 10px;" href="${i.manageUrl}">Open &rarr;</a></td>
+              </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:22px;">No KVM VMs or LXC containers assigned to this node.</td></tr>'}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (__inspectorTab === 'settings') {
+    body.innerHTML = `
+      <form onsubmit="saveInspectorSettings(event)">
+        <div class="v3-form-grid" style="grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;">
+          <div class="v3-field"><label>Node Name</label><input id="niEditName" required value="${hkvmEsc(n.name)}"></div>
+          <div class="v3-field"><label>Datacenter / Location</label><input id="niEditLoc" value="${hkvmEsc(n.location || '')}"></div>
+          <div class="v3-field"><label>Hostname / FQDN</label><input id="niEditHost" value="${hkvmEsc(n.hostname || '')}"></div>
+          <div class="v3-field"><label>IPv4 Address</label><input id="niEditIp" value="${hkvmEsc(n.ip_address || '')}"></div>
+          <div class="v3-field"><label>Agent Endpoint URL</label><input id="niEditUrl" value="${hkvmEsc(n.url || '')}" ${n.is_local ? 'readonly' : ''}></div>
+          <div class="v3-field"><label>Max Instances Quota</label><input id="niEditMax" type="number" min="1" max="5000" value="${Number(n.max_instances || 100)}"></div>
+          <div class="v3-field" style="grid-column: span 2;">
+            <label>Cluster Tags (comma-separated)</label>
+            <input id="niEditTags" value="${hkvmEsc((n.parsedTags || []).join(', '))}" placeholder="nvme, production, eu-fra">
+          </div>
+          <div class="v3-field">
+            <label>Scheduling Policies</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <label class="st-switch-box" style="flex:1;"><span style="font-size:12px;font-weight:600;">Allow KVM</span><input type="checkbox" id="niEditKvm" ${Number(n.supports_kvm ?? 1) !== 0 ? 'checked' : ''}></label>
+              <label class="st-switch-box" style="flex:1;"><span style="font-size:12px;font-weight:600;">Allow LXC</span><input type="checkbox" id="niEditLxc" ${Number(n.supports_lxc ?? 1) !== 0 ? 'checked' : ''}></label>
+            </div>
+          </div>
+          <div class="v3-field">
+            <label>Maintenance &amp; TLS</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <label class="st-switch-box" style="flex:1;"><span style="font-size:12px;font-weight:600;">Maintenance (Cordon)</span><input type="checkbox" id="niEditMaint" ${n.maintenance_mode ? 'checked' : ''}></label>
+              <label class="st-switch-box" style="flex:1;"><span style="font-size:12px;font-weight:600;">Verify TLS</span><input type="checkbox" id="niEditSsl" ${n.verify_ssl ? 'checked' : ''}></label>
+            </div>
+          </div>
+          <div class="v3-field" style="grid-column: span 2;">
+            <label>Operator Notes</label>
+            <textarea id="niEditNotes" rows="3" placeholder="Hardware rack, uplink, maintenance window notes...">${hkvmEsc(n.notes || '')}</textarea>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border-subtle);">
+          <button type="submit" class="btn btn-primary">Save Node Configuration</button>
+        </div>
+      </form>`;
+    return;
+  }
+
+  if (__inspectorTab === 'diagnostics') {
+    const presets = [
+      { key: 'uptime', label: 'System Uptime' },
+      { key: 'uname', label: 'Kernel uname -a' },
+      { key: 'free', label: 'Memory (free -m)' },
+      { key: 'df', label: 'Disk Usage (df -h)' },
+      { key: 'ip_addr', label: 'Network IPs' },
+      { key: 'bridge', label: 'Linux Bridges' },
+      { key: 'lxc_ls', label: 'LXC Containers' },
+      { key: 'sysctl_net', label: 'IPv4 Forwarding' }
+    ];
+    body.innerHTML = `
+      <div style="margin-bottom:16px;">
+        <div style="font-size:12.5px;font-weight:700;color:var(--text-primary);margin-bottom:8px;">Safe Allowlisted Host Diagnostic Presets</div>
+        <div class="nd-diag-grid">
+          ${presets.map(p => `<button type="button" class="nd-diag-btn" onclick="runInspectorDiag('${p.key}')">&#9654; ${p.label}</button>`).join('')}
+        </div>
+        <div id="niDiagOut" class="v3-code" style="min-height:140px;max-height:240px;">Select a diagnostic preset above to run it live on ${hkvmEsc(n.name)}...</div>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px;border-radius:11px;border:1px solid var(--border-subtle);background:rgba(255,255,255,0.02);">
+        <div>
+          <strong style="font-size:13px;color:var(--text-primary);">Circuit Breaker &amp; HMAC Credential Controls</strong>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Circuit state: <strong>${hkvmEsc(n.circuit_state || 'closed')}</strong> (${Number(n.consecutive_failures || 0)} consecutive errors)</div>
+        </div>
+        <div class="v3-btn-row">
+          <button type="button" class="btn btn-outline" onclick="resetNodeCircuit(${n.id})">Reset Circuit &amp; Probe</button>
+          <button type="button" class="btn btn-outline" onclick="rotateNode(${n.id})">Rotate HMAC Keys</button>
+          <a href="/admin/node-console" class="btn btn-outline">Open Interactive Shell &rarr;</a>
+        </div>
+      </div>`;
+  }
+}
+
+async function saveInspectorSettings(e) {
+  e.preventDefault();
+  if (!__inspectorNodeId) return;
+  try {
+    await hkvmApi('/api/v1/nodes/' + __inspectorNodeId, {
+      method: 'PATCH',
+      body: {
+        name: document.getElementById('niEditName').value.trim(),
+        location: document.getElementById('niEditLoc').value.trim(),
+        hostname: document.getElementById('niEditHost').value.trim(),
+        ipAddress: document.getElementById('niEditIp').value.trim(),
+        url: document.getElementById('niEditUrl').value.trim(),
+        maxInstances: Number(document.getElementById('niEditMax').value || 100),
+        tags: document.getElementById('niEditTags').value,
+        supportsKvm: document.getElementById('niEditKvm').checked,
+        supportsLxc: document.getElementById('niEditLxc').checked,
+        maintenanceMode: document.getElementById('niEditMaint').checked,
+        verifySsl: document.getElementById('niEditSsl').checked,
+        notes: document.getElementById('niEditNotes').value
+      }
+    });
+    hkvmToast('Node configuration saved');
+    await reloadInspectorNode();
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  }
+}
+
+async function runInspectorDiag(preset) {
+  if (!__inspectorNodeId) return;
+  const out = document.getElementById('niDiagOut');
+  if (out) out.textContent = 'Running "' + preset + '" on node #' + __inspectorNodeId + '...';
+  try {
+    const res = await hkvmApi('/api/v1/nodes/' + __inspectorNodeId + '/diagnostics/' + encodeURIComponent(preset), { method: 'POST' });
+    if (out) {
+      out.textContent = '$ ' + (res.command || preset) + '  (' + (res.durationMs ?? 0) + 'ms, exit ' + (res.exitCode ?? 0) + ')\n\n' + (res.stdout || res.stderr || '(no output)');
+    }
+  } catch (err) {
+    if (out) out.textContent = 'Diagnostic failed: ' + err.message;
+  }
+}
+
+async function evacuateInspectorLxc() {
+  if (!__inspectorNodeId) return;
+  const targetNodeId = Number(document.getElementById('niEvacTarget')?.value || 0);
+  const targetBridge = (document.getElementById('niEvacBridge')?.value || 'lxcbr0').trim();
+  if (!targetNodeId) return;
+  if (!confirm('Cordon this node and migrate all LXC containers to target node #' + targetNodeId + '?')) return;
+  const btn = document.getElementById('niEvacBtn');
+  const box = document.getElementById('niEvacResult');
+  if (btn) { btn.disabled = true; btn.textContent = 'Evacuating LXC workloads...'; }
+  try {
+    const res = await hkvmApi('/api/v1/nodes/' + __inspectorNodeId + '/evacuate-lxc', {
+      method: 'POST',
+      body: { targetNodeId, targetBridge, cordonSource: true }
+    });
+    if (box) {
+      box.style.display = 'block';
+      box.textContent = `Evacuation complete: ${res.succeeded}/${res.attempted} succeeded\n` +
+        (res.results || []).map(r => ` - ${r.name} (#${r.lxcId}): ${r.ok ? 'MIGRATED (job #' + r.jobId + ')' : 'FAILED: ' + r.error}`).join('\n');
+    }
+    hkvmToast(`Node evacuation finished: ${res.succeeded}/${res.attempted} migrated`);
+    await reloadInspectorNode();
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Cordon & Evacuate LXC'; }
+  }
 }
 
 async function refreshAllNodesHealth() {
@@ -3251,6 +4023,11 @@ async function submitAddNode(e) {
         ipAddress: document.getElementById('nIp').value.trim(),
         url: document.getElementById('nUrl').value.trim(),
         location: document.getElementById('nLoc').value.trim(),
+        maxInstances: Number(document.getElementById('nMaxInst')?.value || 100),
+        tags: (document.getElementById('nTags')?.value || '').trim(),
+        supportsKvm: document.getElementById('nSupKvm') ? document.getElementById('nSupKvm').checked : true,
+        supportsLxc: document.getElementById('nSupLxc') ? document.getElementById('nSupLxc').checked : true,
+        notes: (document.getElementById('nNotes')?.value || '').trim() || undefined,
         verifySsl: document.getElementById('nVerifySsl') ? document.getElementById('nVerifySsl').checked : true
       }
     });
@@ -3279,14 +4056,14 @@ async function checkNode(id) {
   const btn = document.getElementById('chkNodeBtn_' + id);
   if (btn) { btn.disabled = true; btn.textContent = 'Probing...'; }
   try {
-    await hkvmApi('/api/v1/nodes/' + id + '/check', { method: 'POST' });
-    hkvmToast('Node #' + id + ' health & telemetry updated');
+    const res = await hkvmApi('/api/v1/nodes/' + id + '/check', { method: 'POST' });
+    hkvmToast('Node #' + id + ' online' + (res.latencyMs ? ' (' + res.latencyMs + 'ms RTT)' : ''));
     await loadNodes();
   } catch (err) {
     hkvmToast(err.message, 'error');
     await loadNodes();
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Check Health'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Probe'; }
   }
 }
 

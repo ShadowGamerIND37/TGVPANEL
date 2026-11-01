@@ -2592,6 +2592,83 @@ exec "$@"
         'Unified-deleted KVM VM must NOT reappear in /api/v1/instances!'
       );
     });
+
+    // 21. Advanced Node Studio Features (Pre-flight Probe, Inspector, Tags/Quotas, Cordon & Placement Advisor, Circuit Reset)
+    await runStep('T21: Cluster Node Studio features (pre-flight probe, inspector detail, tags/quotas, cordon & placement advisor, circuit reset)', async () => {
+      // 21a. Pre-flight connection probe against live loopback agent AND closed port
+      const okProbe = await adminClient.request('POST', '/api/v1/nodes/test-connection', {
+        url: `http://127.0.0.1:${AGENT_PORT}`,
+        verifySsl: false,
+      });
+      assert.strictEqual(okProbe.status, 200, `Expected 200 from test-connection: ${okProbe.text}`);
+      assert.strictEqual(okProbe.json.reachable, true);
+      assert.strictEqual(okProbe.json.agentDetected, true);
+      assert.ok(Number(okProbe.json.latencyMs) >= 1);
+
+      const failProbe = await adminClient.request('POST', '/api/v1/nodes/test-connection', {
+        url: 'http://127.0.0.1:59999',
+        verifySsl: false,
+        timeoutMs: 1200,
+      });
+      assert.strictEqual(failProbe.status, 200);
+      assert.strictEqual(failProbe.json.reachable, false);
+      assert.ok(String(failProbe.json.message || '').includes('Unreachable'));
+
+      // 21b. Enriched /api/v1/nodes & /api/v1/nodes/1/detail
+      const listRes = await adminClient.request('GET', '/api/v1/nodes');
+      assert.strictEqual(listRes.status, 200);
+      const localNode = listRes.json.nodes.find((n) => n.id === 1);
+      assert.ok(localNode, 'Expected localhost node #1');
+      assert.strictEqual(typeof localNode.total_instances, 'number');
+      assert.strictEqual(typeof localNode.allocated_vcpus, 'number');
+      assert.strictEqual(typeof localNode.allocated_ram_mb, 'number');
+
+      const detailRes = await adminClient.request('GET', '/api/v1/nodes/1/detail');
+      assert.strictEqual(detailRes.status, 200, `Node detail failed: ${detailRes.text}`);
+      assert.strictEqual(detailRes.json.node.id, 1);
+      assert.ok(Array.isArray(detailRes.json.instances), 'Expected hosted instances array in node detail');
+      assert.ok(Array.isArray(detailRes.json.storagePools), 'Expected storagePools array in node detail');
+      assert.ok(detailRes.json.liveStats && typeof detailRes.json.liveStats.cpuPercent === 'number');
+
+      // 21c. Update tags, notes, maxInstances & Cordon (maintenanceMode), then verify Placement Advisor
+      const patchCordon = await adminClient.request('PATCH', '/api/v1/nodes/1', {
+        tags: 'nvme, production, controller',
+        notes: 'Primary bare-metal NVMe controller',
+        maxInstances: 250,
+        maintenanceMode: true,
+      });
+      assert.strictEqual(patchCordon.status, 200, `PATCH node failed: ${patchCordon.text}`);
+      assert.strictEqual(patchCordon.json.node.maintenance_mode, 1);
+      assert.strictEqual(patchCordon.json.node.max_instances, 250);
+      assert.deepStrictEqual(JSON.parse(patchCordon.json.node.tags), ['nvme', 'production', 'controller']);
+
+      const placeCordoned = await adminClient.request('GET', '/api/v1/nodes/placement');
+      assert.strictEqual(placeCordoned.status, 200);
+      const localKvmRank = placeCordoned.json.kvm.find((c) => c.nodeId === 1);
+      assert.strictEqual(localKvmRank.eligible, false, 'Cordoned node must be ineligible in Placement Advisor');
+
+      const patchUncordon = await adminClient.request('PATCH', '/api/v1/nodes/1', {
+        maintenanceMode: false,
+      });
+      assert.strictEqual(patchUncordon.status, 200);
+      assert.strictEqual(patchUncordon.json.node.maintenance_mode, 0);
+
+      const placeActive = await adminClient.request('GET', '/api/v1/nodes/placement');
+      const localKvmRankAfter = placeActive.json.kvm.find((c) => c.nodeId === 1);
+      assert.strictEqual(localKvmRankAfter.eligible, true, 'Uncordoned online node must be eligible in Placement Advisor');
+
+      // 21d. Reset Circuit Breaker endpoint & UI markup verification
+      const rstRes = await adminClient.request('POST', '/api/v1/nodes/1/reset-circuit', { probe: true });
+      assert.strictEqual(rstRes.status, 200);
+      assert.strictEqual(rstRes.json.node.circuit_state, 'closed');
+
+      const nodesPage = await adminClient.request('GET', '/admin/nodes');
+      assert.strictEqual(nodesPage.status, 200);
+      assert.ok(nodesPage.text.includes('nodeInspectorModal'), 'Expected Node Inspector Modal on /admin/nodes');
+      assert.ok(nodesPage.text.includes('placementAdvisorPanel'), 'Expected Smart Placement Advisor on /admin/nodes');
+      assert.ok(nodesPage.text.includes('testNodeConnBtn'), 'Expected Test Reachability button on /admin/nodes');
+      assert.ok(nodesPage.text.includes('nodesCardsWrap'), 'Expected Cards View container on /admin/nodes');
+    });
   } finally {
     const { execFileSync } = require('child_process');
     for (const storeDir of [path.join(tmpRoot, 'local-lxc'), path.join(tmpRoot, 'agent-lxc')]) {
