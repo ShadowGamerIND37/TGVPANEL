@@ -116,8 +116,12 @@ export function verifyCsrfMiddleware(req: Request, res: Response, next: NextFunc
     return next();
   }
 
-  // Node agent HMAC endpoints handle their own replay-protected HMAC verification
-  if (req.path.startsWith('/api/v1/agent-callback')) {
+  // Node agent HMAC & single-use join endpoints handle their own replay-protected verification
+  if (
+    req.path.startsWith('/api/v1/agent-callback') ||
+    req.originalUrl.startsWith('/api/v1/nodes/agent-heartbeat') ||
+    req.originalUrl.startsWith('/api/v1/nodes/join/')
+  ) {
     return next();
   }
 
@@ -171,7 +175,14 @@ export function createUnifiedAuthMiddleware(db: UnifiedDatabase) {
         }
       }
 
-      // Check API key header
+      // Check API key header (skip for self-authenticated Node Agent HMAC / join routes)
+      if (
+        req.originalUrl.startsWith('/api/v1/nodes/agent-heartbeat') ||
+        req.originalUrl.startsWith('/api/v1/nodes/join/')
+      ) {
+        return next();
+      }
+
       let rawKey = '';
       const authHeader = String(req.headers.authorization || '');
       if (authHeader.startsWith('Bearer ')) {

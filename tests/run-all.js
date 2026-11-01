@@ -159,6 +159,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
   console.log('====================================================================\n');
 
   let agentServer = null;
+  let httpsAgentServer = null;
   let app = null;
   let remoteNodeId = null;
   const installedLxcShims = [];
@@ -2669,9 +2670,346 @@ exec "$@"
       assert.ok(nodesPage.text.includes('testNodeConnBtn'), 'Expected Test Reachability button on /admin/nodes');
       assert.ok(nodesPage.text.includes('nodesCardsWrap'), 'Expected Cards View container on /admin/nodes');
     });
+
+    // 22. Multi-Node End-to-End Acceptance Suite (Self-Signed HTTPS Node Agent, 1-Command Join Token, TOFU TLS Pinning,
+    //     Active Push Heartbeat, Stale Rotated-Cred Recovery, Remote Custom Template Staging, Remote LXC Lifecycle,
+    //     Remote Storage statfs, Remote Port-Forward/Firewall, Multi-Node Sync-Host, Cross-Node Backup Restore & Remote WSS PTY)
+    await runStep('T22: Multi-Node HTTPS self-signed pairing, TOFU TLS pinning, push heartbeat, remote LXC/storage/network/sync/migration & WSS PTY', async () => {
+      const { execFileSync } = require('child_process');
+      const { createNodeAgentServer } = require('../lib/node-agent/agent');
+      const { NodeAgentAuthenticator } = require('../lib/node-agent/authentication');
+
+      const HTTPS_AGENT_PORT = AGENT_PORT + 51;
+      const sslDir = path.join(tmpRoot, 'https-agent-ssl');
+      const httpsLxcDir = path.join(tmpRoot, 'https-agent-lxc');
+      const httpsBackupDir = path.join(tmpRoot, 'https-agent-backups');
+      const httpsDataDir = path.join(tmpRoot, 'https-agent-data');
+      fs.mkdirSync(sslDir, { recursive: true });
+      fs.mkdirSync(httpsLxcDir, { recursive: true });
+      fs.mkdirSync(httpsBackupDir, { recursive: true });
+      fs.mkdirSync(httpsDataDir, { recursive: true });
+      rootOwnedCleanupDirs.push(httpsLxcDir);
+
+      // 22a. Verify stale persisted node-agent-credentials.json is automatically superseded when .env bootstrap keys change!
+      const staleCredsFile = path.join(httpsDataDir, 'node-agent-credentials.json');
+      fs.writeFileSync(
+        staleCredsFile,
+        JSON.stringify({
+          nodeId: 'stale-node',
+          apiKeyHash: hashApiKey('old_dead_key'),
+          hmacSecret: 'old_dead_hmac',
+          envBootstrapHash: hashApiKey('old_dead_key:old_dead_hmac'),
+        }),
+        { mode: 0o600 }
+      );
+      const freshAuth = new NodeAgentAuthenticator({
+        nodeId: 'fresh-node',
+        rawApiKey: '  "new_env_key_123" \r\n',
+        apiKeyHash: '',
+        hmacSecret: " 'new_env_hmac_456' \r\n",
+        envBootstrapHash: hashApiKey('new_env_key_123:new_env_hmac_456'),
+        requireMtls: false,
+        credentialsFilePath: staleCredsFile,
+        loadPersistedCredentials: true,
+      });
+      assert.strictEqual(
+        fs.existsSync(staleCredsFile),
+        false,
+        'Stale node-agent-credentials.json must be removed when .env bootstrap keys are updated'
+      );
+      const validFreshHdrs = signAgentRequest({
+        nodeId: 'fresh-node',
+        apiKey: 'new_env_key_123',
+        hmacSecret: 'new_env_hmac_456',
+        method: 'GET',
+        pathWithQuery: '/api/v1/health',
+      });
+      const authVerify = freshAuth.verifyRawHeaders({
+        method: 'GET',
+        pathWithQuery: '/reverse-proxy-prefix/api/v1/health',
+        rawBody: '',
+        apiKeyHeader: validFreshHdrs['X-API-Key'],
+        timestampHeader: validFreshHdrs['X-HKVM-Timestamp'],
+        nonceHeader: validFreshHdrs['X-HKVM-Nonce'],
+        signatureHeader: validFreshHdrs['X-HKVM-Signature'],
+      });
+      assert.strictEqual(authVerify.ok, true, `Expected sanitized env key + reverse-proxy path verification to pass: ${authVerify.reason}`);
+
+      // Verify specific clock-skew diagnostic message (>300s drift)
+      const skewedCheck = freshAuth.verifyRawHeaders({
+        method: 'GET',
+        pathWithQuery: '/api/v1/health',
+        rawBody: '',
+        apiKeyHeader: 'new_env_key_123',
+        timestampHeader: String(Math.floor(Date.now() / 1000) - 900),
+        nonceHeader: crypto.randomBytes(16).toString('hex'),
+        signatureHeader: 'deadbeef',
+      });
+      assert.strictEqual(skewedCheck.ok, false);
+      assert.match(skewedCheck.reason || '', /clock skew too large/i);
+
+      // 22b. Generate a real self-signed X.509 TLS certificate (intentionally WITHOUT IP SAN to prove TOFU leaf pinning works even without SAN!)
+      const certPath = path.join(sslDir, 'agent.crt');
+      const keyPath = path.join(sslDir, 'agent.key');
+      execFileSync('openssl', [
+        'req', '-x509', '-nodes', '-newkey', 'rsa:2048', '-days', '365',
+        '-keyout', keyPath, '-out', certPath,
+        '-subj', '/CN=eu-https-node-03.internal',
+      ], { stdio: 'ignore' });
+      const certPem = fs.readFileSync(certPath, 'utf8');
+
+      // Register remote node initially pointing at an unreachable port with strict Verify SSL = true
+      const regHttpsNode = await adminClient.request('POST', '/api/v1/nodes', {
+        name: 'eu-https-node-03',
+        hostname: 'eu-https-node-03.internal',
+        ipAddress: '127.0.0.1',
+        url: '127.0.0.1:59997', // schemeless URL auto-normalized!
+        location: 'Amsterdam, NL',
+        verifySsl: true,
+      });
+      assert.strictEqual(regHttpsNode.status, 201, `Register node failed: ${regHttpsNode.text}`);
+      const httpsNodeId = regHttpsNode.json.node.id;
+      assert.strictEqual(regHttpsNode.json.node.url, 'http://127.0.0.1:59997', 'Schemeless URL normalized cleanly');
+
+      // Retrieve non-destructive bootstrap credentials (.env)
+      const bootRes = await adminClient.request('GET', `/api/v1/nodes/${httpsNodeId}/bootstrap`);
+      assert.strictEqual(bootRes.status, 200, `Bootstrap endpoint failed: ${bootRes.text}`);
+      assert.strictEqual(bootRes.json.apiKey, regHttpsNode.json.bootstrapCredentials.apiKey);
+      assert.ok(bootRes.json.envSnippet.includes('TGVPANEL_NODE_API_KEY='));
+
+      // Generate a 1-Command Single-Use Join Token & redeem it with the HTTPS agent's self-signed PEM!
+      const joinTokRes = await adminClient.request('POST', `/api/v1/nodes/${httpsNodeId}/join-token`, {
+        controllerUrl: baseUrl,
+        ttlMinutes: 30,
+      });
+      assert.strictEqual(joinTokRes.status, 201, `Join token generation failed: ${joinTokRes.text}`);
+      assert.ok(joinTokRes.json.token.startsWith('tgv_join_'));
+      assert.ok(joinTokRes.json.curlJoinCommand.includes('--join'));
+
+      // Redeem join token without session cookie (simulating remote server running `menu.sh --join`)
+      const bareNodeClient = new SessionClient(baseUrl);
+      const redeemRes = await bareNodeClient.request('POST', `/api/v1/nodes/join/${joinTokRes.json.token}`, {
+        endpointUrl: `https://127.0.0.1:${HTTPS_AGENT_PORT}`,
+        ipAddress: '127.0.0.1',
+        hostname: 'eu-https-node-03.internal',
+        agentPort: HTTPS_AGENT_PORT,
+        tlsCertPem: certPem,
+        verifySsl: true,
+      });
+      assert.strictEqual(redeemRes.status, 200, `Join token redemption failed: ${redeemRes.text}`);
+      assert.strictEqual(redeemRes.json.nodeId, httpsNodeId);
+      assert.strictEqual(redeemRes.json.apiKey, regHttpsNode.json.bootstrapCredentials.apiKey);
+
+      // Single-use enforcement: second redemption of the same join token MUST be rejected!
+      const replayJoin = await bareNodeClient.request('POST', `/api/v1/nodes/join/${joinTokRes.json.token}`, {
+        endpointUrl: `https://127.0.0.1:${HTTPS_AGENT_PORT}`,
+      });
+      assert.strictEqual(replayJoin.status, 400, 'Redeemed join token must reject reuse');
+      assert.match(replayJoin.json.error || '', /already been redeemed/i);
+
+      // Start the real standalone HTTPS Node Agent with self-signed TLS + interactiveHostShell + controllerUrl
+      const httpsAgentInst = createNodeAgentServer({
+        host: '127.0.0.1',
+        port: HTTPS_AGENT_PORT,
+        nodeId: String(httpsNodeId),
+        apiKey: redeemRes.json.apiKey,
+        hmacSecret: redeemRes.json.hmacSecret,
+        tlsCertPath: certPath,
+        tlsKeyPath: keyPath,
+        lxcBaseDir: httpsLxcDir,
+        backupDir: httpsBackupDir,
+        dataDir: httpsDataDir,
+        interactiveHostShell: true,
+        controllerUrl: baseUrl,
+        heartbeatIntervalMs: 120_000,
+      });
+      httpsAgentServer = httpsAgentInst.server;
+      await new Promise((resolve) => httpsAgentServer.listen(HTTPS_AGENT_PORT, '127.0.0.1', resolve));
+
+      // Pre-flight probe WITH strict verifySsl=true (unpinned probe) detects self-signed TGVPANEL agent & extracts PEM!
+      const strictProbe = await adminClient.request('POST', '/api/v1/nodes/test-connection', {
+        url: `https://127.0.0.1:${HTTPS_AGENT_PORT}`,
+        verifySsl: true,
+      });
+      assert.strictEqual(strictProbe.status, 200);
+      assert.strictEqual(strictProbe.json.reachable, false);
+      assert.strictEqual(strictProbe.json.selfSignedAgentDetected, true, `Expected selfSignedAgentDetected: ${strictProbe.text}`);
+      assert.ok(strictProbe.json.tls && strictProbe.json.tls.certPem.includes('BEGIN CERTIFICATE'));
+
+      // 22c. Verify Active Outbound Agent -> Controller Push Heartbeat wakes node to ONLINE!
+      const hbSent = await httpsAgentInst.sendHeartbeatOnce();
+      assert.strictEqual(hbSent, true, 'Expected outbound HMAC push-heartbeat to succeed');
+      const afterHbDetail = await adminClient.request('GET', `/api/v1/nodes/${httpsNodeId}/detail?live=0`);
+      assert.strictEqual(afterHbDetail.status, 200);
+      assert.strictEqual(afterHbDetail.json.node.status, 'online', 'Push-heartbeat must mark node online');
+      assert.strictEqual(afterHbDetail.json.node.tls_pinned, 1, 'Join token cert must set tls_pinned=1');
+
+      // Also verify Controller -> HTTPS Node Agent live check & TOFU trust-tls over pinned self-signed cert!
+      const trustRes = await adminClient.request('POST', `/api/v1/nodes/${httpsNodeId}/trust-tls`, {});
+      assert.strictEqual(trustRes.status, 200, `trust-tls failed: ${trustRes.text}`);
+      assert.strictEqual(trustRes.json.probeOk, true, 'Expected live HTTPS probe after TOFU pin to succeed');
+
+      // Verify all fixed Node Inspector diagnostic presets against the remote HTTPS node!
+      for (const preset of ['uptime', 'uname', 'memory', 'disk', 'network_links', 'bridges', 'lxc_list', 'sysctl_net']) {
+        const dRes = await adminClient.request('POST', `/api/v1/nodes/${httpsNodeId}/diagnostics/${preset}`, {});
+        assert.strictEqual(dRes.status, 200, `Remote diagnostic preset ${preset} failed: ${dRes.text}`);
+        assert.strictEqual(typeof dRes.json.output, 'string');
+        assert.ok(dRes.json.output.length > 0);
+      }
+
+      // 22d. Remote Storage Pool statfs, Remote NAT Port Forwarding & Remote Firewall Rule
+      const remotePoolPath = path.join(httpsDataDir, 'remote-nvme-pool');
+      const createRemotePool = await adminClient.request('POST', '/api/v1/storage/pools', {
+        nodeId: httpsNodeId,
+        name: 'amsterdam-nvme-lxc',
+        poolType: 'dir',
+        engineScope: 'lxc',
+        path: remotePoolPath,
+      });
+      assert.strictEqual(createRemotePool.status, 201, `Remote storage pool create failed: ${createRemotePool.text}`);
+      assert.strictEqual(fs.existsSync(remotePoolPath), true, 'Remote Node Agent must create storage pool directory');
+      const syncedPools = await adminClient.request('GET', '/api/v1/storage/pools?sync=1');
+      const amsPool = (syncedPools.json.pools || []).find((p) => p.name === 'amsterdam-nvme-lxc');
+      assert.ok(amsPool && Number(amsPool.total_bytes) > 0, 'Remote storage pool must report real remote statfs total_bytes');
+
+      // 22e. Deploy LXC container onto Remote HTTPS Node using Controller-hosted Custom Template Archive!
+      const remoteCustomCt = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'ct-https-remote-01',
+        hostname: 'ct-https-remote-01.tgv.local',
+        nodeId: httpsNodeId,
+        templateSlug: 'custom:hkvm-os-3',
+        cpuCores: 2,
+        ramMb: 512,
+        diskGb: 8,
+        ipv4Address: '10.0.3.188/24',
+        ipv4Gateway: '10.0.3.1',
+        provisionOnHost: true,
+      });
+      assert.strictEqual(remoteCustomCt.status, 201, `Remote custom template LXC create failed: ${remoteCustomCt.text}`);
+      const remoteCtId = remoteCustomCt.json.instance.refId;
+      assert.strictEqual(remoteCustomCt.json.instance.nodeId, httpsNodeId);
+      assert.strictEqual(
+        fs.existsSync(path.join(httpsLxcDir, 'ct-https-remote-01', 'rootfs', 'etc', 'custom-release')),
+        true,
+        'Custom template archive must be auto-staged & unpacked on remote HTTPS Node Agent!'
+      );
+
+      // Attach a NAT Port Forward & Firewall Rule on the remote HTTPS node
+      const remotePf = await adminClient.request('POST', '/api/v1/network/ports', {
+        instanceType: 'lxc',
+        instanceRefId: remoteCtId,
+        guestPort: 22,
+        hostPort: 24222,
+        protocol: 'tcp',
+        description: 'Remote SSH forward',
+      });
+      assert.strictEqual(remotePf.status, 201, `Remote port-forward failed: ${remotePf.text}`);
+
+      const remoteFw = await adminClient.request('POST', '/api/v1/network/firewall', {
+        nodeId: httpsNodeId,
+        direction: 'in',
+        action: 'ACCEPT',
+        protocol: 'tcp',
+        destPort: '24222',
+        comment: 'Allow remote SSH forward',
+      });
+      assert.strictEqual(remoteFw.status, 201, `Remote firewall rule failed: ${remoteFw.text}`);
+
+      // Create backup of ct-https-remote-01 on httpsNodeId, then migrate to remoteNodeId & restore cross-node!
+      const remoteBkp = await adminClient.request('POST', '/api/v1/backups', {
+        engine: 'lxc',
+        refId: remoteCtId,
+        label: 'pre-crossnode-mig',
+      });
+      assert.strictEqual(remoteBkp.status, 201, `Remote backup failed: ${remoteBkp.text}`);
+      const remoteBkpId = remoteBkp.json.backup.backupId;
+
+      const migCross = await adminClient.request('POST', '/api/v1/migrations', {
+        lxcId: remoteCtId,
+        targetNodeId: remoteNodeId,
+        targetBridge: 'lxcbr0',
+      });
+      assert.strictEqual(migCross.status, 201, `Cross-agent migration failed: ${migCross.text}`);
+      assert.strictEqual(migCross.json.migration.status, 'completed');
+
+      // Verify port forward automatically relocated to target remoteNodeId!
+      const pfAfterMig = await ctx.db.get(`SELECT * FROM port_forwards WHERE id = ?`, [
+        remotePf.json.portForward.id,
+      ]);
+      assert.strictEqual(
+        Number(pfAfterMig.node_id),
+        Number(remoteNodeId),
+        'Port forward must relocate to target node after LXC migration!'
+      );
+
+      // Restore backup (stored on httpsNodeId!) onto migrated container (now on remoteNodeId!)
+      const crossRestore = await adminClient.request('POST', `/api/v1/backups/${remoteBkpId}/restore`, {});
+      assert.strictEqual(crossRestore.status, 200, `Cross-node backup restore failed: ${crossRestore.text}`);
+      assert.strictEqual(crossRestore.json.restored, true);
+
+      // 22f. Multi-Node `sync-host`: create an untracked container directly on httpsNodeId and verify /api/v1/lxc/sync-host imports it with node_id = httpsNodeId!
+      const untrackedDir = path.join(httpsLxcDir, 'untracked-remote-ct99');
+      fs.mkdirSync(path.join(untrackedDir, 'rootfs', 'etc'), { recursive: true });
+      fs.writeFileSync(
+        path.join(untrackedDir, 'config'),
+        'lxc.uts.name = untracked-remote-ct99\nlxc.rootfs.path = dir:' + path.join(untrackedDir, 'rootfs') + '\n'
+      );
+      const syncRemoteRes = await adminClient.request('POST', '/api/v1/lxc/sync-host', {});
+      assert.strictEqual(syncRemoteRes.status, 200, `Multi-node sync-host failed: ${syncRemoteRes.text}`);
+      assert.ok(
+        (syncRemoteRes.json.imported || []).includes('untracked-remote-ct99'),
+        `Expected untracked-remote-ct99 in imported list: ${syncRemoteRes.text}`
+      );
+      const importedRow = await ctx.db.get(
+        `SELECT node_id FROM lxc_instances WHERE container_name = 'untracked-remote-ct99'`
+      );
+      assert.strictEqual(Number(importedRow.node_id), Number(httpsNodeId), 'Synced remote container must belong to remote node_id');
+
+      // 22g. Bridged WSS Interactive Host PTY Shell to Remote HTTPS Node Agent (`/ws/nodes/:id/shell`)!
+      const ptyOutput = await new Promise((resolve, reject) => {
+        const ws = new WebSocket(
+          `ws://127.0.0.1:${TEST_PORT}/ws/nodes/${httpsNodeId}/shell?cols=90&rows=24`,
+          { headers: { Cookie: adminClient.cookie } }
+        );
+        let collected = '';
+        const timer = setTimeout(() => {
+          try { ws.close(); } catch (_) {}
+          reject(new Error(`Timed out waiting for remote HTTPS PTY output (got: ${collected})`));
+        }, 8000);
+        ws.on('open', () => {
+          ws.send(JSON.stringify({ type: 'input', data: 'echo MULTI_NODE_WSS_PTY_OK\r' }));
+        });
+        ws.on('message', (raw) => {
+          try {
+            const msg = JSON.parse(raw.toString());
+            if (msg.type === 'output') {
+              collected += msg.data;
+              if (collected.includes('MULTI_NODE_WSS_PTY_OK')) {
+                clearTimeout(timer);
+                ws.close();
+                resolve(collected);
+              }
+            } else if (msg.type === 'error') {
+              clearTimeout(timer);
+              ws.close();
+              reject(new Error(`Remote PTY error: ${msg.message}`));
+            }
+          } catch (_) {}
+        });
+        ws.on('error', (e) => {
+          clearTimeout(timer);
+          reject(e);
+        });
+      });
+      assert.ok(ptyOutput.includes('MULTI_NODE_WSS_PTY_OK'), 'Expected live PTY output bridged over WSS from remote node');
+    });
   } finally {
     const { execFileSync } = require('child_process');
-    for (const storeDir of [path.join(tmpRoot, 'local-lxc'), path.join(tmpRoot, 'agent-lxc')]) {
+    for (const storeDir of [
+      path.join(tmpRoot, 'local-lxc'),
+      path.join(tmpRoot, 'agent-lxc'),
+      path.join(tmpRoot, 'https-agent-lxc'),
+    ]) {
       try {
         if (fs.existsSync(storeDir)) {
           for (const entry of fs.readdirSync(storeDir)) {
@@ -2692,6 +3030,7 @@ exec "$@"
     for (const shimPath of installedLxcShims) {
       try { execFileSync('sudo', ['-n', 'rm', '-f', shimPath]); } catch (_) {}
     }
+    if (httpsAgentServer) await new Promise((r) => httpsAgentServer.close(() => r()));
     if (agentServer) await new Promise((r) => agentServer.close(() => r()));
     if (app && app.getHkvmV3Context()) {
       app.getHkvmV3Context().monitoringService.stopBackgroundLoop();

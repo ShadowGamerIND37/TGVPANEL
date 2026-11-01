@@ -1,14 +1,23 @@
 import { UnifiedDatabase } from '../../db/database';
 import { isBinaryAvailable, runAllowlistedCommand } from '../../node-agent/command-runner';
 import { SafeValidators } from '../../security/middleware';
+import { NodeManager } from '../nodes/NodeClient';
 
-const RESERVED_SYSTEM_PORTS = new Set([22, 53, 67, 68, 80, 443, 3000, 5055]);
+const RESERVED_SYSTEM_PORTS = new Set([22, 53, 67, 68, 80, 443, 3000, 5055, 8443]);
 
 export class NetworkManager {
   private db: UnifiedDatabase;
+  private nodeManager?: NodeManager;
 
-  constructor(db: UnifiedDatabase) {
+  constructor(db: UnifiedDatabase, nodeManager?: NodeManager) {
     this.db = db;
+    this.nodeManager = nodeManager;
+  }
+
+  private async isRemoteNode(nodeId: number): Promise<boolean> {
+    if (!this.nodeManager) return false;
+    const node = await this.nodeManager.getNodeById(nodeId);
+    return Boolean(node && !node.is_local);
   }
 
   // --- Network Pools & IP Allocations ---
@@ -187,8 +196,9 @@ export class NetworkManager {
       throw new Error(`Host port ${hostPort} is already allocated on node #${input.nodeId}.`);
     }
 
-    // Apply real NAT DNAT rules with automatic rollback on failure if host supports iptables
-    const appliedKernelRule = await this.applyNatRuleWithRollback(
+    // Apply real NAT DNAT rules on the target node (local or remote Node Agent) with automatic rollback
+    const appliedKernelRule = await this.applyNatRuleForNode(
+      input.nodeId,
       'add',
       guestIp,
       guestPort,
@@ -229,7 +239,8 @@ export class NetworkManager {
     }
 
     if (pf.guest_ip) {
-      await this.applyNatRuleWithRollback(
+      await this.applyNatRuleForNode(
+        Number(pf.node_id || 1),
         'remove',
         pf.guest_ip,
         pf.guest_port,
@@ -240,6 +251,84 @@ export class NetworkManager {
 
     await this.db.run(`DELETE FROM port_forwards WHERE id = ?`, [forwardId]);
     await this.getUserPortAllocation(pf.user_id);
+  }
+
+  public async relocateInstancePortForwards(
+    instanceType: 'lxc' | 'kvm',
+    instanceRefId: number,
+    targetNodeId: number,
+    newGuestIp?: string | null
+  ): Promise<void> {
+    const forwards = await this.db.all<any>(
+      `SELECT * FROM port_forwards WHERE instance_type = ? AND instance_ref_id = ?`,
+      [instanceType, instanceRefId]
+    );
+    for (const pf of forwards) {
+      const oldNodeId = Number(pf.node_id || 1);
+      if (pf.guest_ip) {
+        await this.applyNatRuleForNode(
+          oldNodeId,
+          'remove',
+          pf.guest_ip,
+          pf.guest_port,
+          pf.host_port,
+          pf.protocol || 'tcp,udp'
+        ).catch(() => undefined);
+      }
+
+      let nextHostPort = Number(pf.host_port);
+      const conflict = await this.db.get<{ id: number }>(
+        `SELECT id FROM port_forwards WHERE node_id = ? AND host_port = ? AND id != ?`,
+        [targetNodeId, nextHostPort, pf.id]
+      );
+      if (conflict) {
+        nextHostPort = await this.findAvailableHostPort(targetNodeId);
+      }
+      const nextGuestIp = newGuestIp || pf.guest_ip;
+      await this.db.run(
+        `UPDATE port_forwards SET node_id = ?, host_port = ?, guest_ip = COALESCE(?, guest_ip) WHERE id = ?`,
+        [targetNodeId, nextHostPort, nextGuestIp || null, pf.id]
+      );
+      if (nextGuestIp) {
+        await this.applyNatRuleForNode(
+          targetNodeId,
+          'add',
+          nextGuestIp,
+          pf.guest_port,
+          nextHostPort,
+          pf.protocol || 'tcp,udp'
+        ).catch(() => undefined);
+      }
+    }
+  }
+
+  private async applyNatRuleForNode(
+    nodeId: number,
+    mode: 'add' | 'remove',
+    guestIp: string,
+    guestPort: number,
+    hostPort: number,
+    protocol: string
+  ): Promise<boolean> {
+    if (await this.isRemoteNode(nodeId)) {
+      const node = await this.nodeManager!.getNodeById(nodeId);
+      if (!node || node.status !== 'online') {
+        return false;
+      }
+      try {
+        const remoteRes = await this.nodeManager!.requestRemoteNode<{ applied?: boolean }>(
+          nodeId,
+          'POST',
+          '/api/v1/network/port-forwards',
+          { mode, guestIp, guestPort, hostPort, protocol },
+          5000
+        );
+        return Boolean(remoteRes?.applied);
+      } catch {
+        return false;
+      }
+    }
+    return this.applyNatRuleWithRollback(mode, guestIp, guestPort, hostPort, protocol);
   }
 
   private async findAvailableHostPort(nodeId: number, min = 10000, max = 60000): Promise<number> {
@@ -371,10 +460,55 @@ export class NetworkManager {
         input.comment?.slice(0, 200) || null,
       ]
     );
-    return this.db.get<any>(`SELECT * FROM firewall_rules WHERE id = ?`, [ins.lastID]);
+    const created = await this.db.get<any>(`SELECT * FROM firewall_rules WHERE id = ?`, [ins.lastID]);
+    await this.applyFirewallRuleForNode('add', created).catch(() => undefined);
+    return created;
   }
 
   public async deleteFirewallRule(ruleId: number): Promise<void> {
+    const existing = await this.db.get<any>(`SELECT * FROM firewall_rules WHERE id = ?`, [ruleId]);
+    if (existing) {
+      await this.applyFirewallRuleForNode('remove', existing).catch(() => undefined);
+    }
     await this.db.run(`DELETE FROM firewall_rules WHERE id = ?`, [ruleId]);
+  }
+
+  private async applyFirewallRuleForNode(mode: 'add' | 'remove', rule: any): Promise<boolean> {
+    if (!rule) return false;
+    const nodeId = Number(rule.node_id || 1);
+    if (await this.isRemoteNode(nodeId)) {
+      const node = await this.nodeManager!.getNodeById(nodeId);
+      if (!node || node.status !== 'online') return false;
+      const res = await this.nodeManager!.requestRemoteNode<{ applied?: boolean }>(
+        nodeId,
+        'POST',
+        '/api/v1/network/firewall',
+        {
+          mode,
+          direction: rule.direction,
+          action: rule.action,
+          protocol: rule.protocol,
+          sourceCidr: rule.source_cidr || null,
+          destPort: rule.dest_port || null,
+        },
+        5000
+      );
+      return Boolean(res?.applied);
+    }
+
+    if (!isBinaryAvailable('iptables')) return false;
+    const direction = rule.direction === 'out' ? 'OUTPUT' : 'INPUT';
+    const proto = String(rule.protocol || 'tcp').toLowerCase();
+    const args: string[] = [mode === 'add' ? '-A' : '-D', direction];
+    if (proto !== 'all') args.push('-p', proto);
+    if (rule.source_cidr) {
+      args.push(direction === 'OUTPUT' ? '-d' : '-s', String(rule.source_cidr));
+    }
+    if (rule.dest_port && (proto === 'tcp' || proto === 'udp')) {
+      args.push('--dport', String(rule.dest_port));
+    }
+    args.push('-j', String(rule.action || 'ACCEPT').toUpperCase());
+    const out = await runAllowlistedCommand('iptables', args, { timeoutMs: 5000 });
+    return out.exitCode === 0;
   }
 }

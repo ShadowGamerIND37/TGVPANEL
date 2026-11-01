@@ -158,6 +158,59 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // --- Self-Authenticated Remote Node Pairing & Active Push-Heartbeat Endpoints ---
+  router.post(
+    '/nodes/join/:token',
+    authResetLimiter,
+    async (req: Request, res: Response) => {
+      try {
+        const callerIp =
+          (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+          req.socket.remoteAddress ||
+          '';
+        const out = await ctx.nodeManager.redeemJoinToken({
+          rawToken: pStr(req.params.token),
+          endpointUrl: req.body?.endpointUrl ? String(req.body.endpointUrl) : undefined,
+          ipAddress: req.body?.ipAddress ? String(req.body.ipAddress) : undefined,
+          hostname: req.body?.hostname ? String(req.body.hostname) : undefined,
+          agentPort: req.body?.agentPort ? Number(req.body.agentPort) : undefined,
+          tlsCertPem: req.body?.tlsCertPem ? String(req.body.tlsCertPem) : null,
+          verifySsl: req.body?.verifySsl !== undefined ? Boolean(req.body.verifySsl) : undefined,
+          callerIp,
+        });
+        await ctx.db.logActivity({
+          action: 'node_joined_via_token',
+          resourceType: 'node',
+          resourceId: String(out.nodeId),
+          ipAddress: callerIp,
+          details: { nodeName: out.nodeName, url: out.url },
+        });
+        return res.json(out);
+      } catch (err: any) {
+        return res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post('/nodes/agent-heartbeat', async (req: Request, res: Response) => {
+    try {
+      const rawBody =
+        typeof (req as any).rawBody === 'string'
+          ? (req as any).rawBody
+          : req.body && Object.keys(req.body).length > 0
+            ? JSON.stringify(req.body)
+            : '';
+      const out = await ctx.nodeManager.receiveAgentHeartbeat({
+        headers: req.headers,
+        rawBody,
+        body: req.body || {},
+      });
+      return res.json(out);
+    } catch (err: any) {
+      return res.status(401).json({ error: err.message });
+    }
+  });
+
   // --- All endpoints below require an authenticated principal (Session or Bearer API Key) ---
   router.use(requirePrincipal);
   router.use((req, res, next) => {
@@ -489,7 +542,14 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     requireRole(['admin', 'subadmin', 'operator']),
     async (req: Request, res: Response) => {
       try {
-        const result = await ctx.lxcAdapter.syncHostContainers(req.principal!.userId);
+        const targetNodeId =
+          req.body?.nodeId !== undefined && req.body?.nodeId !== ''
+            ? Number(req.body.nodeId)
+            : undefined;
+        const result = await ctx.lxcAdapter.syncHostContainers(
+          req.principal!.userId,
+          targetNodeId
+        );
         res.json({ success: true, ...result });
       } catch (err: any) {
         res.status(500).json({ error: err.message });
@@ -965,7 +1025,9 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         let probeOk = false;
         if (req.body?.probe !== false) {
           try {
-            const checked = await ctx.nodeManager.checkNodeHealthAndStats(nodeId);
+            const checked = await ctx.nodeManager.checkNodeHealthAndStats(nodeId, {
+              bypassCircuit: true,
+            });
             node = checked.node;
             probeOk = true;
           } catch {
@@ -973,6 +1035,84 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
           }
         }
         res.json({ node, probeOk });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.get(
+    '/nodes/:id/bootstrap',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const nodeId = pInt(req.params.id);
+        const defaultOrigin = `${req.protocol}://${req.get('host') || 'localhost:8080'}`;
+        const controllerUrl = req.query.controllerUrl
+          ? pStr(req.query.controllerUrl as any)
+          : defaultOrigin;
+        const out = await ctx.nodeManager.getBootstrapCredentials(nodeId, controllerUrl);
+        await ctx.db.logActivity({
+          userId: req.principal!.userId,
+          action: 'node_bootstrap_viewed',
+          resourceType: 'node',
+          resourceId: String(nodeId),
+        });
+        res.json(out);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/nodes/:id/join-token',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const nodeId = pInt(req.params.id);
+        const defaultOrigin = `${req.protocol}://${req.get('host') || 'localhost:8080'}`;
+        const controllerUrl = String(req.body?.controllerUrl || defaultOrigin).trim();
+        const ttlMinutes = req.body?.ttlMinutes ? Number(req.body.ttlMinutes) : 30;
+        const out = await ctx.nodeManager.createJoinToken({
+          nodeId,
+          controllerUrl,
+          createdByUserId: req.principal!.userId,
+          ttlMinutes,
+        });
+        await ctx.db.logActivity({
+          userId: req.principal!.userId,
+          action: 'node_join_token_created',
+          resourceType: 'node',
+          resourceId: String(nodeId),
+          details: { expiresAt: out.expiresAt, controllerUrl: out.controllerUrl },
+        });
+        res.status(201).json(out);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/nodes/:id/trust-tls',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const nodeId = pInt(req.params.id);
+        const out = await ctx.nodeManager.trustNodeTlsCertificate(nodeId);
+        await ctx.db.logActivity({
+          userId: req.principal!.userId,
+          action: 'node_tls_trusted',
+          resourceType: 'node',
+          resourceId: String(nodeId),
+          details: {
+            fingerprintSha256: out.fingerprintSha256,
+            subjectCN: out.subjectCN,
+            probeOk: out.probeOk,
+          },
+        });
+        res.json(out);
       } catch (err: any) {
         res.status(400).json({ error: err.message });
       }
@@ -1066,7 +1206,9 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     async (req: Request, res: Response) => {
       try {
         const nodeId = pInt(req.params.id);
-        const report = await ctx.nodeManager.checkNodeHealthAndStats(nodeId);
+        const report = await ctx.nodeManager.checkNodeHealthAndStats(nodeId, {
+          bypassCircuit: true,
+        });
         if (report?.stats) {
           const s = report.stats;
           await ctx.db

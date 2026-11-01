@@ -1,12 +1,14 @@
 import { UnifiedDatabase } from '../../db/database';
+import { NodeManager } from '../nodes/NodeClient';
 /**
- * Unified Storage Pool & LXC OS Template Manager for HKVM V3.
- * Supports directory, RAW, QCOW2, LVM, ZFS, and Btrfs storage pools plus
- * centralized LXC OS template catalog management.
+ * Unified Storage Pool & LXC OS Template Manager for TGVPANEL V3.
+ * Supports directory, RAW, QCOW2, LVM, ZFS, and Btrfs storage pools across both
+ * local and remote Node Agents, plus centralized LXC OS template catalog management.
  */
 export declare class StorageManager {
     private readonly db;
-    constructor(db: UnifiedDatabase);
+    private readonly nodeManager?;
+    constructor(db: UnifiedDatabase, nodeManager?: NodeManager | undefined);
     listPools(): Promise<any[]>;
     private resolveNearestExistingAncestor;
     syncPoolCapacities(): Promise<any[]>;

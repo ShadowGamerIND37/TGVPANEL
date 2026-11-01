@@ -737,20 +737,34 @@ option_configure_node() {
 
   echo ""
   echo "How would you like to connect this Node to your Main TGVPANEL Controller?"
-  echo "  1) Paste Bootstrap Credentials from Panel UI  (Admin -> Nodes -> Register Node)"
-  echo "  2) Auto-Register via Controller URL + Admin API Token (Bearer PAT)"
+  echo "  1) Instant Pair via 1-Time Join Token (Recommended — from Admin -> Nodes -> Pair / Join)"
+  echo "  2) Paste Bootstrap Credentials from Panel UI  (Admin -> Nodes -> Register Node)"
+  echo "  3) Auto-Register via Controller URL + Admin API Token (Bearer PAT)"
   local cred_mode
-  cred_mode="$(prompt_default "Choice (1-2)" "1")"
+  cred_mode="$(prompt_default "Choice (1-3)" "1")"
 
   local node_id=""
   local node_api_key=""
   local node_hmac_secret=""
   local controller_url=""
+  local join_token=""
   local admin_pat=""
   local node_display_name=""
   local node_location=""
 
-  if [[ "$cred_mode" == "2" ]]; then
+  if [[ "$cred_mode" == "1" ]]; then
+    controller_url="$(prompt_default "Controller Panel URL (e.g. https://panel.example.com or http://1.2.3.4:8080)" "")"
+    controller_url="${controller_url%/}"
+    if [[ -z "$controller_url" ]]; then
+      err "Controller URL is required for Join Token pairing."
+      return 1
+    fi
+    join_token="$(prompt_secret "Single-Use Node Join Token (starts with tgv_join_...)")"
+    if [[ -z "$join_token" ]]; then
+      err "Join Token cannot be empty."
+      return 1
+    fi
+  elif [[ "$cred_mode" == "3" ]]; then
     controller_url="$(prompt_default "Controller Panel URL (e.g. https://panel.example.com or http://1.2.3.4:8080)" "")"
     controller_url="${controller_url%/}"
     if [[ -z "$controller_url" ]]; then
@@ -765,13 +779,14 @@ option_configure_node() {
     node_display_name="$(prompt_default "Node Display Name in Panel" "$(hostname -s 2>/dev/null || echo "remote-node")")"
     node_location="$(prompt_default "Node Datacenter / Location" "Remote Datacenter")"
   else
-    local prev_id prev_key prev_hmac
+    local prev_id prev_key prev_hmac prev_ctrl
     prev_id="$(read_env_val "TGVPANEL_NODE_ID" "$target_dir/.env")"
     prev_key="$(read_env_val "TGVPANEL_NODE_API_KEY" "$target_dir/.env")"
     prev_hmac="$(read_env_val "TGVPANEL_NODE_HMAC_SECRET" "$target_dir/.env")"
+    prev_ctrl="$(read_env_val "TGVPANEL_CONTROLLER_URL" "$target_dir/.env")"
 
     echo ""
-    echo -e "${C_DIM}Tip: In your Panel open Admin -> Nodes, register '${advertised_url}'$([[ "$tls_choice" == "1" ]] && echo " (uncheck Verify TLS Cert)"), and paste below:${C_RESET}"
+    echo -e "${C_DIM}Tip: In your Panel open Admin -> Nodes, register '${advertised_url}', and paste below:${C_RESET}"
     node_id="$(prompt_default "TGVPANEL_NODE_ID" "${prev_id:-2}")"
     while [[ -z "$node_api_key" ]]; do
       node_api_key="$(prompt_secret "TGVPANEL_NODE_API_KEY" "$prev_key")"
@@ -781,6 +796,8 @@ option_configure_node() {
       node_hmac_secret="$(prompt_secret "TGVPANEL_NODE_HMAC_SECRET" "$prev_hmac")"
       [[ -z "$node_hmac_secret" ]] && warn "TGVPANEL_NODE_HMAC_SECRET cannot be empty."
     done
+    controller_url="$(prompt_default "Optional Controller URL for active push-heartbeats (blank to skip)" "$prev_ctrl")"
+    controller_url="${controller_url%/}"
   fi
 
   local existing_allowed_ips
@@ -809,8 +826,85 @@ option_configure_node() {
   ensure_nodejs_20_plus
   ensure_repo_cloned_and_built "$target_dir" "$branch"
 
-  # Auto-register against Controller REST API if Mode 2 was chosen
-  if [[ "$cred_mode" == "2" ]]; then
+  # Generate self-signed TLS certificate BEFORE pairing/registering so we can pin exact X.509 PEM!
+  if [[ "$tls_choice" == "1" ]]; then
+    info "Generating 4096-bit self-signed TLS certificate at /etc/tgvpanel/ssl/..."
+    run_priv mkdir -p /etc/tgvpanel/ssl
+    local san_ext="IP:${node_ip},IP:127.0.0.1"
+    if [[ -n "$node_hostname" ]]; then
+      san_ext="${san_ext},DNS:${node_hostname}"
+    fi
+    run_priv openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
+      -keyout "$tls_key" \
+      -out "$tls_cert" \
+      -subj "/CN=${node_hostname}" \
+      -addext "subjectAltName=${san_ext}" >/dev/null 2>&1
+    run_priv chmod 644 "$tls_cert"
+    if [[ $EUID -ne 0 ]]; then
+      run_priv chown "$(id -u):$(id -g)" "$tls_key" "$tls_cert"
+    fi
+    chmod 600 "$tls_key" 2>/dev/null || run_priv chmod 600 "$tls_key"
+    ok "Generated TLS certificate: $tls_cert"
+  fi
+
+  local cert_pem_content=""
+  if [[ -n "$tls_cert" && -f "$tls_cert" ]]; then
+    cert_pem_content="$(cat "$tls_cert" 2>/dev/null || true)"
+  fi
+
+  if [[ "$cred_mode" == "1" ]]; then
+    info "Redeeming single-use Join Token with Controller (${controller_url})..."
+    local join_json
+    join_json="$(TGVP_CTRL="$controller_url" \
+      TGVP_TOK="$join_token" \
+      TGVP_HOST="$node_hostname" \
+      TGVP_IP="$node_ip" \
+      TGVP_PORT="$agent_port" \
+      TGVP_URL="$advertised_url" \
+      TGVP_CERT="$cert_pem_content" \
+      TGVP_VSSL="$verify_ssl_json" \
+      node -e '
+        const http = require("http");
+        const https = require("https");
+        const base = process.env.TGVP_CTRL.replace(/\/+$/, "") + "/";
+        const u = new URL("api/v1/nodes/join/" + encodeURIComponent(process.env.TGVP_TOK), base);
+        const body = JSON.stringify({
+          endpointUrl: process.env.TGVP_URL,
+          ipAddress: process.env.TGVP_IP,
+          hostname: process.env.TGVP_HOST,
+          agentPort: Number(process.env.TGVP_PORT || 8443),
+          tlsCertPem: process.env.TGVP_CERT || null,
+          verifySsl: Boolean(process.env.TGVP_CERT) || process.env.TGVP_VSSL === "true"
+        });
+        const mod = u.protocol === "https:" ? https : http;
+        const req = mod.request(u, {
+          method: "POST",
+          rejectUnauthorized: false,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body)
+          }
+        }, (res) => {
+          let data = "";
+          res.on("data", (c) => data += c);
+          res.on("end", () => {
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              console.error("HTTP " + res.statusCode + ": " + data);
+              process.exit(1);
+            }
+            console.log(data);
+          });
+        });
+        req.on("error", (e) => { console.error(e.message); process.exit(1); });
+        req.write(body);
+        req.end();
+      ')"
+
+    node_id="$(printf "%s" "$join_json" | node -e 'const j=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(j.nodeId));')"
+    node_api_key="$(printf "%s" "$join_json" | node -e 'const j=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(j.apiKey));')"
+    node_hmac_secret="$(printf "%s" "$join_json" | node -e 'const j=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(j.hmacSecret));')"
+    ok "Paired with Controller as Node #${node_id} (TLS certificate pinned automatically)!"
+  elif [[ "$cred_mode" == "3" ]]; then
     info "Auto-registering node '${node_display_name}' (${advertised_url}) with Controller..."
     local reg_json
     reg_json="$(TGVP_CTRL="$controller_url" \
@@ -820,18 +914,21 @@ option_configure_node() {
       TGVP_IP="$node_ip" \
       TGVP_URL="$advertised_url" \
       TGVP_LOC="$node_location" \
+      TGVP_CERT="$cert_pem_content" \
       TGVP_VSSL="$verify_ssl_json" \
       node -e '
         const http = require("http");
         const https = require("https");
-        const u = new URL("/api/v1/nodes", process.env.TGVP_CTRL);
+        const base = process.env.TGVP_CTRL.replace(/\/+$/, "") + "/";
+        const u = new URL("api/v1/nodes", base);
         const body = JSON.stringify({
           name: process.env.TGVP_NAME,
           hostname: process.env.TGVP_HOST,
           ipAddress: process.env.TGVP_IP,
           url: process.env.TGVP_URL,
           location: process.env.TGVP_LOC,
-          verifySsl: process.env.TGVP_VSSL === "true"
+          tlsCaPem: process.env.TGVP_CERT || null,
+          verifySsl: Boolean(process.env.TGVP_CERT) || process.env.TGVP_VSSL === "true"
         });
         const mod = u.protocol === "https:" ? https : http;
         const req = mod.request(u, {
@@ -864,27 +961,6 @@ option_configure_node() {
     ok "Registered as Node #${node_id} on Controller!"
   fi
 
-  # Generate self-signed TLS certificate if Option 1 was chosen
-  if [[ "$tls_choice" == "1" ]]; then
-    info "Generating 4096-bit self-signed TLS certificate at /etc/tgvpanel/ssl/..."
-    run_priv mkdir -p /etc/tgvpanel/ssl
-    local san_ext="IP:${node_ip},IP:127.0.0.1"
-    if [[ -n "$node_hostname" ]]; then
-      san_ext="${san_ext},DNS:${node_hostname}"
-    fi
-    run_priv openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
-      -keyout "$tls_key" \
-      -out "$tls_cert" \
-      -subj "/CN=${node_hostname}" \
-      -addext "subjectAltName=${san_ext}" >/dev/null 2>&1
-    run_priv chmod 644 "$tls_cert"
-    if [[ $EUID -ne 0 ]]; then
-      run_priv chown "$(id -u):$(id -g)" "$tls_key" "$tls_cert"
-    fi
-    chmod 600 "$tls_key" 2>/dev/null || run_priv chmod 600 "$tls_key"
-    ok "Generated TLS certificate: $tls_cert"
-  fi
-
   cd "$APP_DIR"
   mkdir -p "$APP_DIR/data" "$APP_DIR/backups"
   run_priv mkdir -p "$lxc_dir"
@@ -902,6 +978,7 @@ option_configure_node() {
   upsert_env_val "TGVPANEL_AGENT_PORT" "$agent_port" "$APP_DIR/.env"
   upsert_env_val "TGVPANEL_NODE_API_KEY" "$node_api_key" "$APP_DIR/.env"
   upsert_env_val "TGVPANEL_NODE_HMAC_SECRET" "$node_hmac_secret" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_CONTROLLER_URL" "$controller_url" "$APP_DIR/.env"
   upsert_env_val "TGVPANEL_ALLOWED_CONTROLLER_IPS" "$allowed_ips" "$APP_DIR/.env"
   upsert_env_val "TGVPANEL_AGENT_TLS_CERT" "$tls_cert" "$APP_DIR/.env"
   upsert_env_val "TGVPANEL_AGENT_TLS_KEY" "$tls_key" "$APP_DIR/.env"
@@ -939,14 +1016,17 @@ option_configure_node() {
     sleep 1
   done
 
-  # If auto-registered, trigger immediate Controller health check so node turns ONLINE right away!
+  # If auto-registered via PAT, trigger immediate Controller health check so node turns ONLINE right away!
   local remote_synced=0
-  if [[ "$cred_mode" == "2" && "$agent_ready" -eq 1 ]]; then
+  if [[ "$cred_mode" == "1" && "$agent_ready" -eq 1 ]]; then
+    remote_synced=1
+  elif [[ "$cred_mode" == "3" && "$agent_ready" -eq 1 ]]; then
     info "Triggering Controller health & capability sync for Node #${node_id}..."
     if TGVP_CTRL="$controller_url" TGVP_PAT="$admin_pat" TGVP_NID="$node_id" node -e '
       const http = require("http");
       const https = require("https");
-      const u = new URL("/api/v1/nodes/" + process.env.TGVP_NID + "/check", process.env.TGVP_CTRL);
+      const base = process.env.TGVP_CTRL.replace(/\/+$/, "") + "/";
+      const u = new URL("api/v1/nodes/" + process.env.TGVP_NID + "/check", base);
       const mod = u.protocol === "https:" ? https : http;
       const req = mod.request(u, {
         method: "POST",
@@ -962,7 +1042,7 @@ option_configure_node() {
       remote_synced=1
       ok "Controller verified Node #${node_id} is ONLINE!"
     else
-      warn "Agent is running locally, but Controller could not reach ${advertised_url} yet. Check firewall/NAT and click 'Check Health' in Admin -> Nodes."
+      warn "Agent is running locally, but Controller could not reach ${advertised_url} yet. Check firewall/NAT and click 'Probe' in Admin -> Nodes."
     fi
   fi
 
@@ -973,14 +1053,145 @@ option_configure_node() {
   echo -e "  Node ID         : ${C_BOLD}#${node_id}${C_RESET}"
   echo -e "  Agent Endpoint  : ${C_BOLD}${advertised_url}${C_RESET}"
   echo -e "  Listener Status : $([[ "$agent_ready" -eq 1 ]] && echo -e "${C_GREEN}LISTENING & PROTECTED (HMAC Active)${C_RESET}" || echo -e "${C_RED}FAILED TO BIND (check logs via Option 5)${C_RESET}")"
-  if [[ "$cred_mode" == "1" ]]; then
-    echo -e "  Next Step       : Open ${C_BOLD}Admin -> Nodes${C_RESET} on your Panel and click ${C_BOLD}Check Health${C_RESET}!"
+  if [[ "$cred_mode" == "2" ]]; then
+    echo -e "  Next Step       : Open ${C_BOLD}Admin -> Nodes${C_RESET} on your Panel and click ${C_BOLD}Probe${C_RESET}!"
     if [[ "$tls_choice" == "1" ]]; then
-      echo -e "  Self-Signed TLS : Ensure ${C_BOLD}Verify TLS Cert${C_RESET} is unchecked for this node in Admin -> Nodes."
+      echo -e "  Self-Signed TLS : Click ${C_BOLD}Trust Node TLS Cert${C_RESET} in Admin -> Nodes to pin this node's certificate."
     fi
   elif [[ "$remote_synced" -eq 1 ]]; then
-    echo -e "  Panel Sync      : ${C_GREEN}ONLINE & SYNCED in Admin -> Nodes${C_RESET}"
+    echo -e "  Panel Sync      : ${C_GREEN}PAIRED & ACTIVE HEARTBEAT ENABLED${C_RESET}"
   fi
+}
+
+# Non-interactive 1-Command Auto-Join (`sudo bash menu.sh --join <CONTROLLER_URL> <JOIN_TOKEN> [PORT]`)
+headless_join_node() {
+  local controller_url="${1:-}"
+  local join_token="${2:-}"
+  local agent_port="${3:-${AGENT_PORT:-8443}}"
+  controller_url="${controller_url%/}"
+
+  if [[ -z "$controller_url" || -z "$join_token" ]]; then
+    err "Usage: sudo bash menu.sh --join <CONTROLLER_URL> <JOIN_TOKEN> [AGENT_PORT]"
+    exit 1
+  fi
+
+  print_section_banner "TGVPANEL 1-Command Remote Node Auto-Join"
+  info "Controller URL : $controller_url"
+  info "Agent TLS Port : $agent_port"
+
+  sync_system_clock
+  ensure_os_dependencies "agent"
+  ensure_nodejs_20_plus
+  ensure_repo_cloned_and_built "$APP_DIR" "$REPO_BRANCH"
+
+  local node_ip node_hostname tls_cert tls_key san_ext advertised_url
+  node_ip="${TGVPANEL_ADVERTISE_IP:-$(detect_primary_ip)}"
+  node_hostname="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "remote-node")"
+  tls_cert="${TGVPANEL_AGENT_TLS_CERT:-/etc/tgvpanel/ssl/agent.crt}"
+  tls_key="${TGVPANEL_AGENT_TLS_KEY:-/etc/tgvpanel/ssl/agent.key}"
+  advertised_url="https://${node_ip}:${agent_port}"
+
+  info "Generating 4096-bit SAN TLS certificate ($tls_cert)..."
+  run_priv mkdir -p "$(dirname "$tls_cert")"
+  san_ext="IP:${node_ip},IP:127.0.0.1"
+  [[ -n "$node_hostname" ]] && san_ext="${san_ext},DNS:${node_hostname}"
+  run_priv openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
+    -keyout "$tls_key" \
+    -out "$tls_cert" \
+    -subj "/CN=${node_hostname}" \
+    -addext "subjectAltName=${san_ext}" >/dev/null 2>&1
+  run_priv chmod 644 "$tls_cert"
+  if [[ $EUID -ne 0 ]]; then
+    run_priv chown "$(id -u):$(id -g)" "$tls_key" "$tls_cert"
+  fi
+  chmod 600 "$tls_key" 2>/dev/null || run_priv chmod 600 "$tls_key"
+
+  local cert_pem
+  cert_pem="$(cat "$tls_cert")"
+
+  info "Pairing with Controller & pinning TLS certificate..."
+  local join_json
+  join_json="$(TGVP_CTRL="$controller_url" \
+    TGVP_TOK="$join_token" \
+    TGVP_HOST="$node_hostname" \
+    TGVP_IP="$node_ip" \
+    TGVP_PORT="$agent_port" \
+    TGVP_URL="$advertised_url" \
+    TGVP_CERT="$cert_pem" \
+    node -e '
+      const http = require("http");
+      const https = require("https");
+      const base = process.env.TGVP_CTRL.replace(/\/+$/, "") + "/";
+      const u = new URL("api/v1/nodes/join/" + encodeURIComponent(process.env.TGVP_TOK), base);
+      const body = JSON.stringify({
+        endpointUrl: process.env.TGVP_URL,
+        ipAddress: process.env.TGVP_IP,
+        hostname: process.env.TGVP_HOST,
+        agentPort: Number(process.env.TGVP_PORT || 8443),
+        tlsCertPem: process.env.TGVP_CERT,
+        verifySsl: true
+      });
+      const mod = u.protocol === "https:" ? https : http;
+      const req = mod.request(u, {
+        method: "POST",
+        rejectUnauthorized: false,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body)
+        }
+      }, (res) => {
+        let data = "";
+        res.on("data", (c) => data += c);
+        res.on("end", () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            console.error("HTTP " + res.statusCode + ": " + data);
+            process.exit(1);
+          }
+          console.log(data);
+        });
+      });
+      req.on("error", (e) => { console.error(e.message); process.exit(1); });
+      req.write(body);
+      req.end();
+    ')"
+
+  local node_id node_api_key node_hmac_secret lxc_dir
+  node_id="$(printf "%s" "$join_json" | node -e 'const j=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(j.nodeId));')"
+  node_api_key="$(printf "%s" "$join_json" | node -e 'const j=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(j.apiKey));')"
+  node_hmac_secret="$(printf "%s" "$join_json" | node -e 'const j=JSON.parse(require("fs").readFileSync(0,"utf8")); process.stdout.write(String(j.hmacSecret));')"
+  lxc_dir="${TGVPANEL_LXC_DIR:-/var/lib/lxc}"
+
+  cd "$APP_DIR"
+  mkdir -p "$APP_DIR/data" "$APP_DIR/backups"
+  run_priv mkdir -p "$lxc_dir"
+  rm -f "$APP_DIR/data/node-agent-credentials.json"
+  [[ ! -f "$APP_DIR/.env" && -f "$APP_DIR/.env.example" ]] && cp "$APP_DIR/.env.example" "$APP_DIR/.env"
+
+  upsert_env_val "NODE_ENV" "production" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_NODE_ID" "$node_id" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_AGENT_HOST" "0.0.0.0" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_AGENT_PORT" "$agent_port" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_NODE_API_KEY" "$node_api_key" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_NODE_HMAC_SECRET" "$node_hmac_secret" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_CONTROLLER_URL" "$controller_url" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_AGENT_TLS_CERT" "$tls_cert" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_AGENT_TLS_KEY" "$tls_key" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_DATA_DIR" "$APP_DIR/data" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_LXC_DIR" "$lxc_dir" "$APP_DIR/.env"
+  upsert_env_val "TGVPANEL_BACKUP_DIR" "$APP_DIR/backups" "$APP_DIR/.env"
+  chmod 600 "$APP_DIR/.env"
+
+  configure_firewall_port "$agent_port" "" "TGVPANEL Node Agent" || true
+  start_agent_24_7 "$APP_DIR" "$agent_port"
+
+  for _ in $(seq 1 20); do
+    if curl -ks "https://127.0.0.1:${agent_port}/api/v1/ping" 2>/dev/null | grep -q "tgvpanel-node-agent"; then
+      break
+    fi
+    sleep 1
+  done
+
+  ok "Node #${node_id} paired, TLS-pinned, and running 24/7 at ${advertised_url}!"
 }
 
 # ==============================================================================
@@ -1420,11 +1631,12 @@ print_help() {
   cat <<EOF
 
 Usage:
-  sudo bash menu.sh                 Launch interactive menu
-  sudo bash menu.sh --status        Print Panel & Node Agent status summary
-  sudo bash menu.sh --migrate-db    Backup DB & run schema migrations non-interactively
-  sudo bash menu.sh --update        Run safe zero-data-loss Auto Update non-interactively
-  sudo bash menu.sh --help          Show this help message
+  sudo bash menu.sh                                  Launch interactive menu
+  sudo bash menu.sh --join <PANEL_URL> <JOIN_TOKEN>  Auto-install, pair & start remote Node Agent 24/7
+  sudo bash menu.sh --status                         Print Panel & Node Agent status summary
+  sudo bash menu.sh --migrate-db                     Backup DB & run schema migrations non-interactively
+  sudo bash menu.sh --update                         Run safe zero-data-loss Auto Update non-interactively
+  sudo bash menu.sh --help                           Show this help message
 EOF
 }
 
@@ -1432,6 +1644,10 @@ main() {
   case "${1:-}" in
     --help|-h)
       print_help
+      exit 0
+      ;;
+    --join)
+      headless_join_node "${2:-}" "${3:-}" "${4:-}"
       exit 0
       ;;
     --status)

@@ -1,6 +1,7 @@
 import { UnifiedDatabase } from '../../db/database';
 import { NodeManager } from '../nodes/NodeClient';
 import { StorageManager } from '../storage/StorageManager';
+import { NetworkManager } from '../network/NetworkManager';
 import { LXCAdapter } from '../virtualization/LXCAdapter';
 export interface MigrationJobRecord {
     id: number;
@@ -37,7 +38,8 @@ export declare class MigrationManager {
     private nodeManager;
     private storageManager;
     private lxcAdapter;
-    constructor(db: UnifiedDatabase, nodeManager: NodeManager, storageManager: StorageManager, lxcAdapter: LXCAdapter);
+    private networkManager?;
+    constructor(db: UnifiedDatabase, nodeManager: NodeManager, storageManager: StorageManager, lxcAdapter: LXCAdapter, networkManager?: NetworkManager);
     listMigrations(): Promise<MigrationJobRecord[]>;
     getMigration(jobId: number): Promise<MigrationJobRecord | undefined>;
     private updateJob;

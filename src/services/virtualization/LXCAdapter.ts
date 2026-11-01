@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+import fs from 'fs';
 import path from 'path';
 import { UnifiedDatabase } from '../../db/database';
 import {
@@ -370,6 +372,12 @@ export class LXCAdapter implements VirtualizationAdapter {
           if (info.startupWarning) warning = info.startupWarning;
           hostProvisioned = true;
         } else {
+          if (spec.templateArchivePath && fs.existsSync(spec.templateArchivePath)) {
+            spec.templateArchivePath = await this.ensureTemplateStagedOnRemoteNode(
+              node.id,
+              spec.templateArchivePath
+            );
+          }
           const info = await this.nodeManager.requestRemoteNode<LxcContainerRuntimeInfo>(
             node.id,
             'POST',
@@ -458,42 +466,144 @@ export class LXCAdapter implements VirtualizationAdapter {
     }
   }
 
-  /**
-   * Discovers any existing native LXC containers in `/var/lib/lxc` on the local node
-   * that are not yet tracked in `lxc_instances` (excluding in-flight creations) and imports them.
-   */
-  public async syncHostContainers(defaultUserId = 1): Promise<{ imported: string[]; count: number }> {
-    const localNode = await this.nodeManager.getDefaultNodeForEngine('lxc');
-    const nodeId = localNode ? localNode.id : 1;
-    const cm = this.nodeManager.localRuntime.containerManager;
-    const hostList = await cm.listContainers();
-    const imported: string[] = [];
+  private async ensureTemplateStagedOnRemoteNode(
+    nodeId: number,
+    localArchivePath: string
+  ): Promise<string> {
+    const buf = fs.readFileSync(localArchivePath);
+    const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+    const safeName = `${sha256.slice(0, 12)}_${path.basename(localArchivePath)}`;
 
-    for (const ct of hostList) {
-      const lockKey = ct.name.toLowerCase();
-      if (this.inFlightPanelCreations.has(lockKey) || cm.isCreationInFlight(ct.name)) {
-        continue;
+    try {
+      const status = await this.nodeManager.requestRemoteNode<{
+        cached: boolean;
+        filePath: string;
+      }>(
+        nodeId,
+        'GET',
+        `/api/v1/templates/status?name=${encodeURIComponent(safeName)}&sha256=${encodeURIComponent(sha256)}`
+      );
+      if (status?.cached && status.filePath) {
+        return status.filePath;
       }
-      const existing = await this.db.get<{ id: number }>(
-        `SELECT id FROM lxc_instances WHERE LOWER(container_name) = LOWER(?)`,
-        [ct.name]
-      );
-      if (existing) continue;
-
-      const status = ct.state === 'running' ? 'running' : ct.state === 'frozen' ? 'frozen' : 'stopped';
-      const detectedIp = ct.ips && ct.ips.length > 0 ? ct.ips[0] : null;
-      const ins = await this.db.run(
-        `INSERT INTO lxc_instances (
-          user_id, node_id, container_name, hostname, os_template, os_family, arch,
-          cpu_cores, ram_mb, swap_mb, disk_gb, privileged, nesting, bridge, ip_address, status, notes
-        ) VALUES (?, ?, ?, ?, 'imported', 'linux', 'amd64', 2, 1024, 512, 20, 1, 1, 'lxcbr0', ?, ?, 'Imported from host /var/lib/lxc')`,
-        [defaultUserId, nodeId, ct.name, ct.name, detectedIp, status]
-      );
-      await this.syncRegistryRow(ins.lastID);
-      imported.push(ct.name);
+    } catch {
+      // Proceed to stage upload
     }
 
-    return { imported, count: imported.length };
+    const staged = await this.nodeManager.requestRemoteNode<{
+      staged: boolean;
+      filePath: string;
+    }>(
+      nodeId,
+      'POST',
+      '/api/v1/templates/stage',
+      {
+        name: safeName,
+        archiveBase64: buf.toString('base64'),
+        expectedSha256: sha256,
+      },
+      300_000
+    );
+    return staged.filePath;
+  }
+
+  /**
+   * Discovers any existing native LXC containers across the local node and all online remote
+   * Node Agents (or a specific target `nodeId`) that are not yet tracked in `lxc_instances`
+   * and imports them cleanly with accurate `node_id` ownership.
+   */
+  public async syncHostContainers(
+    defaultUserId = 1,
+    targetNodeId?: number
+  ): Promise<{ imported: string[]; count: number; byNode?: Record<number, string[]> }> {
+    const allNodes = await this.nodeManager.listNodes();
+    const candidates =
+      targetNodeId !== undefined
+        ? allNodes.filter((n) => n.id === Number(targetNodeId))
+        : allNodes.filter((n) => n.is_local || n.status === 'online');
+
+    const imported: string[] = [];
+    const byNode: Record<number, string[]> = {};
+    const cm = this.nodeManager.localRuntime.containerManager;
+
+    for (const node of candidates) {
+      let hostList: LxcContainerRuntimeInfo[] = [];
+      try {
+        if (node.is_local) {
+          hostList = await cm.listContainers();
+        } else {
+          const resp = await this.nodeManager.requestRemoteNode<{
+            containers: LxcContainerRuntimeInfo[];
+          }>(node.id, 'GET', '/api/v1/containers', undefined, 15_000);
+          hostList = Array.isArray(resp?.containers) ? resp.containers : [];
+        }
+      } catch {
+        continue;
+      }
+
+      for (const ct of hostList) {
+        const lockKey = ct.name.toLowerCase();
+        if (
+          this.inFlightPanelCreations.has(lockKey) ||
+          (node.is_local && cm.isCreationInFlight(ct.name))
+        ) {
+          continue;
+        }
+        const existing = await this.db.get<{ id: number }>(
+          `SELECT id FROM lxc_instances WHERE node_id = ? AND LOWER(container_name) = LOWER(?)`,
+          [node.id, ct.name]
+        );
+        if (existing) {
+          // Keep live runtime status & IP synchronized on already-tracked containers
+          const liveState =
+            ct.state === 'running' ? 'running' : ct.state === 'frozen' ? 'frozen' : 'stopped';
+          const liveIp = ct.ips && ct.ips.length > 0 ? ct.ips[0] : null;
+          await this.db
+            .run(
+              `UPDATE lxc_instances
+               SET status = CASE WHEN suspended = 1 THEN status ELSE ? END,
+                   ip_address = COALESCE(ip_address, ?)
+               WHERE id = ?`,
+              [liveState, liveIp, existing.id]
+            )
+            .catch(() => undefined);
+          await this.syncRegistryRow(existing.id).catch(() => undefined);
+          continue;
+        }
+
+        // Also avoid duplicate global name collisions if same name was registered before node_id scoping
+        const anyNameMatch = await this.db.get<{ id: number }>(
+          `SELECT id FROM lxc_instances WHERE LOWER(container_name) = LOWER(?)`,
+          [ct.name]
+        );
+        if (anyNameMatch) continue;
+
+        const status =
+          ct.state === 'running' ? 'running' : ct.state === 'frozen' ? 'frozen' : 'stopped';
+        const detectedIp = ct.ips && ct.ips.length > 0 ? ct.ips[0] : null;
+        const ins = await this.db.run(
+          `INSERT INTO lxc_instances (
+            user_id, node_id, container_name, hostname, os_template, os_family, arch,
+            cpu_cores, ram_mb, swap_mb, disk_gb, privileged, nesting, bridge, ip_address, status, notes
+          ) VALUES (?, ?, ?, ?, 'imported', 'linux', 'amd64', 2, 1024, 512, 20, 1, 1, 'lxcbr0', ?, ?, ?)`,
+          [
+            defaultUserId,
+            node.id,
+            ct.name,
+            ct.name,
+            detectedIp,
+            status,
+            `Imported from node "${node.name}"`,
+          ]
+        );
+        await this.syncRegistryRow(ins.lastID);
+        imported.push(ct.name);
+        if (!byNode[node.id]) byNode[node.id] = [];
+        byNode[node.id].push(ct.name);
+      }
+    }
+
+    return { imported, count: imported.length, byNode };
   }
 
   private async dispatchNodeContainerAction(
@@ -839,6 +949,12 @@ export class LXCAdapter implements VirtualizationAdapter {
       const info = await this.nodeManager.localRuntime.containerManager.reinstallContainer(reinstallSpec);
       reinstallState = info.state === 'running' ? 'running' : 'stopped';
     } else {
+      if (reinstallSpec.templateArchivePath && fs.existsSync(reinstallSpec.templateArchivePath)) {
+        reinstallSpec.templateArchivePath = await this.ensureTemplateStagedOnRemoteNode(
+          row.node_id,
+          reinstallSpec.templateArchivePath
+        );
+      }
       const resp = await this.nodeManager.requestRemoteNode<
         LxcContainerRuntimeInfo | { success?: boolean; container?: LxcContainerRuntimeInfo }
       >(

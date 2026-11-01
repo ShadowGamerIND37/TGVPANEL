@@ -10,6 +10,7 @@ import {
   generateApiKeyPair,
   hashApiKey,
   signAgentRequest,
+  verifyAgentRequestSignature,
 } from '../../security/crypto-vault';
 import { LocalNodeRuntime } from '../../node-agent/agent';
 import { getNodeHealthReport, NodeHealthReport } from '../../node-agent/health';
@@ -26,9 +27,12 @@ export interface NodeRecord {
   maintenance_mode: number;
   verify_ssl: number;
   mtls_enabled: number;
+  tls_pinned?: number;
   status: string;
   agent_version: string | null;
   last_heartbeat: string | null;
+  last_error?: string | null;
+  last_error_at?: string | null;
   circuit_state: 'closed' | 'open' | 'half-open';
   consecutive_failures: number;
   cpu_cores: number;
@@ -72,6 +76,8 @@ export interface EndpointProbeResult {
   latencyMs: number;
   httpStatus: number | null;
   agentDetected: boolean;
+  selfSignedAgentDetected?: boolean;
+  clockSkewSec?: number | null;
   tls?: {
     authorized: boolean;
     authorizationError?: string | null;
@@ -79,6 +85,8 @@ export interface EndpointProbeResult {
     issuerCN?: string | null;
     validTo?: string | null;
     protocol?: string | null;
+    fingerprintSha256?: string | null;
+    certPem?: string | null;
   } | null;
   message: string;
 }
@@ -89,8 +97,100 @@ interface CircuitBreakerEntry {
   openedAt: number;
 }
 
+function derToPemCertificate(rawDer: Buffer): string {
+  const b64 = rawDer.toString('base64');
+  const lines = b64.match(/.{1,64}/g) || [b64];
+  return `-----BEGIN CERTIFICATE-----\n${lines.join('\n')}\n-----END CERTIFICATE-----\n`;
+}
+
+function extractPemSha256Fingerprints(pemText: string): Set<string> {
+  const set = new Set<string>();
+  const matches = pemText.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) || [];
+  for (const block of matches) {
+    const b64 = block
+      .replace(/-----BEGIN CERTIFICATE-----/g, '')
+      .replace(/-----END CERTIFICATE-----/g, '')
+      .replace(/\s+/g, '');
+    if (!b64) continue;
+    const der = Buffer.from(b64, 'base64');
+    if (der.length > 0) {
+      set.add(crypto.createHash('sha256').update(der).digest('hex'));
+    }
+  }
+  return set;
+}
+
+export function normalizeNodeEndpointUrl(rawUrl: string): string {
+  let clean = String(rawUrl || '').trim();
+  if (!clean) throw new Error('Agent endpoint URL is required.');
+  if (!/^https?:\/\//i.test(clean)) {
+    const defaultHttps = /:8443(\/|$)|:443(\/|$)/i.test(clean);
+    clean = `${defaultHttps ? 'https' : 'http'}://${clean}`;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(clean);
+  } catch {
+    throw new Error('Invalid URL format. Expected https://host:8443 or http://host:5055');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http:// and https:// agent endpoints are supported.');
+  }
+  // Strip accidental API suffixes if user pasted /api/v1/health into Node URL
+  let pathname = parsed.pathname || '';
+  const apiIdx = pathname.indexOf('/api/v1');
+  if (apiIdx >= 0) pathname = pathname.slice(0, apiIdx);
+  const wsIdx = pathname.indexOf('/ws/');
+  if (wsIdx >= 0) pathname = pathname.slice(0, wsIdx);
+  pathname = pathname.replace(/\/+$/, '');
+  return `${parsed.origin}${pathname}`;
+}
+
+export function buildAgentTargetUrl(baseNodeUrl: string, apiPathWithQuery: string): URL {
+  const normalizedBase = normalizeNodeEndpointUrl(baseNodeUrl);
+  const baseWithSlash = normalizedBase.endsWith('/') ? normalizedBase : `${normalizedBase}/`;
+  const relativePath = String(apiPathWithQuery || '/').replace(/^\/+/, '');
+  return new URL(relativePath, baseWithSlash);
+}
+
+function formatTransportError(err: any, targetUrl: string, verifySsl: boolean): string {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || 'Connection failed');
+  if (
+    code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+    code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+    code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+    /self[- ]signed certificate/i.test(msg)
+  ) {
+    return `TLS self-signed certificate rejected (${code || 'SELF_SIGNED'}). Click "Trust Node TLS Cert" to pin the node certificate or uncheck Strict CA Verify.`;
+  }
+  if (code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+    return `TLS certificate hostname/IP mismatch (${code}). Click "Trust Node TLS Cert" to pin this node's certificate or uncheck Strict CA Verify.`;
+  }
+  if (code === 'EPROTO' || /wrong version number|unknown protocol/i.test(msg)) {
+    const usingHttps = targetUrl.startsWith('https://');
+    return usingHttps
+      ? `TLS handshake failed (EPROTO): remote Node Agent appears to be serving plain HTTP while Panel URL uses https://. Enable TLS on the node or switch URL to http://.`
+      : `Protocol mismatch: remote Node Agent requires https://.`;
+  }
+  if (code === 'ECONNREFUSED') {
+    return `Connection refused at ${targetUrl} (ECONNREFUSED). Ensure tgvpanel-node-agent is running and listening on 0.0.0.0 with port open in firewall.`;
+  }
+  if (code === 'ETIMEDOUT' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH' || /timed out/i.test(msg)) {
+    return `Connection timed out reaching ${targetUrl}${code ? ` (${code})` : ''}. Check cloud security group / UFW port (default TCP 8443) and node IP.`;
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return `DNS lookup failed for ${targetUrl} (${code}). Verify hostname or use the node's direct IPv4 address.`;
+  }
+  if (verifySsl && /certificate/i.test(msg)) {
+    return `TLS certificate error: ${msg}. Click "Trust Node TLS Cert" or uncheck Strict CA Verify.`;
+  }
+  return code && !msg.includes(code) ? `${msg} (${code})` : msg;
+}
+
 /**
- * Communicates with remote Node Agents over HTTPS/HTTP using replay-protected HMAC-SHA256 signatures
+ * Communicates with remote Node Agents over HTTPS/HTTP using replay-protected HMAC-SHA256 signatures,
+ * optional TOFU certificate pinning / mTLS, active push-heartbeats, single-use join tokens,
  * and per-node circuit breakers, while routing `is_local = 1` requests directly to `LocalNodeRuntime`.
  */
 export class NodeManager {
@@ -98,6 +198,7 @@ export class NodeManager {
   public readonly localRuntime: LocalNodeRuntime;
   private circuits = new Map<number, CircuitBreakerEntry>();
   private latencies = new Map<number, number>();
+  private seenAgentHeartbeatNonces = new Map<string, number>();
   private readonly failureThreshold = 3;
   private readonly openCooldownMs = 30_000;
 
@@ -152,6 +253,7 @@ export class NodeManager {
     const lxcRunning = Number(r.lxc_running || 0);
     return {
       ...r,
+      tls_pinned: Number(r.tls_pinned || 0),
       kvm_count: kvmCount,
       kvm_running: kvmRunning,
       lxc_count: lxcCount,
@@ -167,6 +269,7 @@ export class NodeManager {
 
   private readonly nodeSelectSql = `
     SELECT n.*,
+           CASE WHEN nc.tls_ca_pem IS NOT NULL AND LENGTH(nc.tls_ca_pem) > 0 THEN 1 ELSE 0 END AS tls_pinned,
            c.supports_kvm, c.supports_lxc, c.kvm_available, c.lxc_available,
            c.nested_virt, c.cgroup_version, c.qemu_version, c.lxc_version,
            c.kernel_version, c.storage_backends, c.network_backends,
@@ -182,6 +285,7 @@ export class NodeManager {
            mh.disk_used_gb AS live_disk_used_gb,
            mh.load_avg_1 AS live_load_1
     FROM nodes n
+    LEFT JOIN node_credentials nc ON nc.node_id = n.id
     LEFT JOIN node_capabilities c ON c.node_id = n.id
     LEFT JOIN (
       SELECT COALESCE(node_id, 1) AS nid,
@@ -251,6 +355,7 @@ export class NodeManager {
     location?: string;
     url: string;
     verifySsl?: boolean;
+    tlsCaPem?: string | null;
     mtlsEnabled?: boolean;
     supportsKvm?: boolean;
     supportsLxc?: boolean;
@@ -261,9 +366,11 @@ export class NodeManager {
     node: NodeRecord;
     bootstrapCredentials: { apiKey: string; hmacSecret: string };
   }> {
+    const cleanUrl = normalizeNodeEndpointUrl(input.url);
     const keyPair = generateApiKeyPair('tgv_node');
     const hmacSecret = crypto.randomBytes(32).toString('hex');
     const tagsJson = this.normalizeTagsJson(input.tags);
+    const cleanCaPem = input.tlsCaPem?.trim() || null;
 
     let createdId = 0;
     await this.db.transaction(async () => {
@@ -276,7 +383,7 @@ export class NodeManager {
           input.hostname.trim(),
           input.ipAddress.trim(),
           input.location?.trim() || 'Remote Datacenter',
-          input.url.trim().replace(/\/+$/, ''),
+          cleanUrl,
           input.verifySsl !== false ? 1 : 0,
           input.mtlsEnabled ? 1 : 0,
           Math.max(1, Number(input.maxInstances || 100)),
@@ -287,14 +394,15 @@ export class NodeManager {
       createdId = ins.lastID;
 
       await this.db.run(
-        `INSERT INTO node_credentials (node_id, api_key_prefix, api_key_hash, api_key_enc, hmac_secret_enc)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO node_credentials (node_id, api_key_prefix, api_key_hash, api_key_enc, hmac_secret_enc, tls_ca_pem)
+         VALUES (?, ?, ?, ?, ?, ?)`,
         [
           createdId,
           keyPair.keyPrefix,
           keyPair.keyHash,
           encryptSecret(keyPair.rawKey),
           encryptSecret(hmacSecret),
+          cleanCaPem,
         ]
       );
 
@@ -329,6 +437,7 @@ export class NodeManager {
       url?: string;
       maintenanceMode?: boolean;
       verifySsl?: boolean;
+      tlsCaPem?: string | null;
       maxInstances?: number;
       supportsKvm?: boolean;
       supportsLxc?: boolean;
@@ -340,6 +449,10 @@ export class NodeManager {
     if (!existing) throw new Error(`Node #${nodeId} not found.`);
 
     const tagsVal = patch.tags !== undefined ? this.normalizeTagsJson(patch.tags) : null;
+    const normalizedUrl =
+      patch.url !== undefined && !existing.is_local
+        ? normalizeNodeEndpointUrl(patch.url)
+        : patch.url?.trim().replace(/\/+$/, '') ?? null;
 
     await this.db.run(
       `UPDATE nodes SET
@@ -360,7 +473,7 @@ export class NodeManager {
         patch.hostname?.trim() ?? null,
         patch.ipAddress?.trim() ?? null,
         patch.location?.trim() ?? null,
-        patch.url?.trim().replace(/\/+$/, '') ?? null,
+        normalizedUrl,
         patch.maintenanceMode !== undefined ? (patch.maintenanceMode ? 1 : 0) : null,
         patch.verifySsl !== undefined ? (patch.verifySsl ? 1 : 0) : null,
         patch.maxInstances !== undefined ? Math.max(1, Number(patch.maxInstances)) : null,
@@ -369,6 +482,13 @@ export class NodeManager {
         nodeId,
       ]
     );
+
+    if (patch.tlsCaPem !== undefined) {
+      await this.db.run(
+        `UPDATE node_credentials SET tls_ca_pem = ? WHERE node_id = ?`,
+        [patch.tlsCaPem ? patch.tlsCaPem.trim() : null, nodeId]
+      );
+    }
 
     if (patch.supportsKvm !== undefined || patch.supportsLxc !== undefined) {
       await this.db.run(
@@ -382,6 +502,21 @@ export class NodeManager {
           patch.supportsLxc !== undefined ? (patch.supportsLxc ? 1 : 0) : null,
           nodeId,
         ]
+      );
+    }
+
+    // Automatically reset open circuit breaker when connection settings change
+    if (
+      patch.url !== undefined ||
+      patch.ipAddress !== undefined ||
+      patch.hostname !== undefined ||
+      patch.verifySsl !== undefined ||
+      patch.tlsCaPem !== undefined
+    ) {
+      this.circuits.set(nodeId, { state: 'closed', failures: 0, openedAt: 0 });
+      await this.db.run(
+        `UPDATE nodes SET circuit_state = 'closed', consecutive_failures = 0 WHERE id = ?`,
+        [nodeId]
       );
     }
 
@@ -405,12 +540,513 @@ export class NodeManager {
       );
     }
 
+    this.circuits.delete(nodeId);
+    this.latencies.delete(nodeId);
     await this.db.run(`DELETE FROM nodes WHERE id = ?`, [nodeId]);
+  }
+
+  public buildEnvSnippet(params: {
+    nodeId: number;
+    port: string | number;
+    apiKey: string;
+    hmacSecret: string;
+    controllerUrl?: string | null;
+    isHttps?: boolean;
+  }): string {
+    const lines = [
+      `# TGVPANEL Remote Node Bootstrap (.env — chmod 600 /opt/tgvpanel/.env)`,
+      `TGVPANEL_NODE_ID=${params.nodeId}`,
+      `TGVPANEL_AGENT_HOST=0.0.0.0`,
+      `TGVPANEL_AGENT_PORT=${params.port}`,
+      `TGVPANEL_NODE_API_KEY=${params.apiKey}`,
+      `TGVPANEL_NODE_HMAC_SECRET=${params.hmacSecret}`,
+    ];
+    if (params.controllerUrl) {
+      lines.push(`TGVPANEL_CONTROLLER_URL=${params.controllerUrl.replace(/\/+$/, '')}`);
+    }
+    if (params.isHttps) {
+      lines.push(`TGVPANEL_AGENT_TLS_CERT=/etc/tgvpanel/ssl/agent.crt`);
+      lines.push(`TGVPANEL_AGENT_TLS_KEY=/etc/tgvpanel/ssl/agent.key`);
+    }
+    return lines.join('\n');
+  }
+
+  public async getBootstrapCredentials(
+    nodeId: number,
+    controllerUrl?: string
+  ): Promise<{
+    nodeId: number;
+    nodeName: string;
+    url: string;
+    port: number;
+    isHttps: boolean;
+    apiKey: string;
+    hmacSecret: string;
+    envSnippet: string;
+  }> {
+    const node = await this.getNodeById(nodeId);
+    if (!node) throw new Error(`Node #${nodeId} not found.`);
+    if (node.is_local) {
+      throw new Error('Localhost controller node uses in-process runtime and does not require remote .env bootstrap.');
+    }
+    const creds = await this.db.get<{ api_key_enc: string; hmac_secret_enc: string }>(
+      `SELECT api_key_enc, hmac_secret_enc FROM node_credentials WHERE node_id = ?`,
+      [nodeId]
+    );
+    if (!creds) throw new Error(`Credentials missing for node #${nodeId}.`);
+
+    const apiKey = decryptSecret(creds.api_key_enc);
+    const hmacSecret = decryptSecret(creds.hmac_secret_enc);
+    if (!apiKey || !hmacSecret) {
+      throw new Error(`Unable to decrypt stored credentials for node #${nodeId}; rotate credentials to issue a new pair.`);
+    }
+
+    let port = 8443;
+    let isHttps = true;
+    try {
+      const u = new URL(node.url);
+      isHttps = u.protocol === 'https:';
+      port = Number(u.port || (isHttps ? 443 : 80));
+    } catch {
+      // default 8443
+    }
+
+    return {
+      nodeId: node.id,
+      nodeName: node.name,
+      url: node.url,
+      port,
+      isHttps,
+      apiKey,
+      hmacSecret,
+      envSnippet: this.buildEnvSnippet({
+        nodeId: node.id,
+        port,
+        apiKey,
+        hmacSecret,
+        controllerUrl,
+        isHttps,
+      }),
+    };
+  }
+
+  public async createJoinToken(params: {
+    nodeId: number;
+    controllerUrl: string;
+    createdByUserId?: number;
+    ttlMinutes?: number;
+  }): Promise<{
+    nodeId: number;
+    nodeName: string;
+    token: string;
+    expiresAt: string;
+    ttlMinutes: number;
+    controllerUrl: string;
+    curlJoinCommand: string;
+    localJoinCommand: string;
+  }> {
+    const node = await this.getNodeById(params.nodeId);
+    if (!node) throw new Error(`Node #${params.nodeId} not found.`);
+    if (node.is_local) {
+      throw new Error('Cannot generate a remote join token for the localhost node.');
+    }
+
+    const cleanControllerUrl = String(params.controllerUrl || '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(cleanControllerUrl)) {
+      throw new Error('Valid Controller URL (http:// or https://) is required to build the join command.');
+    }
+
+    const ttlMinutes = Math.min(1440, Math.max(5, Number(params.ttlMinutes || 30)));
+    const rawToken = `tgv_join_${crypto.randomBytes(24).toString('hex')}`;
+    const tokenPrefix = rawToken.slice(0, 14);
+    const tokenHash = hashApiKey(rawToken);
+    const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
+
+    await this.db.run(
+      `INSERT INTO node_join_tokens (node_id, token_prefix, token_hash, controller_url, expires_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [node.id, tokenPrefix, tokenHash, cleanControllerUrl, expiresAt, params.createdByUserId || null]
+    );
+
+    const safeCtrl = cleanControllerUrl.replace(/"/g, '');
+    const curlJoinCommand = `curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && chmod +x menu.sh && sudo bash menu.sh --join "${safeCtrl}" "${rawToken}"`;
+    const localJoinCommand = `sudo bash menu.sh --join "${safeCtrl}" "${rawToken}"`;
+
+    return {
+      nodeId: node.id,
+      nodeName: node.name,
+      token: rawToken,
+      expiresAt,
+      ttlMinutes,
+      controllerUrl: cleanControllerUrl,
+      curlJoinCommand,
+      localJoinCommand,
+    };
+  }
+
+  public async redeemJoinToken(params: {
+    rawToken: string;
+    endpointUrl?: string;
+    ipAddress?: string;
+    hostname?: string;
+    agentPort?: number;
+    tlsCertPem?: string | null;
+    verifySsl?: boolean;
+    callerIp?: string;
+  }): Promise<{
+    nodeId: number;
+    nodeName: string;
+    apiKey: string;
+    hmacSecret: string;
+    controllerUrl: string | null;
+    url: string;
+  }> {
+    const cleanToken = String(params.rawToken || '').trim();
+    if (!cleanToken.startsWith('tgv_join_')) {
+      throw new Error('Invalid node join token format.');
+    }
+
+    const tokenHash = hashApiKey(cleanToken);
+    const row = await this.db.get<{
+      id: number;
+      node_id: number;
+      controller_url: string | null;
+      expires_at: string;
+      used_at: string | null;
+    }>(`SELECT * FROM node_join_tokens WHERE token_hash = ?`, [tokenHash]);
+
+    if (!row) {
+      throw new Error('Join token is invalid or unknown.');
+    }
+    if (row.used_at) {
+      throw new Error('This single-use join token has already been redeemed. Generate a new join token in the Panel.');
+    }
+    if (new Date(row.expires_at).getTime() <= Date.now()) {
+      throw new Error('Join token has expired. Generate a fresh join token in the Panel.');
+    }
+
+    const node = await this.getNodeById(row.node_id);
+    if (!node || node.is_local) {
+      throw new Error('Target remote node no longer exists.');
+    }
+
+    const creds = await this.db.get<{ api_key_enc: string; hmac_secret_enc: string }>(
+      `SELECT api_key_enc, hmac_secret_enc FROM node_credentials WHERE node_id = ?`,
+      [node.id]
+    );
+    if (!creds) throw new Error('Node credentials record missing.');
+
+    let apiKey = decryptSecret(creds.api_key_enc);
+    let hmacSecret = decryptSecret(creds.hmac_secret_enc);
+    if (!apiKey || !hmacSecret) {
+      const freshPair = generateApiKeyPair('tgv_node');
+      apiKey = freshPair.rawKey;
+      hmacSecret = crypto.randomBytes(32).toString('hex');
+      await this.db.run(
+        `UPDATE node_credentials
+         SET api_key_prefix = ?, api_key_hash = ?, api_key_enc = ?, hmac_secret_enc = ?, rotated_at = datetime('now')
+         WHERE node_id = ?`,
+        [
+          freshPair.keyPrefix,
+          freshPair.keyHash,
+          encryptSecret(apiKey),
+          encryptSecret(hmacSecret),
+          node.id,
+        ]
+      );
+    }
+
+    const detectedIp = (params.ipAddress || params.callerIp || node.ip_address || '')
+      .replace(/^::ffff:/, '')
+      .trim();
+    const detectedHostname = (params.hostname || node.hostname || detectedIp).trim();
+    const cleanCertPem =
+      params.tlsCertPem && params.tlsCertPem.includes('BEGIN CERTIFICATE')
+        ? params.tlsCertPem.trim()
+        : null;
+
+    let effectiveUrl = node.url;
+    if (params.endpointUrl) {
+      effectiveUrl = normalizeNodeEndpointUrl(params.endpointUrl);
+    } else if (detectedIp && params.agentPort) {
+      const proto = cleanCertPem || params.verifySsl ? 'https' : 'http';
+      effectiveUrl = `${proto}://${detectedIp}:${Number(params.agentPort)}`;
+    }
+
+    // If the node supplied its X.509 PEM certificate, pin it AND keep verify_ssl = 1;
+    // otherwise respect explicit verifySsl or default to 0 for unpinned self-signed IP endpoints.
+    const nextVerifySsl = cleanCertPem
+      ? 1
+      : params.verifySsl !== undefined
+        ? params.verifySsl
+          ? 1
+          : 0
+        : node.verify_ssl;
+
+    await this.db.transaction(async () => {
+      await this.db.run(
+        `UPDATE node_join_tokens SET used_at = datetime('now'), used_from_ip = ? WHERE id = ?`,
+        [params.callerIp?.replace(/^::ffff:/, '') || null, row.id]
+      );
+
+      await this.db.run(
+        `UPDATE nodes SET
+           hostname = COALESCE(?, hostname),
+           ip_address = COALESCE(?, ip_address),
+           url = ?,
+           verify_ssl = ?,
+           circuit_state = 'closed',
+           consecutive_failures = 0,
+           last_error = NULL,
+           last_error_at = NULL,
+           updated_at = datetime('now')
+         WHERE id = ?`,
+        [
+          detectedHostname || null,
+          detectedIp || null,
+          effectiveUrl,
+          nextVerifySsl,
+          node.id,
+        ]
+      );
+
+      if (cleanCertPem) {
+        await this.db.run(
+          `UPDATE node_credentials SET tls_ca_pem = ? WHERE node_id = ?`,
+          [cleanCertPem, node.id]
+        );
+      }
+    });
+
+    this.circuits.set(node.id, { state: 'closed', failures: 0, openedAt: 0 });
+
+    return {
+      nodeId: node.id,
+      nodeName: node.name,
+      apiKey,
+      hmacSecret,
+      controllerUrl: row.controller_url,
+      url: effectiveUrl,
+    };
+  }
+
+  /**
+   * Trust-On-First-Use (TOFU) TLS certificate fetcher & pinner for self-signed HTTPS Node Agents.
+   */
+  public async trustNodeTlsCertificate(nodeId: number): Promise<{
+    node: NodeRecord;
+    fingerprintSha256: string;
+    subjectCN: string | null;
+    validTo: string | null;
+    probeOk: boolean;
+  }> {
+    const node = await this.getNodeById(nodeId);
+    if (!node) throw new Error(`Node #${nodeId} not found.`);
+    if (node.is_local) throw new Error('Localhost node does not use remote TLS.');
+
+    const targetUrl = buildAgentTargetUrl(node.url, '/api/v1/ping');
+    if (targetUrl.protocol !== 'https:') {
+      throw new Error(`Node "${node.name}" URL (${node.url}) uses plain http://, not https://.`);
+    }
+
+    const certDetails = await new Promise<{
+      pem: string;
+      fingerprintSha256: string;
+      subjectCN: string | null;
+      validTo: string | null;
+    }>((resolve, reject) => {
+      const sock = tls.connect(
+        {
+          host: targetUrl.hostname,
+          port: Number(targetUrl.port || 443),
+          servername: netIsIp(targetUrl.hostname) ? undefined : targetUrl.hostname,
+          rejectUnauthorized: false,
+          timeout: 6000,
+        },
+        () => {
+          const cert = sock.getPeerCertificate(true);
+          sock.end();
+          if (!cert || !cert.raw || cert.raw.length === 0) {
+            return reject(new Error('Remote endpoint did not present an X.509 TLS certificate.'));
+          }
+          const pem = derToPemCertificate(cert.raw);
+          const fingerprintSha256 = crypto.createHash('sha256').update(cert.raw).digest('hex');
+          const subjectCN = Array.isArray(cert.subject?.CN)
+            ? cert.subject.CN[0] || null
+            : cert.subject?.CN || null;
+          resolve({
+            pem,
+            fingerprintSha256,
+            subjectCN,
+            validTo: cert.valid_to || null,
+          });
+        }
+      );
+      sock.on('timeout', () => {
+        sock.destroy(new Error(`TLS connection timed out reaching ${targetUrl.host}`));
+      });
+      sock.on('error', (err) => reject(err));
+    });
+
+    await this.db.run(`UPDATE node_credentials SET tls_ca_pem = ? WHERE node_id = ?`, [
+      certDetails.pem,
+      nodeId,
+    ]);
+    await this.db.run(
+      `UPDATE nodes SET verify_ssl = 1, circuit_state = 'closed', consecutive_failures = 0, last_error = NULL, last_error_at = NULL, updated_at = datetime('now') WHERE id = ?`,
+      [nodeId]
+    );
+    this.circuits.set(nodeId, { state: 'closed', failures: 0, openedAt: 0 });
+
+    let probeOk = false;
+    try {
+      await this.checkNodeHealthAndStats(nodeId, { bypassCircuit: true });
+      probeOk = true;
+    } catch {
+      probeOk = false;
+    }
+
+    return {
+      node: (await this.getNodeById(nodeId))!,
+      fingerprintSha256: certDetails.fingerprintSha256,
+      subjectCN: certDetails.subjectCN,
+      validTo: certDetails.validTo,
+      probeOk,
+    };
+  }
+
+  /**
+   * Authenticates and processes an active outbound push-heartbeat sent by a remote Node Agent.
+   */
+  public async receiveAgentHeartbeat(params: {
+    headers: Record<string, string | string[] | undefined>;
+    rawBody: string;
+    body: {
+      nodeId?: string | number;
+      health?: NodeHealthReport;
+      stats?: HostResourceStats;
+    };
+  }): Promise<{ ok: boolean; nodeId: number }> {
+    const h = (name: string): string => {
+      const v = params.headers[name.toLowerCase()];
+      return Array.isArray(v) ? v[0] || '' : v || '';
+    };
+
+    const providedKey = (h('x-hkvm-node-key') || h('x-api-key')).trim();
+    const ts = Number(h('x-hkvm-timestamp') || '0');
+    const nonce = h('x-hkvm-nonce').trim();
+    const sig = h('x-hkvm-signature').trim();
+    const headerNodeId = h('x-hkvm-node-id').trim();
+
+    if (!providedKey || !ts || !nonce || !sig) {
+      throw new Error('Missing node heartbeat authentication headers.');
+    }
+
+    const keyHash = hashApiKey(providedKey);
+    let credRow = await this.db.get<{
+      node_id: number;
+      api_key_hash: string;
+      hmac_secret_enc: string;
+    }>(`SELECT node_id, api_key_hash, hmac_secret_enc FROM node_credentials WHERE api_key_hash = ?`, [
+      keyHash,
+    ]);
+
+    if (!credRow && headerNodeId && /^\d+$/.test(headerNodeId)) {
+      const candidate = await this.db.get<{
+        node_id: number;
+        api_key_hash: string;
+        hmac_secret_enc: string;
+      }>(
+        `SELECT node_id, api_key_hash, hmac_secret_enc FROM node_credentials WHERE node_id = ?`,
+        [Number(headerNodeId)]
+      );
+      if (
+        candidate &&
+        candidate.api_key_hash.length === keyHash.length &&
+        crypto.timingSafeEqual(
+          Buffer.from(candidate.api_key_hash, 'utf8'),
+          Buffer.from(keyHash, 'utf8')
+        )
+      ) {
+        credRow = candidate;
+      }
+    }
+
+    if (!credRow) {
+      throw new Error('Unknown node API key on heartbeat.');
+    }
+
+    // Prune replay cache older than 10 minutes
+    const cutoff = Date.now() - 10 * 60_000;
+    for (const [n, seenAt] of this.seenAgentHeartbeatNonces.entries()) {
+      if (seenAt < cutoff) this.seenAgentHeartbeatNonces.delete(n);
+    }
+    const replayKey = `${credRow.node_id}:${nonce}`;
+    if (this.seenAgentHeartbeatNonces.has(replayKey)) {
+      throw new Error('Replay detected on agent heartbeat.');
+    }
+
+    const hmacSecret = decryptSecret(credRow.hmac_secret_enc);
+    const valid = verifyAgentRequestSignature({
+      hmacSecret,
+      method: 'POST',
+      pathWithQuery: '/api/v1/nodes/agent-heartbeat',
+      timestampSec: ts,
+      nonce,
+      rawBody: params.rawBody,
+      signatureHex: sig,
+      maxSkewSec: 300,
+    });
+    if (!valid) {
+      throw new Error('Invalid HMAC signature or skewed clock on agent heartbeat.');
+    }
+    this.seenAgentHeartbeatNonces.set(replayKey, Date.now());
+
+    const nodeId = credRow.node_id;
+    const health = params.body?.health;
+    const stats = params.body?.stats;
+    if (health && stats) {
+      await this.persistNodeHealthAndStats(nodeId, health, stats);
+      await this.db
+        .run(
+          `INSERT INTO metrics_history
+             (target_type, target_id, cpu_percent, ram_used_mb, ram_total_mb, disk_used_gb, disk_total_gb, net_rx_bytes, net_tx_bytes, load_avg_1)
+           VALUES ('node', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            nodeId,
+            stats.cpuPercent,
+            stats.ramUsedMb,
+            stats.ramTotalMb,
+            stats.diskUsedGb,
+            stats.diskTotalGb,
+            stats.netRxBytes,
+            stats.netTxBytes,
+            stats.loadAvg1,
+          ]
+        )
+        .catch(() => undefined);
+    } else {
+      this.recordCircuitSuccess(nodeId);
+      await this.db.run(
+        `UPDATE nodes
+         SET status = 'online',
+             last_heartbeat = datetime('now'),
+             circuit_state = 'closed',
+             consecutive_failures = 0,
+             last_error = NULL,
+             last_error_at = NULL,
+             updated_at = datetime('now')
+         WHERE id = ?`,
+        [nodeId]
+      );
+    }
+
+    return { ok: true, nodeId };
   }
 
   public async rotateNodeCredentials(
     nodeId: number
-  ): Promise<{ apiKey: string; hmacSecret: string; pushedToAgent: boolean }> {
+  ): Promise<{ apiKey: string; hmacSecret: string; pushedToAgent: boolean; envSnippet?: string }> {
     const node = await this.getNodeById(nodeId);
     if (!node) throw new Error(`Node #${nodeId} not found.`);
 
@@ -420,10 +1056,17 @@ export class NodeManager {
 
     if (!node.is_local) {
       try {
-        await this.requestRemoteNode(nodeId, 'POST', '/api/v1/credentials/rotate', {
-          newApiKey: newPair.rawKey,
-          newHmacSecret: newHmac,
-        });
+        await this.requestRemoteNode(
+          nodeId,
+          'POST',
+          '/api/v1/credentials/rotate',
+          {
+            newApiKey: newPair.rawKey,
+            newHmacSecret: newHmac,
+          },
+          15_000,
+          { bypassCircuit: true }
+        );
         pushedToAgent = true;
       } catch {
         pushedToAgent = false;
@@ -445,13 +1088,107 @@ export class NodeManager {
       ]
     );
 
-    return { apiKey: newPair.rawKey, hmacSecret: newHmac, pushedToAgent };
+    this.circuits.set(nodeId, { state: 'closed', failures: 0, openedAt: 0 });
+    await this.db.run(
+      `UPDATE nodes SET circuit_state = 'closed', consecutive_failures = 0 WHERE id = ?`,
+      [nodeId]
+    );
+
+    let port = 8443;
+    let isHttps = true;
+    try {
+      const u = new URL(node.url);
+      isHttps = u.protocol === 'https:';
+      port = Number(u.port || (isHttps ? 443 : 80));
+    } catch {
+      // default 8443
+    }
+
+    return {
+      apiKey: newPair.rawKey,
+      hmacSecret: newHmac,
+      pushedToAgent,
+      envSnippet: node.is_local
+        ? undefined
+        : this.buildEnvSnippet({
+            nodeId: node.id,
+            port,
+            apiKey: newPair.rawKey,
+            hmacSecret: newHmac,
+            isHttps,
+          }),
+    };
+  }
+
+  private async persistNodeHealthAndStats(
+    nodeId: number,
+    health: NodeHealthReport,
+    stats: HostResourceStats
+  ): Promise<void> {
+    await this.db.run(
+      `UPDATE nodes SET
+         status = 'online',
+         agent_version = ?,
+         last_heartbeat = datetime('now'),
+         circuit_state = 'closed',
+         consecutive_failures = 0,
+         last_error = NULL,
+         last_error_at = NULL,
+         cpu_cores = ?,
+         cpu_model = ?,
+         ram_total_mb = ?,
+         disk_total_gb = ?,
+         updated_at = datetime('now')
+       WHERE id = ?`,
+      [
+        health.agentVersion,
+        stats.cpuCores,
+        stats.cpuModel,
+        stats.ramTotalMb,
+        stats.diskTotalGb,
+        nodeId,
+      ]
+    );
+
+    await this.db.run(
+      `INSERT INTO node_capabilities
+         (node_id, supports_kvm, supports_lxc, kvm_available, lxc_available, nested_virt, cgroup_version, storage_backends, network_backends, qemu_version, lxc_version, kernel_version, updated_at)
+       VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(node_id) DO UPDATE SET
+         kvm_available = excluded.kvm_available,
+         lxc_available = excluded.lxc_available,
+         nested_virt = excluded.nested_virt,
+         cgroup_version = excluded.cgroup_version,
+         storage_backends = excluded.storage_backends,
+         network_backends = excluded.network_backends,
+         qemu_version = excluded.qemu_version,
+         lxc_version = excluded.lxc_version,
+         kernel_version = excluded.kernel_version,
+         updated_at = datetime('now')`,
+      [
+        nodeId,
+        health.capabilities.kvmAvailable ? 1 : 0,
+        health.capabilities.lxcAvailable ? 1 : 0,
+        health.capabilities.kvmDevicePresent ? 1 : 0,
+        health.capabilities.cgroupVersion,
+        JSON.stringify(health.capabilities.storageBackends),
+        JSON.stringify(health.capabilities.networkBackends),
+        health.capabilities.qemuVersion,
+        health.capabilities.lxcVersion,
+        health.capabilities.kernelVersion,
+      ]
+    );
+
+    this.recordCircuitSuccess(nodeId);
   }
 
   /**
    * Refreshes health, capabilities, and real host stats for a node (local or remote).
    */
-  public async checkNodeHealthAndStats(nodeId: number): Promise<{
+  public async checkNodeHealthAndStats(
+    nodeId: number,
+    options?: { bypassCircuit?: boolean }
+  ): Promise<{
     node: NodeRecord;
     health: NodeHealthReport;
     stats: HostResourceStats;
@@ -461,83 +1198,38 @@ export class NodeManager {
     if (!node) throw new Error(`Node #${nodeId} not found.`);
 
     const t0 = Date.now();
-    try {
-      let health: NodeHealthReport;
-      let stats: HostResourceStats;
+    let health: NodeHealthReport;
+    let stats: HostResourceStats;
 
-      if (node.is_local) {
-        health = await getNodeHealthReport(true);
-        stats = await this.localRuntime.statsCollector.collect();
-      } else {
-        health = await this.requestRemoteNode<NodeHealthReport>(
-          nodeId,
-          'GET',
-          '/api/v1/health?refresh=1'
-        );
-        stats = await this.requestRemoteNode<HostResourceStats>(nodeId, 'GET', '/api/v1/stats');
-      }
-      const latencyMs = Math.max(1, Date.now() - t0);
-      this.latencies.set(nodeId, latencyMs);
-
-      await this.db.run(
-        `UPDATE nodes SET
-           status = 'online',
-           agent_version = ?,
-           last_heartbeat = datetime('now'),
-           circuit_state = 'closed',
-           consecutive_failures = 0,
-           cpu_cores = ?,
-           cpu_model = ?,
-           ram_total_mb = ?,
-           disk_total_gb = ?,
-           updated_at = datetime('now')
-         WHERE id = ?`,
-        [
-          health.agentVersion,
-          stats.cpuCores,
-          stats.cpuModel,
-          stats.ramTotalMb,
-          stats.diskTotalGb,
-          nodeId,
-        ]
+    if (node.is_local) {
+      health = await getNodeHealthReport(true, {
+        interactiveShellEnabled: this.localRuntime.shellManager.isInteractiveShellEnabled(),
+      });
+      stats = await this.localRuntime.statsCollector.collect();
+    } else {
+      health = await this.requestRemoteNode<NodeHealthReport>(
+        nodeId,
+        'GET',
+        '/api/v1/health?refresh=1',
+        undefined,
+        15_000,
+        { bypassCircuit: options?.bypassCircuit }
       );
-
-      await this.db.run(
-        `INSERT INTO node_capabilities
-           (node_id, supports_kvm, supports_lxc, kvm_available, lxc_available, nested_virt, cgroup_version, storage_backends, network_backends, qemu_version, lxc_version, kernel_version, updated_at)
-         VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-         ON CONFLICT(node_id) DO UPDATE SET
-           kvm_available = excluded.kvm_available,
-           lxc_available = excluded.lxc_available,
-           nested_virt = excluded.nested_virt,
-           cgroup_version = excluded.cgroup_version,
-           storage_backends = excluded.storage_backends,
-           network_backends = excluded.network_backends,
-           qemu_version = excluded.qemu_version,
-           lxc_version = excluded.lxc_version,
-           kernel_version = excluded.kernel_version,
-           updated_at = datetime('now')`,
-        [
-          nodeId,
-          health.capabilities.kvmAvailable ? 1 : 0,
-          health.capabilities.lxcAvailable ? 1 : 0,
-          health.capabilities.kvmDevicePresent ? 1 : 0,
-          health.capabilities.cgroupVersion,
-          JSON.stringify(health.capabilities.storageBackends),
-          JSON.stringify(health.capabilities.networkBackends),
-          health.capabilities.qemuVersion,
-          health.capabilities.lxcVersion,
-          health.capabilities.kernelVersion,
-        ]
+      stats = await this.requestRemoteNode<HostResourceStats>(
+        nodeId,
+        'GET',
+        '/api/v1/stats',
+        undefined,
+        15_000,
+        { bypassCircuit: true }
       );
-
-      this.recordCircuitSuccess(nodeId);
-      const updatedNode = (await this.getNodeById(nodeId))!;
-      return { node: updatedNode, health, stats, latencyMs };
-    } catch (err: any) {
-      await this.recordCircuitFailure(nodeId);
-      throw err;
     }
+
+    const latencyMs = Math.max(1, Date.now() - t0);
+    this.latencies.set(nodeId, latencyMs);
+    await this.persistNodeHealthAndStats(nodeId, health, stats);
+    const updatedNode = (await this.getNodeById(nodeId))!;
+    return { node: updatedNode, health, stats, latencyMs };
   }
 
   public async resetCircuitBreaker(nodeId: number): Promise<NodeRecord> {
@@ -545,131 +1237,227 @@ export class NodeManager {
     if (!node) throw new Error(`Node #${nodeId} not found.`);
     this.circuits.set(nodeId, { state: 'closed', failures: 0, openedAt: 0 });
     await this.db.run(
-      `UPDATE nodes SET circuit_state = 'closed', consecutive_failures = 0, updated_at = datetime('now') WHERE id = ?`,
+      `UPDATE nodes SET circuit_state = 'closed', consecutive_failures = 0, last_error = NULL, last_error_at = NULL, updated_at = datetime('now') WHERE id = ?`,
       [nodeId]
     );
     return (await this.getNodeById(nodeId))!;
   }
 
   /**
-   * Pre-flight HTTP/HTTPS + TLS reachability probe for remote Node Agent URLs.
+   * Pre-flight HTTP/HTTPS + TLS reachability & clock-drift probe for remote Node Agent URLs.
+   * When strict TLS rejects a self-signed certificate, performs a safe certificate inspection
+   * so the UI can offer one-click TOFU certificate pinning.
    */
   public async probeEndpointConnection(input: {
     url: string;
     verifySsl?: boolean;
     timeoutMs?: number;
   }): Promise<EndpointProbeResult> {
-    const rawUrl = String(input.url || '').trim();
-    if (!rawUrl) throw new Error('Endpoint URL is required.');
-
-    let parsed: URL;
-    try {
-      parsed = new URL(rawUrl);
-    } catch {
-      throw new Error('Invalid URL format. Expected http://host:port or https://host:port');
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      throw new Error('Only http:// and https:// agent endpoints are supported.');
-    }
-
+    const cleanBaseUrl = normalizeNodeEndpointUrl(input.url);
+    const parsed = new URL(cleanBaseUrl);
     const isHttps = parsed.protocol === 'https:';
     const verifySsl = input.verifySsl !== false;
     const timeoutMs = Math.min(10_000, Math.max(1000, Number(input.timeoutMs || 4000)));
-    const probeUrl = new URL('/api/v1/health', parsed.origin);
-    const t0 = Date.now();
 
-    return new Promise<EndpointProbeResult>((resolve) => {
-      const reqOpts: https.RequestOptions = {
-        method: 'GET',
-        hostname: probeUrl.hostname,
-        port: probeUrl.port || (isHttps ? 443 : 80),
-        path: probeUrl.pathname,
-        timeout: timeoutMs,
-        headers: { Accept: 'application/json', 'User-Agent': 'TGVPANEL-Controller-Probe/3.0' },
-      };
-      if (isHttps) {
-        reqOpts.rejectUnauthorized = verifySsl;
-      }
+    const executeSingleProbe = (
+      probePath: string,
+      rejectUnauthorized: boolean
+    ): Promise<{
+      ok: boolean;
+      latencyMs: number;
+      status: number | null;
+      body: string;
+      headers: http.IncomingHttpHeaders;
+      tlsInfo: EndpointProbeResult['tls'];
+      err?: any;
+    }> => {
+      const probeUrl = buildAgentTargetUrl(cleanBaseUrl, probePath);
+      const t0 = Date.now();
+      return new Promise((resolve) => {
+        const reqOpts: https.RequestOptions = {
+          method: 'GET',
+          hostname: probeUrl.hostname,
+          port: probeUrl.port || (isHttps ? 443 : 80),
+          path: probeUrl.pathname + probeUrl.search,
+          timeout: timeoutMs,
+          headers: { Accept: 'application/json', 'User-Agent': 'TGVPANEL-Controller-Probe/3.0' },
+        };
+        if (isHttps) {
+          reqOpts.rejectUnauthorized = rejectUnauthorized;
+        }
 
-      const mod = isHttps ? https : http;
-      const req = mod.request(reqOpts, (res) => {
-        let body = '';
-        res.on('data', (c) => {
-          if (body.length < 4096) body += c.toString('utf8');
-        });
-        res.on('end', () => {
-          const latencyMs = Math.max(1, Date.now() - t0);
-          const status = res.statusCode || 0;
+        const mod = isHttps ? https : http;
+        const req = mod.request(reqOpts, (res) => {
           let tlsInfo: EndpointProbeResult['tls'] = null;
-          if (isHttps && res.socket instanceof tls.TLSSocket) {
-            const cert = res.socket.getPeerCertificate();
-            tlsInfo = {
-              authorized: res.socket.authorized,
-              authorizationError: res.socket.authorizationError
-                ? String(res.socket.authorizationError)
-                : null,
-              subjectCN: Array.isArray(cert?.subject?.CN)
-                ? cert.subject.CN[0] || null
-                : cert?.subject?.CN || null,
-              issuerCN: Array.isArray(cert?.issuer?.CN)
-                ? cert.issuer.CN[0] || null
-                : cert?.issuer?.CN || null,
-              validTo: cert?.valid_to || null,
-              protocol: res.socket.getProtocol() || null,
-            };
+          const sock: any = res.socket || req.socket;
+          if (isHttps && sock && typeof sock.getPeerCertificate === 'function') {
+            try {
+              const cert = sock.getPeerCertificate(true);
+              tlsInfo = {
+                authorized: Boolean(sock.authorized),
+                authorizationError: sock.authorizationError
+                  ? String(sock.authorizationError)
+                  : null,
+                subjectCN: Array.isArray(cert?.subject?.CN)
+                  ? cert.subject.CN[0] || null
+                  : cert?.subject?.CN || null,
+                issuerCN: Array.isArray(cert?.issuer?.CN)
+                  ? cert.issuer.CN[0] || null
+                  : cert?.issuer?.CN || null,
+                validTo: cert?.valid_to || null,
+                protocol: typeof sock.getProtocol === 'function' ? sock.getProtocol() || null : null,
+                fingerprintSha256:
+                  cert?.raw && cert.raw.length > 0
+                    ? crypto.createHash('sha256').update(cert.raw).digest('hex')
+                    : null,
+                certPem:
+                  cert?.raw && cert.raw.length > 0 ? derToPemCertificate(cert.raw) : null,
+              };
+            } catch {
+              tlsInfo = null;
+            }
           }
-          const lower = body.toLowerCase();
-          const agentDetected =
-            status === 401 ||
-            status === 200 ||
-            lower.includes('hmac') ||
-            lower.includes('node') ||
-            lower.includes('tgvpanel') ||
-            lower.includes('capabilities');
 
-          resolve({
-            reachable: true,
-            url: parsed.origin,
-            protocol: isHttps ? 'https' : 'http',
-            latencyMs,
-            httpStatus: status,
-            agentDetected,
-            tls: tlsInfo,
-            message:
-              status === 401
-                ? `Reachable in ${latencyMs}ms — TGVPANEL Node Agent listening (HMAC authentication enforced).`
-                : status === 200
-                  ? `Reachable in ${latencyMs}ms — Health endpoint responded HTTP 200.`
-                  : `Endpoint reachable in ${latencyMs}ms (HTTP ${status}).`,
+          let body = '';
+          res.on('data', (c) => {
+            if (body.length < 4096) body += c.toString('utf8');
+          });
+          res.on('end', () => {
+            const latencyMs = Math.max(1, Date.now() - t0);
+            resolve({
+              ok: true,
+              latencyMs,
+              status: res.statusCode || 0,
+              body,
+              headers: res.headers,
+              tlsInfo,
+            });
           });
         });
-      });
 
-      req.on('timeout', () => {
-        req.destroy(new Error(`Connection timed out after ${timeoutMs}ms`));
-      });
-
-      req.on('error', (err: any) => {
-        const latencyMs = Math.max(1, Date.now() - t0);
-        const code = err?.code ? ` (${err.code})` : '';
-        const hint =
-          isHttps && verifySsl && /self[- ]signed|unable to verify|cert/i.test(String(err?.message || ''))
-            ? ' Tip: uncheck "Verify TLS Cert" if this node uses a self-signed certificate.'
-            : '';
-        resolve({
-          reachable: false,
-          url: parsed.origin,
-          protocol: isHttps ? 'https' : 'http',
-          latencyMs,
-          httpStatus: null,
-          agentDetected: false,
-          tls: null,
-          message: `Unreachable${code}: ${err?.message || 'Connection failed'}.${hint}`,
+        req.on('timeout', () => {
+          req.destroy(new Error(`Connection timed out after ${timeoutMs}ms`));
         });
-      });
 
-      req.end();
-    });
+        req.on('error', (err: any) => {
+          resolve({
+            ok: false,
+            latencyMs: Math.max(1, Date.now() - t0),
+            status: null,
+            body: '',
+            headers: {},
+            tlsInfo: null,
+            err,
+          });
+        });
+
+        req.end();
+      });
+    };
+
+    let primary = await executeSingleProbe('/api/v1/ping', verifySsl);
+    if (primary.ok && primary.status === 404) {
+      primary = await executeSingleProbe('/api/v1/health', verifySsl);
+    }
+
+    const extractClockSkew = (body: string, headers: http.IncomingHttpHeaders): number | null => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const hdr = headers['x-tgvpanel-agent-time'];
+      if (hdr && /^\d+$/.test(String(hdr))) {
+        return Number(hdr) - nowSec;
+      }
+      try {
+        const j = JSON.parse(body);
+        if (typeof j?.agentTimeEpochSec === 'number') {
+          return j.agentTimeEpochSec - nowSec;
+        }
+      } catch {
+        // ignore
+      }
+      return null;
+    };
+
+    if (primary.ok) {
+      const status = primary.status || 0;
+      const lower = primary.body.toLowerCase();
+      const agentDetected =
+        status === 200 ||
+        status === 401 ||
+        lower.includes('tgvpanel') ||
+        lower.includes('hmac') ||
+        lower.includes('node') ||
+        lower.includes('capabilities');
+      const clockSkewSec = extractClockSkew(primary.body, primary.headers);
+      const skewWarn =
+        clockSkewSec !== null && Math.abs(clockSkewSec) > 240
+          ? ` Warning: clock skew is ${clockSkewSec}s (sync NTP!).`
+          : '';
+
+      return {
+        reachable: true,
+        url: cleanBaseUrl,
+        protocol: isHttps ? 'https' : 'http',
+        latencyMs: primary.latencyMs,
+        httpStatus: status,
+        agentDetected,
+        clockSkewSec,
+        tls: primary.tlsInfo,
+        message:
+          (agentDetected
+            ? `Reachable in ${primary.latencyMs}ms — TGVPANEL Node Agent online & ready.`
+            : `Endpoint reachable in ${primary.latencyMs}ms (HTTP ${status}).`) + skewWarn,
+      };
+    }
+
+    // If strict TLS failed on a self-signed certificate, inspect with rejectUnauthorized=false
+    // so we can confirm the Node Agent is alive and return its PEM for 1-click pinning!
+    const errCode = String(primary.err?.code || '');
+    const errMsg = String(primary.err?.message || '');
+    if (
+      isHttps &&
+      verifySsl &&
+      (errCode === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+        errCode === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+        errCode === 'ERR_TLS_CERT_ALTNAME_INVALID' ||
+        errCode === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+        /self[- ]signed|cert/i.test(errMsg))
+    ) {
+      const inspect = await executeSingleProbe('/api/v1/ping', false);
+      if (inspect.ok) {
+        const lower = inspect.body.toLowerCase();
+        const agentDetected =
+          inspect.status === 200 ||
+          inspect.status === 401 ||
+          lower.includes('tgvpanel') ||
+          lower.includes('hmac');
+        const clockSkewSec = extractClockSkew(inspect.body, inspect.headers);
+        return {
+          reachable: false,
+          url: cleanBaseUrl,
+          protocol: 'https',
+          latencyMs: inspect.latencyMs,
+          httpStatus: inspect.status,
+          agentDetected,
+          selfSignedAgentDetected: agentDetected,
+          clockSkewSec,
+          tls: inspect.tlsInfo,
+          message: agentDetected
+            ? `TGVPANEL Node Agent is online (${inspect.latencyMs}ms) using a self-signed TLS certificate (${errCode || 'SELF_SIGNED'}). Click "Pin & Trust Self-Signed Cert" below or uncheck Strict CA Verify.`
+            : `HTTPS endpoint responded (${inspect.latencyMs}ms) with a self-signed TLS certificate (${errCode || 'SELF_SIGNED'}).`,
+        };
+      }
+    }
+
+    return {
+      reachable: false,
+      url: cleanBaseUrl,
+      protocol: isHttps ? 'https' : 'http',
+      latencyMs: primary.latencyMs,
+      httpStatus: null,
+      agentDetected: false,
+      tls: null,
+      message: `Unreachable: ${formatTransportError(primary.err, cleanBaseUrl, verifySsl)}`,
+    };
   }
 
   /**
@@ -742,7 +1530,8 @@ export class NodeManager {
       .sort((a, b) => Number(b.eligible) - Number(a.eligible) || b.score - a.score || a.nodeId - b.nodeId);
   }
 
-  private checkCircuitAllowed(nodeId: number): void {
+  private checkCircuitAllowed(nodeId: number, bypass = false): void {
+    if (bypass) return;
     const entry = this.circuits.get(nodeId);
     if (!entry || entry.state === 'closed') return;
     if (entry.state === 'open') {
@@ -751,7 +1540,7 @@ export class NodeManager {
         return;
       }
       throw new Error(
-        `Circuit breaker OPEN for node #${nodeId}: remote node is unreachable. Retrying after cooldown.`
+        `Circuit breaker OPEN for node #${nodeId}: remote node is unreachable. Click "Probe" or "Reset Circuit" to retry immediately.`
       );
     }
   }
@@ -760,20 +1549,80 @@ export class NodeManager {
     this.circuits.set(nodeId, { state: 'closed', failures: 0, openedAt: 0 });
   }
 
-  private async recordCircuitFailure(nodeId: number): Promise<void> {
+  private async recordCircuitFailure(
+    nodeId: number,
+    errorMessage?: string,
+    tripCircuit = true
+  ): Promise<void> {
     const prev = this.circuits.get(nodeId) || { state: 'closed', failures: 0, openedAt: 0 };
-    const failures = prev.failures + 1;
+    const failures = tripCircuit ? prev.failures + 1 : prev.failures;
     const state: 'closed' | 'open' =
-      failures >= this.failureThreshold ? 'open' : 'closed';
+      tripCircuit && failures >= this.failureThreshold ? 'open' : prev.state === 'open' && !tripCircuit ? 'open' : 'closed';
     this.circuits.set(nodeId, {
       state,
       failures,
-      openedAt: state === 'open' ? Date.now() : prev.openedAt,
+      openedAt: state === 'open' ? (prev.openedAt || Date.now()) : 0,
     });
+    const cleanErr = errorMessage ? String(errorMessage).slice(0, 500) : null;
     await this.db.run(
-      `UPDATE nodes SET status = 'offline', circuit_state = ?, consecutive_failures = ?, updated_at = datetime('now') WHERE id = ?`,
-      [state, failures, nodeId]
+      `UPDATE nodes
+       SET status = 'offline',
+           circuit_state = ?,
+           consecutive_failures = ?,
+           last_error = COALESCE(?, last_error),
+           last_error_at = CASE WHEN ? IS NOT NULL THEN datetime('now') ELSE last_error_at END,
+           updated_at = datetime('now')
+       WHERE id = ?`,
+      [state, failures, cleanErr, cleanErr, nodeId]
     );
+  }
+
+  private buildTlsOptionsForNode(
+    node: NodeRecord,
+    creds: {
+      tls_ca_pem?: string | null;
+      tls_client_cert_pem?: string | null;
+      tls_client_key_enc?: string | null;
+    }
+  ): {
+    rejectUnauthorized: boolean;
+    ca?: string;
+    cert?: string;
+    key?: string;
+    checkServerIdentity?: typeof tls.checkServerIdentity;
+  } {
+    const out: {
+      rejectUnauthorized: boolean;
+      ca?: string;
+      cert?: string;
+      key?: string;
+      checkServerIdentity?: typeof tls.checkServerIdentity;
+    } = {
+      rejectUnauthorized: Boolean(node.verify_ssl),
+    };
+
+    if (creds.tls_ca_pem) {
+      out.ca = creds.tls_ca_pem;
+      const pinnedPrints = extractPemSha256Fingerprints(creds.tls_ca_pem);
+      if (pinnedPrints.size > 0) {
+        out.checkServerIdentity = (hostname: string, cert: tls.PeerCertificate) => {
+          if (cert?.raw && cert.raw.length > 0) {
+            const leafSha = crypto.createHash('sha256').update(cert.raw).digest('hex');
+            if (pinnedPrints.has(leafSha)) {
+              return undefined;
+            }
+          }
+          return tls.checkServerIdentity(hostname, cert);
+        };
+      }
+    }
+
+    if (creds.tls_client_cert_pem && creds.tls_client_key_enc) {
+      out.cert = creds.tls_client_cert_pem;
+      out.key = decryptSecret(creds.tls_client_key_enc);
+    }
+
+    return out;
   }
 
   public async requestRemoteNode<T = any>(
@@ -781,9 +1630,10 @@ export class NodeManager {
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     pathWithQuery: string,
     body?: unknown,
-    timeoutMs = 30_000
+    timeoutMs = 30_000,
+    options?: { bypassCircuit?: boolean }
   ): Promise<T> {
-    this.checkCircuitAllowed(nodeId);
+    this.checkCircuitAllowed(nodeId, Boolean(options?.bypassCircuit));
 
     const node = await this.getNodeById(nodeId);
     if (!node) throw new Error(`Node #${nodeId} not found.`);
@@ -805,18 +1655,25 @@ export class NodeManager {
 
     const rawApiKey = decryptSecret(creds.api_key_enc);
     const hmacSecret = decryptSecret(creds.hmac_secret_enc);
+    if (!rawApiKey || !hmacSecret) {
+      const msg = `Credentials for node #${nodeId} cannot be decrypted with current .tgvpanel-secret. Rotate credentials in Node Settings.`;
+      await this.recordCircuitFailure(nodeId, msg, false);
+      throw new Error(msg);
+    }
+
     const rawBody = body !== undefined ? JSON.stringify(body) : '';
+    const targetUrl = buildAgentTargetUrl(node.url, pathWithQuery);
+    const fullPathWithQuery = targetUrl.pathname + targetUrl.search;
 
     const signed = signAgentRequest({
       nodeId,
       apiKey: rawApiKey,
       hmacSecret,
       method,
-      pathWithQuery,
+      pathWithQuery: fullPathWithQuery,
       bodyBuffer: rawBody,
     });
 
-    const targetUrl = new URL(pathWithQuery, node.url);
     const isHttps = targetUrl.protocol === 'https:';
 
     return new Promise<T>((resolve, reject) => {
@@ -824,7 +1681,7 @@ export class NodeManager {
         method,
         hostname: targetUrl.hostname,
         port: targetUrl.port || (isHttps ? 443 : 80),
-        path: targetUrl.pathname + targetUrl.search,
+        path: fullPathWithQuery,
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
@@ -836,12 +1693,7 @@ export class NodeManager {
       };
 
       if (isHttps) {
-        reqOpts.rejectUnauthorized = Boolean(node.verify_ssl);
-        if (creds.tls_ca_pem) reqOpts.ca = creds.tls_ca_pem;
-        if (creds.tls_client_cert_pem && creds.tls_client_key_enc) {
-          reqOpts.cert = creds.tls_client_cert_pem;
-          reqOpts.key = decryptSecret(creds.tls_client_key_enc);
-        }
+        Object.assign(reqOpts, this.buildTlsOptionsForNode(node, creds));
       }
 
       const transport = isHttps ? https : http;
@@ -850,10 +1702,17 @@ export class NodeManager {
         res.on('data', (chunk) => {
           respData += chunk.toString('utf8');
         });
-        res.on('end', () => {
+        res.on('end', async () => {
           const code = res.statusCode || 500;
           if (code >= 200 && code < 300) {
             this.recordCircuitSuccess(nodeId);
+            if (node.last_error) {
+              this.db
+                .run(`UPDATE nodes SET last_error = NULL, last_error_at = NULL WHERE id = ?`, [
+                  nodeId,
+                ])
+                .catch(() => undefined);
+            }
             try {
               resolve((respData ? JSON.parse(respData) : {}) as T);
             } catch {
@@ -867,6 +1726,12 @@ export class NodeManager {
             } catch {
               if (respData) errMsg = respData.slice(0, 300);
             }
+            // Auth failures (401/403) should surface clearly on the node without opening transport circuit
+            if (code === 401 || code === 403) {
+              await this.recordCircuitFailure(nodeId, `Auth HTTP ${code}: ${errMsg}`, false).catch(
+                () => undefined
+              );
+            }
             reject(new Error(errMsg));
           }
         });
@@ -876,9 +1741,14 @@ export class NodeManager {
         req.destroy(new Error(`Remote node #${nodeId} request timed out after ${timeoutMs}ms`));
       });
 
-      req.on('error', async (err) => {
-        await this.recordCircuitFailure(nodeId).catch(() => undefined);
-        reject(err);
+      req.on('error', async (err: any) => {
+        const friendly = formatTransportError(err, node.url, Boolean(node.verify_ssl));
+        const isTlsConfigErr =
+          /TLS self-signed|TLS certificate|TLS handshake|Protocol mismatch/i.test(friendly);
+        await this.recordCircuitFailure(nodeId, friendly, !isTlsConfigErr).catch(() => undefined);
+        const wrapped = new Error(friendly);
+        (wrapped as any).code = err?.code;
+        reject(wrapped);
       });
 
       if (rawBody) {
@@ -900,32 +1770,92 @@ export class NodeManager {
     const creds = await this.db.get<{
       api_key_enc: string;
       hmac_secret_enc: string;
-    }>(`SELECT api_key_enc, hmac_secret_enc FROM node_credentials WHERE node_id = ?`, [nodeId]);
+      tls_ca_pem: string | null;
+      tls_client_cert_pem: string | null;
+      tls_client_key_enc: string | null;
+    }>(`SELECT * FROM node_credentials WHERE node_id = ?`, [nodeId]);
     if (!creds) throw new Error(`Credentials missing for node #${nodeId}.`);
 
     const rawApiKey = decryptSecret(creds.api_key_enc);
     const hmacSecret = decryptSecret(creds.hmac_secret_enc);
+    if (!rawApiKey || !hmacSecret) {
+      throw new Error(`Unable to decrypt credentials for node #${nodeId}.`);
+    }
+
+    const httpTarget = buildAgentTargetUrl(node.url, wsPath);
     const signed = signAgentRequest({
       nodeId,
       apiKey: rawApiKey,
       hmacSecret,
       method: 'GET',
-      pathWithQuery: wsPath,
+      pathWithQuery: httpTarget.pathname,
       bodyBuffer: '',
     });
 
-    const baseWsUrl = node.url.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
-    const urlObj = new URL(wsPath, baseWsUrl);
+    const wsUrl = new URL(httpTarget.toString());
+    wsUrl.protocol = httpTarget.protocol === 'https:' ? 'wss:' : 'ws:';
     for (const [k, v] of Object.entries(query)) {
-      urlObj.searchParams.set(k, String(v));
+      wsUrl.searchParams.set(k, String(v));
     }
 
-    return new WebSocket(urlObj.toString(), {
-      rejectUnauthorized: Boolean(node.verify_ssl),
-      headers: {
-        'X-HKVM-Node-Key': rawApiKey,
-        ...signed,
-      },
+    const tlsOpts =
+      httpTarget.protocol === 'https:'
+        ? this.buildTlsOptionsForNode(node, creds)
+        : { rejectUnauthorized: false };
+
+    return new Promise<WebSocket>((resolve, reject) => {
+      let settled = false;
+      const ws = new WebSocket(wsUrl.toString(), {
+        ...tlsOpts,
+        handshakeTimeout: 10_000,
+        headers: {
+          'X-HKVM-Node-Key': rawApiKey,
+          ...signed,
+        },
+      });
+
+      const finishErr = (msg: string) => {
+        if (settled) return;
+        settled = true;
+        try {
+          ws.terminate();
+        } catch {
+          // ignore
+        }
+        reject(new Error(msg));
+      };
+
+      ws.once('open', () => {
+        if (settled) return;
+        settled = true;
+        this.recordCircuitSuccess(nodeId);
+        resolve(ws);
+      });
+
+      ws.once('unexpected-response', (_req, res) => {
+        let body = '';
+        res.on('data', (c) => {
+          if (body.length < 2048) body += c.toString('utf8');
+        });
+        res.on('end', () => {
+          let detail = `Remote WebSocket upgrade rejected (HTTP ${res.statusCode || 500})`;
+          try {
+            const parsed = JSON.parse(body);
+            if (parsed?.error) detail = parsed.error;
+          } catch {
+            // keep default
+          }
+          finishErr(detail);
+        });
+      });
+
+      ws.once('error', (err: any) => {
+        finishErr(formatTransportError(err, node.url, Boolean(node.verify_ssl)));
+      });
     });
   }
+}
+
+function netIsIp(host: string): boolean {
+  return /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(':');
 }

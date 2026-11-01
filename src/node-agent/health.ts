@@ -7,6 +7,8 @@ export interface NodeHealthReport {
   hostname: string;
   uptimeSeconds: number;
   agentUptimeSeconds: number;
+  agentTimeEpochSec: number;
+  interactiveShellEnabled: boolean;
   timestamp: string;
   capabilities: HostCapabilities;
   warnings: string[];
@@ -17,7 +19,10 @@ export const AGENT_VERSION = '3.0.0';
 
 let cachedCapabilities: { data: HostCapabilities; expiresAt: number } | null = null;
 
-export async function getNodeHealthReport(forceRefresh = false): Promise<NodeHealthReport> {
+export async function getNodeHealthReport(
+  forceRefresh = false,
+  options?: { interactiveShellEnabled?: boolean }
+): Promise<NodeHealthReport> {
   const now = Date.now();
   if (forceRefresh || !cachedCapabilities || cachedCapabilities.expiresAt <= now) {
     const caps = await detectHostCapabilities();
@@ -39,13 +44,20 @@ export async function getNodeHealthReport(forceRefresh = false): Promise<NodeHea
     }
   }
 
+  const interactiveShellEnabled =
+    options?.interactiveShellEnabled ??
+    (process.env.TGVPANEL_ENABLE_NODE_SHELL === 'true' ||
+      process.env.HKVM_ENABLE_NODE_SHELL === 'true');
+
   return {
     status: 'online',
     agentVersion: AGENT_VERSION,
     hostname: os.hostname(),
     uptimeSeconds: Math.floor(os.uptime()),
     agentUptimeSeconds: Math.floor((now - AGENT_STARTED_AT) / 1000),
-    timestamp: new Date().toISOString(),
+    agentTimeEpochSec: Math.floor(now / 1000),
+    interactiveShellEnabled,
+    timestamp: new Date(now).toISOString(),
     capabilities,
     warnings,
   };

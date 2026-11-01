@@ -2,6 +2,7 @@ import fs from 'fs';
 import { UnifiedDatabase } from '../../db/database';
 import { NodeManager } from '../nodes/NodeClient';
 import { StorageManager } from '../storage/StorageManager';
+import { NetworkManager } from '../network/NetworkManager';
 import { LXCAdapter } from '../virtualization/LXCAdapter';
 
 export interface MigrationJobRecord {
@@ -40,17 +41,20 @@ export class MigrationManager {
   private nodeManager: NodeManager;
   private storageManager: StorageManager;
   private lxcAdapter: LXCAdapter;
+  private networkManager?: NetworkManager;
 
   constructor(
     db: UnifiedDatabase,
     nodeManager: NodeManager,
     storageManager: StorageManager,
-    lxcAdapter: LXCAdapter
+    lxcAdapter: LXCAdapter,
+    networkManager?: NetworkManager
   ) {
     this.db = db;
     this.nodeManager = nodeManager;
     this.storageManager = storageManager;
     this.lxcAdapter = lxcAdapter;
+    this.networkManager = networkManager;
   }
 
   public async listMigrations(): Promise<MigrationJobRecord[]> {
@@ -138,6 +142,21 @@ export class MigrationManager {
     }
     if (targetNode.supports_lxc === 0) {
       throw new Error(`Target node "${targetNode.name}" does not have LXC enabled.`);
+    }
+
+    // Live preflight probe BEFORE stopping the running container on sourceNode
+    if (!sourceNode.is_local) {
+      await this.nodeManager.checkNodeHealthAndStats(sourceNode.id, { bypassCircuit: true });
+    }
+    if (!targetNode.is_local) {
+      const targetProbe = await this.nodeManager.checkNodeHealthAndStats(targetNode.id, {
+        bypassCircuit: true,
+      });
+      if (!targetProbe.health.capabilities.lxcAvailable) {
+        throw new Error(
+          `Target node "${targetNode.name}" does not currently have native LXC utilities installed.`
+        );
+      }
     }
 
     const capCheck = await this.storageManager.verifyCapacityAvailable(
@@ -261,6 +280,15 @@ export class MigrationManager {
         ]
       );
       await this.lxcAdapter.syncRegistryRow(params.lxcId);
+
+      // Relocate any NAT port-forwarding rules attached to this container onto targetNode
+      if (this.networkManager) {
+        const effectiveGuestIp =
+          params.targetIpv4 !== undefined ? params.targetIpv4 : lxcRow.ip_address;
+        await this.networkManager
+          .relocateInstancePortForwards('lxc', params.lxcId, targetNode.id, effectiveGuestIp)
+          .catch(() => undefined);
+      }
 
       // Stage 7: Clean up source copy AFTER target verified & DB committed
       if (sourceNode.is_local) {

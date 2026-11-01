@@ -1,14 +1,18 @@
 import fs from 'fs';
 import path from 'path';
 import { UnifiedDatabase } from '../../db/database';
+import { NodeManager } from '../nodes/NodeClient';
 
 /**
- * Unified Storage Pool & LXC OS Template Manager for HKVM V3.
- * Supports directory, RAW, QCOW2, LVM, ZFS, and Btrfs storage pools plus
- * centralized LXC OS template catalog management.
+ * Unified Storage Pool & LXC OS Template Manager for TGVPANEL V3.
+ * Supports directory, RAW, QCOW2, LVM, ZFS, and Btrfs storage pools across both
+ * local and remote Node Agents, plus centralized LXC OS template catalog management.
  */
 export class StorageManager {
-  constructor(private readonly db: UnifiedDatabase) {}
+  constructor(
+    private readonly db: UnifiedDatabase,
+    private readonly nodeManager?: NodeManager
+  ) {}
 
   public async listPools(): Promise<any[]> {
     return this.db.all(
@@ -62,27 +66,52 @@ export class StorageManager {
         }
       }
 
-      const statTarget = isLocal
-        ? this.resolveNearestExistingAncestor(effectivePath)
-        : fs.existsSync(effectivePath)
-          ? effectivePath
-          : null;
-
-      if (statTarget) {
+      if (isLocal) {
+        const statTarget = this.resolveNearestExistingAncestor(effectivePath);
+        if (statTarget) {
+          try {
+            const st = fs.statfsSync(statTarget);
+            const totalBytes = Number(st.blocks) * Number(st.bsize);
+            const availBytes = Number(st.bavail) * Number(st.bsize);
+            const usedBytes = Math.max(0, totalBytes - availBytes);
+            const poolState = fs.existsSync(effectivePath) ? 'online' : 'ready';
+            await this.db.run(
+              `UPDATE storage_pools
+               SET total_bytes = ?, used_bytes = ?, available_bytes = ?, status = ?, updated_at = datetime('now')
+               WHERE id = ?`,
+              [totalBytes, usedBytes, availBytes, poolState, p.id]
+            );
+          } catch {
+            // Retain cached values when filesystem statfs is restricted
+          }
+        }
+      } else if (this.nodeManager) {
         try {
-          const st = fs.statfsSync(statTarget);
-          const totalBytes = Number(st.blocks) * Number(st.bsize);
-          const availBytes = Number(st.bavail) * Number(st.bsize);
-          const usedBytes = Math.max(0, totalBytes - availBytes);
-          const poolState = fs.existsSync(effectivePath) ? 'online' : 'ready';
+          const remote = await this.nodeManager.requestRemoteNode<{
+            exists: boolean;
+            totalBytes: number;
+            availableBytes: number;
+            usedBytes: number;
+          }>(Number(p.node_id), 'POST', '/api/v1/storage/statfs', { path: effectivePath }, 12_000);
+          const poolState = remote.exists ? 'online' : 'ready';
           await this.db.run(
             `UPDATE storage_pools
              SET total_bytes = ?, used_bytes = ?, available_bytes = ?, status = ?, updated_at = datetime('now')
              WHERE id = ?`,
-            [totalBytes, usedBytes, availBytes, poolState, p.id]
+            [
+              Number(remote.totalBytes || 0),
+              Number(remote.usedBytes || 0),
+              Number(remote.availableBytes || 0),
+              poolState,
+              p.id,
+            ]
           );
         } catch {
-          // Retain cached values when filesystem statfs is restricted
+          await this.db
+            .run(`UPDATE storage_pools SET status = 'offline', updated_at = datetime('now') WHERE id = ?`, [
+              p.id,
+            ])
+            .catch(() => undefined);
         }
       }
     }
@@ -113,12 +142,20 @@ export class StorageManager {
       `SELECT is_local FROM nodes WHERE id = ?`,
       [nodeId]
     );
-    if (nodeId === 1 || Number(nodeRow?.is_local || 0) === 1) {
+    const isLocal = nodeId === 1 || Number(nodeRow?.is_local || 0) === 1;
+    if (isLocal) {
       try {
         fs.mkdirSync(cleanPath, { recursive: true });
       } catch {
         // Directory may require root or manual mount; statfs will probe nearest ancestor
       }
+    } else if (this.nodeManager) {
+      await this.nodeManager
+        .requestRemoteNode(nodeId, 'POST', '/api/v1/storage/statfs', {
+          path: cleanPath,
+          ensureDir: true,
+        })
+        .catch(() => undefined);
     }
 
     const ins = await this.db.run(

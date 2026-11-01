@@ -1,4 +1,6 @@
+import crypto from 'crypto';
 import fs from 'fs';
+import path from 'path';
 import { UnifiedDatabase } from '../../db/database';
 import { NodeManager } from '../nodes/NodeClient';
 import { VirtualizationManager } from '../virtualization/VirtualizationManager';
@@ -285,27 +287,81 @@ export class BackupSnapshotManager {
     const row = await this.virt.lxc.getRawLxcRow(Number(bkp.instance_ref_id));
     if (!row) throw new Error(`LXC container #${bkp.instance_ref_id} not found.`);
 
+    const backupOnDifferentNode =
+      Boolean(bkp.node_id) && Number(bkp.node_id) !== Number(row.node_id);
+
+    let crossNodeBase64: string | null = null;
+    if (backupOnDifferentNode) {
+      if (Number(bkp.is_local || 0) === 1 || Number(bkp.node_id) === 1) {
+        if (!fs.existsSync(bkp.file_path)) {
+          throw new Error('Backup archive file no longer exists on source node.');
+        }
+        crossNodeBase64 = fs.readFileSync(bkp.file_path).toString('base64');
+      } else {
+        const dl = await this.nodeManager.requestRemoteNode<{
+          archiveBase64: string;
+          checksumSha256: string;
+        }>(
+          Number(bkp.node_id),
+          'POST',
+          '/api/v1/backups/download',
+          {
+            filePath: bkp.file_path,
+            expectedSha256: bkp.checksum_sha256 || undefined,
+          },
+          600_000
+        );
+        crossNodeBase64 = dl.archiveBase64;
+      }
+    }
+
     let postState = 'stopped';
     if (row.is_local) {
-      const before = await this.nodeManager.localRuntime.containerManager.inspectContainer(
-        row.container_name
-      );
-      const wasRunning = before.state === 'running' || before.state === 'frozen';
-      if (wasRunning) {
-        await this.nodeManager.localRuntime.containerManager.stopContainer(row.container_name, false);
+      let localTargetFile = String(bkp.file_path);
+      let tempLocalFile: string | null = null;
+      if (crossNodeBase64) {
+        tempLocalFile = this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(
+          path.join(
+            this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
+            `crossnode_restore_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
+          )
+        );
+        fs.mkdirSync(path.dirname(tempLocalFile), { recursive: true });
+        fs.writeFileSync(tempLocalFile, Buffer.from(crossNodeBase64, 'base64'), { mode: 0o600 });
+        localTargetFile = tempLocalFile;
       }
-      await this.nodeManager.localRuntime.snapshotManager.restoreTarBackup(
-        bkp.file_path,
-        bkp.checksum_sha256 || undefined,
-        row.container_name
-      );
-      if (wasRunning) {
-        await this.nodeManager.localRuntime.containerManager.startContainer(row.container_name);
+      try {
+        const before = await this.nodeManager.localRuntime.containerManager.inspectContainer(
+          row.container_name
+        );
+        const wasRunning = before.state === 'running' || before.state === 'frozen';
+        if (wasRunning) {
+          await this.nodeManager.localRuntime.containerManager.stopContainer(
+            row.container_name,
+            false
+          );
+        }
+        await this.nodeManager.localRuntime.snapshotManager.restoreTarBackup(
+          localTargetFile,
+          bkp.checksum_sha256 || undefined,
+          row.container_name
+        );
+        if (wasRunning) {
+          await this.nodeManager.localRuntime.containerManager.startContainer(row.container_name);
+        }
+        const after = await this.nodeManager.localRuntime.containerManager.inspectContainer(
+          row.container_name
+        );
+        postState = after.state === 'running' ? 'running' : 'stopped';
+      } finally {
+        if (tempLocalFile && fs.existsSync(tempLocalFile)) {
+          try {
+            fs.unlinkSync(tempLocalFile);
+          } catch {
+            // ignore
+          }
+        }
       }
-      const after = await this.nodeManager.localRuntime.containerManager.inspectContainer(
-        row.container_name
-      );
-      postState = after.state === 'running' ? 'running' : 'stopped';
     } else {
       const resp = await this.nodeManager.requestRemoteNode<{
         success: boolean;
@@ -314,10 +370,15 @@ export class BackupSnapshotManager {
         row.node_id,
         'POST',
         `/api/v1/containers/${encodeURIComponent(row.container_name)}/backups/restore`,
-        {
-          filePath: bkp.file_path,
-          expectedSha256: bkp.checksum_sha256 || undefined,
-        },
+        crossNodeBase64
+          ? {
+              archiveBase64: crossNodeBase64,
+              expectedSha256: bkp.checksum_sha256 || undefined,
+            }
+          : {
+              filePath: bkp.file_path,
+              expectedSha256: bkp.checksum_sha256 || undefined,
+            },
         900_000
       );
       postState = resp.container?.state === 'running' ? 'running' : 'stopped';

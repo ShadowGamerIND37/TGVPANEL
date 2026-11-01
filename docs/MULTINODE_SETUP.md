@@ -117,14 +117,36 @@ Once started (`sudo systemctl status tgvpanel`), open `http://<SERVER_IP>:8080`,
 
 ## 4. Multi-Node Setup — Adding a Remote Compute Node (Step-by-Step)
 
-> **Fastest Interactive Setup (`menu.sh` Option 2):**
-> On any fresh remote server, you can automate Steps 2–6 below with one command:
-> ```bash
-> curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && sudo bash menu.sh
-> ```
-> Choose **`2) Auto Configure Node`** — it installs Git, Node.js 20+, LXC/LXCFS, clones TGVPANEL, asks for your Node credentials (or auto-registers via Controller URL + Admin API token), generates TLS certificates, configures UFW/Firewalld, and keeps `tgvpanel-node-agent` online **24/7**!
+### Method A (Recommended): 1-Command Auto-Join (`menu.sh --join`)
 
-Below is the complete step-by-step reference for what happens under the hood (or if configuring manually).
+The fastest and zero-error way to connect a remote server:
+
+1. On your **TGVPANEL Controller**, open **Admin → Nodes** (`/admin/nodes`).
+2. Fill in **Node Name** (e.g. `eu-fra-node-02`) and **IPv4 Address** (e.g. `203.0.113.10`), then click **Register Node** *(or click **Pair** on any existing remote node)*.
+3. Copy the **1-Command Auto-Join** line shown in the green Pairing banner and run it on your **remote Linux server** as `root`:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && chmod +x menu.sh && sudo bash menu.sh --join "https://YOUR_PANEL_URL" "tgv_join_YOUR_SINGLE_USE_TOKEN"
+   ```
+4. That single command automatically:
+   - Synchronizes NTP system clock (`±300s` HMAC guard),
+   - Installs Node.js 20+, LXC/LXCFS, `iproute2`, `iptables`, `openssl`, and compiles TGVPANEL,
+   - Generates a 4096-bit SAN X.509 TLS certificate at `/etc/tgvpanel/ssl/agent.crt`,
+   - Redeems the single-use Join Token with your Controller and **cryptographically pins the node's TLS certificate (`TLS PINNED`)**,
+   - Writes `/opt/tgvpanel/.env` (`0600`) with `TGVPANEL_CONTROLLER_URL` active push-heartbeats,
+   - Opens TCP `8443` in UFW/Firewalld, starts `tgvpanel-node-agent` **24/7**, and flips the node **ONLINE** in your Panel within seconds!
+
+### Method B: Interactive Menu Wizard (`menu.sh` Option 2)
+
+Run on any fresh remote Ubuntu / Debian / AlmaLinux / Rocky server:
+```bash
+curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && sudo bash menu.sh
+```
+Choose **`2) Auto Configure Node`** — you can pair via:
+- **`1) Instant Pair via 1-Time Join Token`**,
+- **`2) Paste Bootstrap Credentials (.env)`**, or
+- **`3) Auto-Register via Controller URL + Admin API Token (Bearer PAT)`**.
+
+Below is the complete manual reference for what happens under the hood (Method C).
 
 ---
 
@@ -140,11 +162,11 @@ Below is the complete step-by-step reference for what happens under the hood (or
      - Public network (HTTPS): `https://203.0.113.10:8443` *(or `https://fra02.example.com:8443`)*
      - Private WireGuard / internal VLAN (HTTP): `http://10.10.0.2:5055`
    - **Location**: Datacenter label, e.g. `Frankfurt, DE`
-   - **Verify TLS Cert**:
-     - Leave **checked** if using Let's Encrypt / valid CA certificate (or plain HTTP over WireGuard).
-     - **Uncheck** if using a self-signed certificate generated via `openssl` (Step 3A below).
+   - **Verify TLS Cert & Certificate Pinning**:
+     - Leave **checked** if using Let's Encrypt / valid CA certificate, or click **Test Reachability → Pin & Trust Self-Signed Cert** (or **Trust TLS** after creation) to cryptographically pin a self-signed certificate!
+     - Or **uncheck** if using an unpinned self-signed certificate.
 4. Click **Register Node**.
-5. **Copy the Bootstrap Credentials** displayed on screen right away (they are shown once at creation time):
+5. **Copy the Auto-Join Command or Bootstrap Credentials** displayed on screen (you can also re-open them anytime via the **Pair** button on any remote node row):
 
 ```ini
 # Remote Node Bootstrap Credentials — paste into /opt/tgvpanel/.env on the remote node:
@@ -153,6 +175,7 @@ TGVPANEL_AGENT_HOST=0.0.0.0
 TGVPANEL_AGENT_PORT=8443
 TGVPANEL_NODE_API_KEY=tgv_node_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TGVPANEL_NODE_HMAC_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+TGVPANEL_CONTROLLER_URL=https://panel.example.com
 ```
 
 <details>
