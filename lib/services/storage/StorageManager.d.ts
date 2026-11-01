@@ -8,13 +8,15 @@ export declare class StorageManager {
     private readonly db;
     constructor(db: UnifiedDatabase);
     listPools(): Promise<any[]>;
+    private resolveNearestExistingAncestor;
     syncPoolCapacities(): Promise<any[]>;
     createPool(input: {
         nodeId?: number;
         name: string;
         poolType?: string;
         engineScope?: string;
-        path: string;
+        path?: string;
+        poolPath?: string;
         overcommitRatio?: number;
     }): Promise<any>;
     deletePool(poolId: number): Promise<void>;

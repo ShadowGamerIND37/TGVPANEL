@@ -794,6 +794,35 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const sysctlDiag = await adminClient.request('POST', '/api/v1/nodes/1/diagnostics/sysctl_net', {});
       assert.strictEqual(sysctlDiag.status, 200, `sysctl_net diag failed: ${sysctlDiag.text}`);
       assert.strictEqual(sysctlDiag.json.command, 'sysctl net.ipv4.ip_forward');
+
+      // Verify upgraded Nodes, Storage, Monitoring & License Studio views + live statfs/sample behavior
+      const [nodesHtml, storageHtml, monHtml, licHtml] = await Promise.all([
+        adminClient.request('GET', '/admin/nodes'),
+        adminClient.request('GET', '/admin/storage'),
+        adminClient.request('GET', '/admin/monitoring'),
+        adminClient.request('GET', '/admin/license'),
+      ]);
+      assert.strictEqual(nodesHtml.status, 200);
+      assert.ok(nodesHtml.text.includes('nodesKpiGrid'), 'Expected Nodes KPI Strip');
+      assert.strictEqual(storageHtml.status, 200);
+      assert.ok(storageHtml.text.includes('storageKpiGrid'), 'Expected Storage KPI Strip');
+      assert.strictEqual(monHtml.status, 200);
+      assert.ok(monHtml.text.includes('monChartCompute'), 'Expected Monitoring SVG Telemetry Charts');
+      assert.strictEqual(licHtml.status, 200);
+      assert.ok(licHtml.text.includes('lic-hero-banner'), 'Expected License Edition Hero Banner');
+
+      const syncPoolsRes = await adminClient.request('GET', '/api/v1/storage/pools?sync=1');
+      assert.strictEqual(syncPoolsRes.status, 200);
+      const localKvmPool = (syncPoolsRes.json.pools || []).find((p) => p.name === 'local-kvm');
+      assert.ok(localKvmPool && Number(localKvmPool.total_bytes) > 0, 'Expected non-zero statfs capacity on local-kvm pool');
+
+      const beforeSamples = await adminClient.request('GET', '/api/v1/nodes/1/metrics?hours=1');
+      await adminClient.request('POST', '/api/v1/nodes/1/check', {});
+      const afterSamples = await adminClient.request('GET', '/api/v1/nodes/1/metrics?hours=1');
+      assert.ok(
+        (afterSamples.json.history || []).length >= (beforeSamples.json.history || []).length + 1,
+        'Expected POST /api/v1/nodes/1/check to record an immediate telemetry sample'
+      );
     });
 
     // 14. End-to-End LXC VPS Provisioning, Root-Owned Confinement, Lifecycle, Resize, Credentials & Host Sync
