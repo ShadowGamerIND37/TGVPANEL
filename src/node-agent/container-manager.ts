@@ -76,6 +76,7 @@ export interface LxcContainerRuntimeInfo {
   pid: number | null;
   ips: string[];
   cpuUseSeconds: number;
+  cpuCoresUsed?: number;
   memoryBytes: number;
   swapBytes: number;
   rxBytes: number;
@@ -700,8 +701,14 @@ export function resolveLiveContainerCgroupV2Dir(pid: number | null | undefined):
   try {
     if (!pid || pid <= 1) return null;
     const cgFile = `/proc/${pid}/cgroup`;
-    if (!fs.existsSync(cgFile)) return null;
-    const raw = fs.readFileSync(cgFile, 'utf8');
+    let raw = '';
+    if (fs.existsSync(cgFile)) {
+      raw = fs.readFileSync(cgFile, 'utf8');
+    } else if (privilegedFs.existsSync(cgFile)) {
+      raw = privilegedFs.readTextSync(cgFile);
+    } else {
+      return null;
+    }
     for (const line of raw.split('\n')) {
       const trimmed = line.trim();
       if (!trimmed.startsWith('0::')) continue;
@@ -716,6 +723,272 @@ export function resolveLiveContainerCgroupV2Dir(pid: number | null | undefined):
     // ignore
   }
   return null;
+}
+
+function isCgroupV2SubtreePopulated(cgDir: string): boolean {
+  try {
+    const eventsFile = path.join(cgDir, 'cgroup.events');
+    if (fs.existsSync(eventsFile)) {
+      const txt = fs.readFileSync(eventsFile, 'utf8');
+      const m = txt.match(/^populated\s+(\d+)/m);
+      if (m) return m[1] !== '0';
+    }
+    const procsFile = path.join(cgDir, 'cgroup.procs');
+    if (fs.existsSync(procsFile)) {
+      return fs.readFileSync(procsFile, 'utf8').trim().length > 0;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
+/**
+ * Resolves a running container's root payload cgroup v2 directory (e.g.
+ * `/sys/fs/cgroup/hkvm.lxc/lxc.payload.<name>`), stripping nested guest `systemd`
+ * child cgroups such as `/init.scope` so `cpu.stat`, `memory.current`, `memory.max`,
+ * and `cpu.max` reflect the entire container (`init.scope` + `system.slice` + `user.slice`
+ * + nested Docker) rather than only idle PID 1. Returns `null` if the container shares
+ * the host/daemon cgroup on an undelegated host.
+ */
+export function resolveContainerPayloadCgroupV2Dir(
+  containerName: string,
+  pid?: number | null
+): string | null {
+  try {
+    if (!fs.existsSync('/sys/fs/cgroup/cgroup.controllers')) {
+      return null;
+    }
+    const safeName = SafeValidators.containerName(containerName);
+    const hostBaseDir = resolveHostBaseCgroupV2Dir();
+    const ownCgDir = resolveLiveContainerCgroupV2Dir(process.pid);
+
+    const isSharedHostOrDaemonCgroup = (dir: string): boolean => {
+      if (
+        dir === '/sys/fs/cgroup' ||
+        dir === hostBaseDir ||
+        dir === path.join(hostBaseDir, 'init.scope') ||
+        dir === path.join(hostBaseDir, 'hkvm.host') ||
+        dir === path.join(hostBaseDir, 'hkvm.lxc') ||
+        dir === path.join(hostBaseDir, 'system.slice') ||
+        dir === path.join(hostBaseDir, 'user.slice')
+      ) {
+        return true;
+      }
+      if (ownCgDir && (dir === ownCgDir || ownCgDir.startsWith(dir + path.sep))) {
+        return true;
+      }
+      return false;
+    };
+
+    if (pid && pid > 1) {
+      const rawPidCg = resolveLiveContainerCgroupV2Dir(pid);
+      if (rawPidCg) {
+        if (isSharedHostOrDaemonCgroup(rawPidCg)) {
+          return null;
+        }
+        const relToRoot = path.relative('/sys/fs/cgroup', rawPidCg);
+        const parts = relToRoot.split(path.sep).filter(Boolean);
+        const payloadIdx = parts.findIndex((seg) => seg.startsWith('lxc.payload.'));
+        let normalizedDir: string;
+        if (payloadIdx !== -1) {
+          normalizedDir = path.join('/sys/fs/cgroup', ...parts.slice(0, payloadIdx + 1));
+        } else if (parts.length > 1 && parts[parts.length - 1] === 'init.scope') {
+          normalizedDir = path.join('/sys/fs/cgroup', ...parts.slice(0, -1));
+        } else {
+          normalizedDir = rawPidCg;
+        }
+        if (
+          normalizedDir.startsWith('/sys/fs/cgroup/') &&
+          fs.existsSync(normalizedDir) &&
+          !isSharedHostOrDaemonCgroup(normalizedDir)
+        ) {
+          return normalizedDir;
+        }
+        return null;
+      }
+    }
+
+    // Fallback when `/proc/<pid>/cgroup` is hidden (e.g. `hidepid=2` without root):
+    // inspect known liblxc payload paths only if kernel `cgroup.events` reports `populated 1`.
+    const directCandidates = [
+      path.join(hostBaseDir, 'hkvm.lxc', `lxc.payload.${safeName}`),
+      path.join(hostBaseDir, `lxc.payload.${safeName}`),
+      path.join('/sys/fs/cgroup/hkvm.lxc', `lxc.payload.${safeName}`),
+      path.join('/sys/fs/cgroup', `lxc.payload.${safeName}`),
+      path.join('/sys/fs/cgroup/lxc', safeName),
+    ];
+    for (const cand of directCandidates) {
+      if (
+        fs.existsSync(cand) &&
+        !isSharedHostOrDaemonCgroup(cand) &&
+        isCgroupV2SubtreePopulated(cand)
+      ) {
+        return cand;
+      }
+    }
+
+    for (const parentDir of [path.join(hostBaseDir, 'hkvm.lxc'), hostBaseDir]) {
+      if (!fs.existsSync(parentDir)) continue;
+      const prefix = `lxc.payload.${safeName}-`;
+      for (const entry of fs.readdirSync(parentDir)) {
+        if (!entry.startsWith(prefix)) continue;
+        const cand = path.join(parentDir, entry);
+        if (!isSharedHostOrDaemonCgroup(cand) && isCgroupV2SubtreePopulated(cand)) {
+          return cand;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * Reads high-resolution kernel CPU & memory accounting directly from cgroup v2 (`cpu.stat`
+ * `usage_usec`, `memory.current`, `memory.swap.current`) or cgroup v1 (`cpuacct.usage`,
+ * `memory.usage_in_bytes`). Works on both LXC 5.x (where `lxc-info` ignores cgroup v2
+ * `cpu.stat` & `memory.current`) and LXC 6.x (avoiding `lxc-info`'s 32-bit `strtof` `%.2f`
+ * precision loss).
+ */
+export function readContainerCgroupResourceStats(
+  containerName: string,
+  pid?: number | null
+): {
+  cpuUseSeconds: number | null;
+  memoryBytes: number | null;
+  swapBytes: number | null;
+  source: 'cgroup-v2' | 'cgroup-v1' | null;
+} {
+  const safeName = SafeValidators.containerName(containerName);
+
+  // 1. Cgroup v2 (`cpu.stat` -> `usage_usec` in microseconds)
+  const cgV2Dir = resolveContainerPayloadCgroupV2Dir(safeName, pid);
+  if (cgV2Dir) {
+    let cpuUseSeconds: number | null = null;
+    let memoryBytes: number | null = null;
+    let swapBytes: number | null = null;
+
+    try {
+      const cpuStatFile = path.join(cgV2Dir, 'cpu.stat');
+      if (fs.existsSync(cpuStatFile)) {
+        const txt = fs.readFileSync(cpuStatFile, 'utf8');
+        const usageMatch = txt.match(/^usage_usec\s+(\d+)/m);
+        if (usageMatch) {
+          cpuUseSeconds = Number(BigInt(usageMatch[1])) / 1_000_000;
+        } else {
+          const userMatch = txt.match(/^user_usec\s+(\d+)/m);
+          const sysMatch = txt.match(/^system_usec\s+(\d+)/m);
+          if (userMatch || sysMatch) {
+            const totalUsec =
+              BigInt(userMatch ? userMatch[1] : '0') + BigInt(sysMatch ? sysMatch[1] : '0');
+            cpuUseSeconds = Number(totalUsec) / 1_000_000;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const memCurFile = path.join(cgV2Dir, 'memory.current');
+      if (fs.existsSync(memCurFile)) {
+        const rawCur = parseInt(fs.readFileSync(memCurFile, 'utf8').trim(), 10);
+        if (!Number.isNaN(rawCur) && rawCur >= 0) {
+          let inactiveFile = 0;
+          const memStatFile = path.join(cgV2Dir, 'memory.stat');
+          if (fs.existsSync(memStatFile)) {
+            const statTxt = fs.readFileSync(memStatFile, 'utf8');
+            const inactMatch = statTxt.match(/^inactive_file\s+(\d+)/m);
+            if (inactMatch) {
+              inactiveFile = parseInt(inactMatch[1], 10) || 0;
+            }
+          }
+          memoryBytes = rawCur > inactiveFile ? rawCur - inactiveFile : rawCur;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const swapCurFile = path.join(cgV2Dir, 'memory.swap.current');
+      if (fs.existsSync(swapCurFile)) {
+        const rawSwap = parseInt(fs.readFileSync(swapCurFile, 'utf8').trim(), 10);
+        if (!Number.isNaN(rawSwap) && rawSwap >= 0) {
+          swapBytes = rawSwap;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    if (cpuUseSeconds !== null || memoryBytes !== null) {
+      return { cpuUseSeconds, memoryBytes, swapBytes, source: 'cgroup-v2' };
+    }
+  }
+
+  // 2. Cgroup v1 (`cpuacct.usage` in nanoseconds)
+  try {
+    const readPidCpuacctRel = (targetPid: number): string | null => {
+      const f = `/proc/${targetPid}/cgroup`;
+      if (!fs.existsSync(f)) return null;
+      for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
+        const parts = line.trim().split(':');
+        if (parts.length < 3) continue;
+        const ctrls = parts[1].split(',');
+        if (ctrls.includes('cpuacct')) {
+          return parts.slice(2).join(':').trim();
+        }
+      }
+      return null;
+    };
+
+    const v1Candidates: string[] = [];
+    if (pid && pid > 1) {
+      const pidRel = readPidCpuacctRel(pid);
+      const selfRel = readPidCpuacctRel(process.pid);
+      const initRel = readPidCpuacctRel(1);
+      if (pidRel && pidRel !== '/' && pidRel !== selfRel && pidRel !== initRel) {
+        const segs = pidRel.split('/').filter(Boolean);
+        const payIdx = segs.findIndex((s) => s.startsWith('lxc.payload.'));
+        const normRel =
+          payIdx !== -1
+            ? segs.slice(0, payIdx + 1).join('/')
+            : segs.length > 1 && segs[segs.length - 1] === 'init.scope'
+              ? segs.slice(0, -1).join('/')
+              : segs.join('/');
+        if (normRel && `/${normRel}` !== selfRel && `/${normRel}` !== initRel) {
+          v1Candidates.push(
+            path.join('/sys/fs/cgroup/cpuacct', normRel),
+            path.join('/sys/fs/cgroup/cpu,cpuacct', normRel)
+          );
+        }
+      }
+    } else {
+      for (const base of ['/sys/fs/cgroup/cpuacct', '/sys/fs/cgroup/cpu,cpuacct']) {
+        v1Candidates.push(
+          path.join(base, `lxc.payload.${safeName}`),
+          path.join(base, 'lxc', safeName)
+        );
+      }
+    }
+
+    for (const dir of v1Candidates) {
+      const usageFile = path.join(dir, 'cpuacct.usage');
+      if (!fs.existsSync(usageFile)) continue;
+      const rawNs = fs.readFileSync(usageFile, 'utf8').trim();
+      if (/^\d+$/.test(rawNs)) {
+        const cpuUseSeconds = Number(BigInt(rawNs)) / 1_000_000_000;
+        return { cpuUseSeconds, memoryBytes: null, swapBytes: null, source: 'cgroup-v1' };
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return { cpuUseSeconds: null, memoryBytes: null, swapBytes: null, source: null };
 }
 
 function readActiveCgroupV2Controllers(enableIfSystem = false): Set<string> | null {
@@ -777,6 +1050,16 @@ function isCgroupV2SwapSupported(): boolean {
 export class LxcContainerManager {
   private lxcBaseDir: string;
   private inFlightCreations = new Set<string>();
+  private prevCpuSamples = new Map<
+    string,
+    {
+      pid: number | null;
+      source: string;
+      cpuSec: number;
+      monoMs: number;
+      cpuCoresUsed: number;
+    }
+  >();
 
   constructor(lxcBaseDir = DEFAULT_LXC_BASE) {
     this.lxcBaseDir = path.resolve(lxcBaseDir);
@@ -1613,7 +1896,10 @@ export class LxcContainerManager {
     }
   }
 
-  public async inspectContainer(containerName: string): Promise<LxcContainerRuntimeInfo> {
+  public async inspectContainer(
+    containerName: string,
+    options?: { sampleCpu?: boolean }
+  ): Promise<LxcContainerRuntimeInfo> {
     const safeName = SafeValidators.containerName(containerName);
     const configPath = path.join(this.lxcBaseDir, safeName, 'config');
     const cfgNet = this.readContainerNetFromConfig(safeName);
@@ -1622,12 +1908,14 @@ export class LxcContainerManager {
 
     if (!isBinaryAvailable('lxc-info')) {
       const existsOnDisk = privilegedFs.existsSync(configPath);
+      this.prevCpuSamples.delete(safeName);
       return {
         name: safeName,
         state: existsOnDisk ? 'stopped' : 'missing',
         pid: null,
         ips: configuredIpv4 ? [configuredIpv4] : [],
         cpuUseSeconds: 0,
+        cpuCoresUsed: 0,
         memoryBytes: 0,
         swapBytes: 0,
         rxBytes: 0,
@@ -1644,12 +1932,14 @@ export class LxcContainerManager {
     });
     if (res.exitCode !== 0) {
       const existsOnDisk = privilegedFs.existsSync(configPath);
+      this.prevCpuSamples.delete(safeName);
       return {
         name: safeName,
         state: existsOnDisk ? 'stopped' : 'missing',
         pid: null,
         ips: [],
         cpuUseSeconds: 0,
+        cpuCoresUsed: 0,
         memoryBytes: 0,
         swapBytes: 0,
         rxBytes: 0,
@@ -1663,8 +1953,9 @@ export class LxcContainerManager {
     let state: LxcContainerRuntimeInfo['state'] = 'stopped';
     let pid: number | null = null;
     const ips: string[] = [];
-    let cpuUseSeconds = 0;
+    let lxcInfoCpuSeconds = 0;
     let memoryBytes = 0;
+    let swapBytes = 0;
     let rxBytes = 0;
     let txBytes = 0;
 
@@ -1685,7 +1976,7 @@ export class LxcContainerManager {
       } else if (key === 'ip') {
         ips.push(val);
       } else if (key === 'cpu use') {
-        cpuUseSeconds = parseFloat(val.replace(/[^0-9.]/g, '')) || 0;
+        lxcInfoCpuSeconds = parseFloat(val.replace(/[^0-9.]/g, '')) || 0;
       } else if (key === 'memory use') {
         memoryBytes = this.parseHumanSizeToBytes(val);
       } else if (key === 'rx bytes') {
@@ -1700,14 +1991,46 @@ export class LxcContainerManager {
       privilegedFs.existsSync(this.getQuotaDiskImagePath(safeName)) ||
       Boolean(findActiveMountSource(this.getRootfsDir(safeName)));
 
-    if ((state === 'running' || state === 'frozen') && pid && pid > 0 && memoryBytes === 0) {
-      const procStats = this.measureContainerProcTree(pid);
-      if (procStats.memoryBytes > 0) {
-        memoryBytes = procStats.memoryBytes;
+    let cpuUseSeconds = lxcInfoCpuSeconds;
+    let cpuCoresUsed = 0;
+
+    if (state === 'running' || state === 'frozen') {
+      const sample1 = this.readHighResContainerTelemetrySample(
+        safeName,
+        pid,
+        lxcInfoCpuSeconds,
+        memoryBytes === 0
+      );
+      cpuUseSeconds = sample1.cpuUseSeconds;
+      if (memoryBytes === 0 && sample1.memoryBytes > 0) {
+        memoryBytes = sample1.memoryBytes;
       }
-      if (cpuUseSeconds === 0 && procStats.cpuUseSeconds > 0) {
-        cpuUseSeconds = procStats.cpuUseSeconds;
+      if (sample1.swapBytes > 0) {
+        swapBytes = sample1.swapBytes;
       }
+
+      if (state === 'running') {
+        cpuCoresUsed = await this.computeContainerCpuCoresUsed(
+          safeName,
+          pid,
+          sample1.source,
+          sample1.cpuUseSeconds,
+          sample1.monoMs,
+          Boolean(options?.sampleCpu),
+          () => {
+            const next = this.readHighResContainerTelemetrySample(
+              safeName,
+              pid,
+              lxcInfoCpuSeconds,
+              false
+            );
+            cpuUseSeconds = next.cpuUseSeconds;
+            return next;
+          }
+        );
+      }
+    } else {
+      this.prevCpuSamples.delete(safeName);
     }
 
     return {
@@ -1716,8 +2039,9 @@ export class LxcContainerManager {
       pid,
       ips,
       cpuUseSeconds,
+      cpuCoresUsed,
       memoryBytes,
-      swapBytes: 0,
+      swapBytes,
       rxBytes,
       txBytes,
       diskUsedBytes,
@@ -1728,12 +2052,147 @@ export class LxcContainerManager {
     };
   }
 
+  private readHighResContainerTelemetrySample(
+    safeName: string,
+    pid: number | null,
+    lxcInfoCpuSeconds: number,
+    needMemoryFallback: boolean
+  ): {
+    cpuUseSeconds: number;
+    memoryBytes: number;
+    swapBytes: number;
+    source: string;
+    monoMs: number;
+  } {
+    const cgStats = readContainerCgroupResourceStats(safeName, pid);
+    const monoAfterCg = Number(process.hrtime.bigint()) / 1e6;
+
+    let cpuUseSeconds = lxcInfoCpuSeconds;
+    let source = 'lxc-info';
+    let memoryBytes = cgStats.memoryBytes ?? 0;
+    const swapBytes = cgStats.swapBytes ?? 0;
+
+    if (cgStats.cpuUseSeconds !== null && cgStats.source) {
+      cpuUseSeconds = cgStats.cpuUseSeconds;
+      source = cgStats.source;
+    }
+
+    const needProcCpu = cgStats.cpuUseSeconds === null && pid !== null && pid > 0;
+    const needProcMem = needMemoryFallback && memoryBytes === 0 && pid !== null && pid > 0;
+
+    if (needProcCpu || needProcMem) {
+      const procStats = this.measureContainerProcTree(pid!);
+      const monoAfterProc = Number(process.hrtime.bigint()) / 1e6;
+      if (needProcMem && procStats.memoryBytes > 0) {
+        memoryBytes = procStats.memoryBytes;
+      }
+      if (needProcCpu && (procStats.cpuUseSeconds > 0 || lxcInfoCpuSeconds === 0)) {
+        cpuUseSeconds = procStats.cpuUseSeconds;
+        source = 'proc';
+        return {
+          cpuUseSeconds,
+          memoryBytes,
+          swapBytes,
+          source,
+          monoMs: monoAfterProc,
+        };
+      }
+    }
+
+    return {
+      cpuUseSeconds,
+      memoryBytes,
+      swapBytes,
+      source,
+      monoMs: monoAfterCg,
+    };
+  }
+
   /**
-   * Fallback live memory (VmRSS) & CPU time aggregator across `<initPid>` and all its
-   * descendant processes in `/proc` for hosts (e.g. WSL2 / un-delegated cgroup v2) where
-   * `lxc-info` does not emit `Memory use:` / `CPU use:`.
+   * Computes real-time active CPU cores utilized (`deltaCpuSec / deltaWallSec`) using the
+   * host's monotonic clock. Performs a fast 120ms kernel cgroup/`/proc` micro-sample on
+   * cold starts when `sampleIfCold` is enabled so opening an LXC VPS page immediately
+   * displays live CPU Load instead of `0%`.
    */
-  private measureContainerProcTree(rootPid: number): {
+  public async computeContainerCpuCoresUsed(
+    safeName: string,
+    pid: number | null,
+    source: string,
+    cpuSec1: number,
+    monoMs1: number,
+    sampleIfCold: boolean,
+    readSecondSample?: () => { cpuUseSeconds: number; source: string; monoMs: number }
+  ): Promise<number> {
+    const prev = this.prevCpuSamples.get(safeName);
+    if (
+      prev &&
+      prev.pid === pid &&
+      prev.source === source &&
+      cpuSec1 >= prev.cpuSec &&
+      monoMs1 >= prev.monoMs
+    ) {
+      const elapsedMs = monoMs1 - prev.monoMs;
+      if (elapsedMs < 200) {
+        return prev.cpuCoresUsed;
+      }
+      if (elapsedMs <= 30_000) {
+        const cpuCoresUsed = Math.max(0, (cpuSec1 - prev.cpuSec) / (elapsedMs / 1000));
+        this.prevCpuSamples.set(safeName, {
+          pid,
+          source,
+          cpuSec: cpuSec1,
+          monoMs: monoMs1,
+          cpuCoresUsed,
+        });
+        return cpuCoresUsed;
+      }
+    }
+
+    if (
+      sampleIfCold &&
+      readSecondSample &&
+      (source === 'cgroup-v2' || source === 'cgroup-v1' || source === 'proc')
+    ) {
+      await new Promise((r) => setTimeout(r, 120));
+      const sample2 = readSecondSample();
+      const elapsedMs = sample2.monoMs - monoMs1;
+      if (
+        sample2.source === source &&
+        elapsedMs > 20 &&
+        sample2.cpuUseSeconds >= cpuSec1
+      ) {
+        const cpuCoresUsed = Math.max(
+          0,
+          (sample2.cpuUseSeconds - cpuSec1) / (elapsedMs / 1000)
+        );
+        this.prevCpuSamples.set(safeName, {
+          pid,
+          source: sample2.source,
+          cpuSec: sample2.cpuUseSeconds,
+          monoMs: sample2.monoMs,
+          cpuCoresUsed,
+        });
+        return cpuCoresUsed;
+      }
+    }
+
+    this.prevCpuSamples.set(safeName, {
+      pid,
+      source,
+      cpuSec: cpuSec1,
+      monoMs: monoMs1,
+      cpuCoresUsed: 0,
+    });
+    return 0;
+  }
+
+  /**
+   * Fallback live memory (VmRSS) & monotonic CPU time aggregator across `<initPid>` and all
+   * its descendant processes in `/proc` for hosts (e.g. WSL2 / un-delegated cgroup v2) where
+   * per-container cgroup accounting is unavailable. Includes `cutime + cstime` so reaped
+   * short-lived child processes never make cumulative CPU ticks drop backwards.
+   */
+  public measureContainerProcTree(rootPid: number): {
     memoryBytes: number;
     cpuUseSeconds: number;
   } {
@@ -1754,7 +2213,9 @@ export class LxcContainerManager {
           const ppid = parseInt(rest[1] || '0', 10);
           const utime = parseInt(rest[11] || '0', 10) || 0;
           const stime = parseInt(rest[12] || '0', 10) || 0;
-          ticksByPid.set(p, utime + stime);
+          const cutime = parseInt(rest[13] || '0', 10) || 0;
+          const cstime = parseInt(rest[14] || '0', 10) || 0;
+          ticksByPid.set(p, utime + stime + cutime + cstime);
           if (ppid > 0) {
             const arr = childrenByPpid.get(ppid) || [];
             arr.push(p);
@@ -1798,7 +2259,7 @@ export class LxcContainerManager {
 
       return {
         memoryBytes: totalRssBytes,
-        cpuUseSeconds: Number((totalTicks / 100).toFixed(2)),
+        cpuUseSeconds: totalTicks / 100,
       };
     } catch {
       return { memoryBytes: 0, cpuUseSeconds: 0 };
@@ -3049,7 +3510,8 @@ export class LxcContainerManager {
         if (!info || info.state !== 'running' || !info.pid) return false;
         pid = info.pid;
       }
-      targetCgDir = resolveLiveContainerCgroupV2Dir(pid);
+      targetCgDir =
+        resolveContainerPayloadCgroupV2Dir(safeName, pid) || resolveLiveContainerCgroupV2Dir(pid);
     }
     if (!targetCgDir || !fs.existsSync(targetCgDir)) return false;
 
@@ -3219,7 +3681,8 @@ export class LxcContainerManager {
       };
     }
 
-    const cgDir = resolveLiveContainerCgroupV2Dir(pid);
+    const cgDir =
+      resolveContainerPayloadCgroupV2Dir(safeName, pid) || resolveLiveContainerCgroupV2Dir(pid);
     if (!cgDir) {
       return { rewriteConfig: true, requiresRestart: true, enforceLive: false };
     }
@@ -3720,26 +4183,53 @@ export class LxcContainerManager {
         'ps',
         '-eo',
         'pid,user,pcpu,pmem,comm',
-        '--no-headers',
       ],
       {
         timeoutMs: 8000,
         asRoot: this.needsRootForStore() || undefined,
       }
     );
-    if (res.exitCode !== 0) return [];
-    return res.stdout
+    if (res.exitCode === 0) {
+      return res.stdout
+        .trim()
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l && !/^pid\b/i.test(l))
+        .map((line) => {
+          const cols = line.split(/\s+/);
+          return {
+            pid: cols[0] || '',
+            user: cols[1] || '',
+            cpu: cols[2] || '0.0',
+            mem: cols[3] || '0.0',
+            command: cols.slice(4).join(' '),
+          };
+        });
+    }
+
+    // Fallback for BusyBox/Alpine `ps` where `-eo pcpu,pmem` is unsupported
+    const bbRes = await runAllowlistedCommand(
+      'lxc-attach',
+      [...this.lxcPathArgs(), '-n', safeName, '--', 'ps', '-o', 'pid,user,comm'],
+      {
+        timeoutMs: 8000,
+        asRoot: this.needsRootForStore() || undefined,
+      }
+    );
+    if (bbRes.exitCode !== 0) return [];
+    return bbRes.stdout
       .trim()
       .split('\n')
-      .filter(Boolean)
+      .map((l) => l.trim())
+      .filter((l) => l && !/^pid\b/i.test(l))
       .map((line) => {
-        const cols = line.trim().split(/\s+/);
+        const cols = line.split(/\s+/);
         return {
           pid: cols[0] || '',
           user: cols[1] || '',
-          cpu: cols[2] || '0.0',
-          mem: cols[3] || '0.0',
-          command: cols.slice(4).join(' '),
+          cpu: '0.0',
+          mem: '0.0',
+          command: cols.slice(2).join(' '),
         };
       });
   }

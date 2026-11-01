@@ -1175,28 +1175,51 @@ export class LXCAdapter implements VirtualizationAdapter {
     let runtime: LxcContainerRuntimeInfo;
     if (row.is_local) {
       runtime = await this.nodeManager.localRuntime.containerManager.inspectContainer(
-        row.container_name
+        row.container_name,
+        { sampleCpu: true }
       );
     } else {
       runtime = await this.nodeManager.requestRemoteNode<LxcContainerRuntimeInfo>(
         row.node_id,
         'GET',
-        `/api/v1/containers/${encodeURIComponent(row.container_name)}`
+        `/api/v1/containers/${encodeURIComponent(row.container_name)}?telemetry=1`
       );
     }
 
     const nowMs = Date.now();
+    const cores = Math.max(1, Number(row.cpu_cores || 1));
     let cpuPercent = 0;
-    const prev = this.prevContainerCpu.get(refId);
-    if (prev && nowMs > prev.tsMs && runtime.cpuUseSeconds >= prev.cpuSec) {
-      const elapsedSec = (nowMs - prev.tsMs) / 1000;
-      const deltaCpuSec = runtime.cpuUseSeconds - prev.cpuSec;
-      const cores = Math.max(1, Number(row.cpu_cores || 1));
+
+    if (runtime.state !== 'running') {
+      cpuPercent = 0;
+      this.prevContainerCpu.delete(refId);
+    } else if (
+      typeof runtime.cpuCoresUsed === 'number' &&
+      Number.isFinite(runtime.cpuCoresUsed)
+    ) {
       cpuPercent = Number(
-        Math.min(100, Math.max(0, ((deltaCpuSec / elapsedSec) / cores) * 100)).toFixed(2)
+        Math.min(100, Math.max(0, (runtime.cpuCoresUsed / cores) * 100)).toFixed(2)
       );
+      this.prevContainerCpu.set(refId, { cpuSec: runtime.cpuUseSeconds, tsMs: nowMs });
+    } else {
+      // Backward-compatible fallback for older remote Node Agents without `cpuCoresUsed`
+      const prev = this.prevContainerCpu.get(refId);
+      if (prev && nowMs > prev.tsMs && runtime.cpuUseSeconds >= prev.cpuSec) {
+        const elapsedMs = nowMs - prev.tsMs;
+        if (elapsedMs >= 200 && elapsedMs <= 60_000) {
+          const elapsedSec = elapsedMs / 1000;
+          const deltaCpuSec = runtime.cpuUseSeconds - prev.cpuSec;
+          cpuPercent = Number(
+            Math.min(100, Math.max(0, ((deltaCpuSec / elapsedSec) / cores) * 100)).toFixed(2)
+          );
+          this.prevContainerCpu.set(refId, { cpuSec: runtime.cpuUseSeconds, tsMs: nowMs });
+        } else if (elapsedMs > 60_000) {
+          this.prevContainerCpu.set(refId, { cpuSec: runtime.cpuUseSeconds, tsMs: nowMs });
+        }
+      } else {
+        this.prevContainerCpu.set(refId, { cpuSec: runtime.cpuUseSeconds, tsMs: nowMs });
+      }
     }
-    this.prevContainerCpu.set(refId, { cpuSec: runtime.cpuUseSeconds, tsMs: nowMs });
 
     const ramUsedMb = Math.round(runtime.memoryBytes / (1024 * 1024));
     const ramTotalMb = Math.max(1, Number(row.ram_mb || 1024));
