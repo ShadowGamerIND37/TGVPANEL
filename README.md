@@ -82,6 +82,10 @@ Run directly on any clean Ubuntu / Debian / AlmaLinux / Rocky Linux server:
 curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && sudo bash menu.sh
 ```
 
+```
+bash <(curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/refs/heads/main/menu.sh)
+```
+
 `menu.sh` provides a single interactive menu (and installs the global `sudo tgvpanel` command):
 
 1. **Auto Install & Setup Panel** — Clones TGVPANEL from GitHub, installs Node.js 20+ & hypervisor dependencies, configures admin credentials, and runs the panel **24/7** (`systemd` or auto-restart supervisor).
