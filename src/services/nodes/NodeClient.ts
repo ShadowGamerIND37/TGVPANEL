@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
+import tls from 'tls';
 import WebSocket from 'ws';
 import { UnifiedDatabase } from '../../db/database';
 import {
@@ -41,10 +42,45 @@ export interface NodeRecord {
   supports_lxc?: number;
   kvm_available?: number;
   lxc_available?: number;
+  nested_virt?: number;
   cgroup_version?: string | null;
   qemu_version?: string | null;
   lxc_version?: string | null;
   kernel_version?: string | null;
+  storage_backends?: string | null;
+  network_backends?: string | null;
+  kvm_count?: number;
+  kvm_running?: number;
+  lxc_count?: number;
+  lxc_running?: number;
+  total_instances?: number;
+  running_instances?: number;
+  allocated_vcpus?: number;
+  allocated_ram_mb?: number;
+  allocated_disk_gb?: number;
+  live_cpu_percent?: number | null;
+  live_ram_used_mb?: number | null;
+  live_disk_used_gb?: number | null;
+  live_load_1?: number | null;
+  latency_ms?: number | null;
+}
+
+export interface EndpointProbeResult {
+  reachable: boolean;
+  url: string;
+  protocol: 'http' | 'https';
+  latencyMs: number;
+  httpStatus: number | null;
+  agentDetected: boolean;
+  tls?: {
+    authorized: boolean;
+    authorizationError?: string | null;
+    subjectCN?: string | null;
+    issuerCN?: string | null;
+    validTo?: string | null;
+    protocol?: string | null;
+  } | null;
+  message: string;
 }
 
 interface CircuitBreakerEntry {
@@ -61,6 +97,7 @@ export class NodeManager {
   private db: UnifiedDatabase;
   public readonly localRuntime: LocalNodeRuntime;
   private circuits = new Map<number, CircuitBreakerEntry>();
+  private latencies = new Map<number, number>();
   private readonly failureThreshold = 3;
   private readonly openCooldownMs = 30_000;
 
@@ -82,26 +119,110 @@ export class NodeManager {
       });
   }
 
+  private normalizeTagsJson(raw?: string[] | string | null): string {
+    if (!raw) return '[]';
+    const items = Array.isArray(raw)
+      ? raw
+      : (() => {
+          const str = String(raw).trim();
+          if (str.startsWith('[')) {
+            try {
+              const parsed = JSON.parse(str);
+              if (Array.isArray(parsed)) return parsed;
+            } catch {
+              // treat as comma-separated
+            }
+          }
+          return str.split(',');
+        })();
+    const cleaned = Array.from(
+      new Set(
+        items
+          .map((t) => String(t || '').trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, '-'))
+          .filter((t) => t.length > 0)
+      )
+    ).slice(0, 16);
+    return JSON.stringify(cleaned);
+  }
+
+  private enrichNodeRow(r: NodeRecord): NodeRecord {
+    const kvmCount = Number(r.kvm_count || 0);
+    const lxcCount = Number(r.lxc_count || 0);
+    const kvmRunning = Number(r.kvm_running || 0);
+    const lxcRunning = Number(r.lxc_running || 0);
+    return {
+      ...r,
+      kvm_count: kvmCount,
+      kvm_running: kvmRunning,
+      lxc_count: lxcCount,
+      lxc_running: lxcRunning,
+      total_instances: kvmCount + lxcCount,
+      running_instances: kvmRunning + lxcRunning,
+      allocated_vcpus: Number(r.allocated_vcpus || 0),
+      allocated_ram_mb: Number(r.allocated_ram_mb || 0),
+      allocated_disk_gb: Number(Number(r.allocated_disk_gb || 0).toFixed(1)),
+      latency_ms: this.latencies.get(r.id) ?? (r.is_local ? 1 : null),
+    };
+  }
+
+  private readonly nodeSelectSql = `
+    SELECT n.*,
+           c.supports_kvm, c.supports_lxc, c.kvm_available, c.lxc_available,
+           c.nested_virt, c.cgroup_version, c.qemu_version, c.lxc_version,
+           c.kernel_version, c.storage_backends, c.network_backends,
+           COALESCE(vk.kvm_count, 0) AS kvm_count,
+           COALESCE(vk.kvm_running, 0) AS kvm_running,
+           COALESCE(lx.lxc_count, 0) AS lxc_count,
+           COALESCE(lx.lxc_running, 0) AS lxc_running,
+           COALESCE(vk.kvm_cpus, 0) + COALESCE(lx.lxc_cpus, 0) AS allocated_vcpus,
+           COALESCE(vk.kvm_ram, 0) + COALESCE(lx.lxc_ram, 0) AS allocated_ram_mb,
+           COALESCE(vk.kvm_disk, 0) + COALESCE(lx.lxc_disk, 0) AS allocated_disk_gb,
+           mh.cpu_percent AS live_cpu_percent,
+           mh.ram_used_mb AS live_ram_used_mb,
+           mh.disk_used_gb AS live_disk_used_gb,
+           mh.load_avg_1 AS live_load_1
+    FROM nodes n
+    LEFT JOIN node_capabilities c ON c.node_id = n.id
+    LEFT JOIN (
+      SELECT COALESCE(node_id, 1) AS nid,
+             COUNT(*) AS kvm_count,
+             SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS kvm_running,
+             SUM(COALESCE(cpus, cpu_cores, 1)) AS kvm_cpus,
+             SUM(COALESCE(memory, 0)) AS kvm_ram,
+             SUM(CAST(REPLACE(REPLACE(COALESCE(disk_size, '0'), 'G', ''), 'g', '') AS REAL)) AS kvm_disk
+      FROM vms
+      GROUP BY COALESCE(node_id, 1)
+    ) vk ON vk.nid = n.id
+    LEFT JOIN (
+      SELECT COALESCE(node_id, 1) AS nid,
+             COUNT(*) AS lxc_count,
+             SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS lxc_running,
+             SUM(COALESCE(cpu_cores, 1)) AS lxc_cpus,
+             SUM(COALESCE(ram_mb, 0)) AS lxc_ram,
+             SUM(COALESCE(disk_gb, 0)) AS lxc_disk
+      FROM lxc_instances
+      GROUP BY COALESCE(node_id, 1)
+    ) lx ON lx.nid = n.id
+    LEFT JOIN metrics_history mh ON mh.id = (
+      SELECT m2.id FROM metrics_history m2
+      WHERE m2.target_type = 'node' AND m2.target_id = n.id
+      ORDER BY m2.id DESC LIMIT 1
+    )
+  `;
+
   public async listNodes(): Promise<NodeRecord[]> {
-    return this.db.all<NodeRecord>(
-      `SELECT n.*,
-              c.supports_kvm, c.supports_lxc, c.kvm_available, c.lxc_available,
-              c.cgroup_version, c.qemu_version, c.lxc_version, c.kernel_version
-       FROM nodes n
-       LEFT JOIN node_capabilities c ON c.node_id = n.id
-       ORDER BY n.is_local DESC, n.id ASC`
+    const rows = await this.db.all<NodeRecord>(
+      `${this.nodeSelectSql} ORDER BY n.is_local DESC, n.id ASC`
     );
+    return rows.map((r) => this.enrichNodeRow(r));
   }
 
   public async getNodeById(nodeId: number): Promise<NodeRecord | undefined> {
-    return this.db.get<NodeRecord>(
-      `SELECT n.*,
-              c.supports_kvm, c.supports_lxc, c.kvm_available, c.lxc_available
-       FROM nodes n
-       LEFT JOIN node_capabilities c ON c.node_id = n.id
-       WHERE n.id = ?`,
+    const row = await this.db.get<NodeRecord>(
+      `${this.nodeSelectSql} WHERE n.id = ?`,
       [nodeId]
     );
+    return row ? this.enrichNodeRow(row) : undefined;
   }
 
   public async getDefaultNodeForEngine(engine: 'kvm' | 'lxc'): Promise<NodeRecord> {
@@ -134,7 +255,7 @@ export class NodeManager {
     supportsKvm?: boolean;
     supportsLxc?: boolean;
     maxInstances?: number;
-    tags?: string[];
+    tags?: string[] | string;
     notes?: string;
   }): Promise<{
     node: NodeRecord;
@@ -142,6 +263,7 @@ export class NodeManager {
   }> {
     const keyPair = generateApiKeyPair('tgv_node');
     const hmacSecret = crypto.randomBytes(32).toString('hex');
+    const tagsJson = this.normalizeTagsJson(input.tags);
 
     let createdId = 0;
     await this.db.transaction(async () => {
@@ -157,8 +279,8 @@ export class NodeManager {
           input.url.trim().replace(/\/+$/, ''),
           input.verifySsl !== false ? 1 : 0,
           input.mtlsEnabled ? 1 : 0,
-          Number(input.maxInstances || 100),
-          JSON.stringify(input.tags || []),
+          Math.max(1, Number(input.maxInstances || 100)),
+          tagsJson,
           input.notes || null,
         ]
       );
@@ -210,11 +332,14 @@ export class NodeManager {
       maxInstances?: number;
       supportsKvm?: boolean;
       supportsLxc?: boolean;
+      tags?: string[] | string;
       notes?: string;
     }
   ): Promise<NodeRecord> {
     const existing = await this.getNodeById(nodeId);
     if (!existing) throw new Error(`Node #${nodeId} not found.`);
+
+    const tagsVal = patch.tags !== undefined ? this.normalizeTagsJson(patch.tags) : null;
 
     await this.db.run(
       `UPDATE nodes SET
@@ -226,6 +351,7 @@ export class NodeManager {
          maintenance_mode = COALESCE(?, maintenance_mode),
          verify_ssl = COALESCE(?, verify_ssl),
          max_instances = COALESCE(?, max_instances),
+         tags = COALESCE(?, tags),
          notes = COALESCE(?, notes),
          updated_at = datetime('now')
        WHERE id = ?`,
@@ -237,7 +363,8 @@ export class NodeManager {
         patch.url?.trim().replace(/\/+$/, '') ?? null,
         patch.maintenanceMode !== undefined ? (patch.maintenanceMode ? 1 : 0) : null,
         patch.verifySsl !== undefined ? (patch.verifySsl ? 1 : 0) : null,
-        patch.maxInstances !== undefined ? Number(patch.maxInstances) : null,
+        patch.maxInstances !== undefined ? Math.max(1, Number(patch.maxInstances)) : null,
+        tagsVal,
         patch.notes !== undefined ? patch.notes : null,
         nodeId,
       ]
@@ -328,10 +455,12 @@ export class NodeManager {
     node: NodeRecord;
     health: NodeHealthReport;
     stats: HostResourceStats;
+    latencyMs: number;
   }> {
     const node = await this.getNodeById(nodeId);
     if (!node) throw new Error(`Node #${nodeId} not found.`);
 
+    const t0 = Date.now();
     try {
       let health: NodeHealthReport;
       let stats: HostResourceStats;
@@ -347,6 +476,8 @@ export class NodeManager {
         );
         stats = await this.requestRemoteNode<HostResourceStats>(nodeId, 'GET', '/api/v1/stats');
       }
+      const latencyMs = Math.max(1, Date.now() - t0);
+      this.latencies.set(nodeId, latencyMs);
 
       await this.db.run(
         `UPDATE nodes SET
@@ -402,11 +533,213 @@ export class NodeManager {
 
       this.recordCircuitSuccess(nodeId);
       const updatedNode = (await this.getNodeById(nodeId))!;
-      return { node: updatedNode, health, stats };
+      return { node: updatedNode, health, stats, latencyMs };
     } catch (err: any) {
       await this.recordCircuitFailure(nodeId);
       throw err;
     }
+  }
+
+  public async resetCircuitBreaker(nodeId: number): Promise<NodeRecord> {
+    const node = await this.getNodeById(nodeId);
+    if (!node) throw new Error(`Node #${nodeId} not found.`);
+    this.circuits.set(nodeId, { state: 'closed', failures: 0, openedAt: 0 });
+    await this.db.run(
+      `UPDATE nodes SET circuit_state = 'closed', consecutive_failures = 0, updated_at = datetime('now') WHERE id = ?`,
+      [nodeId]
+    );
+    return (await this.getNodeById(nodeId))!;
+  }
+
+  /**
+   * Pre-flight HTTP/HTTPS + TLS reachability probe for remote Node Agent URLs.
+   */
+  public async probeEndpointConnection(input: {
+    url: string;
+    verifySsl?: boolean;
+    timeoutMs?: number;
+  }): Promise<EndpointProbeResult> {
+    const rawUrl = String(input.url || '').trim();
+    if (!rawUrl) throw new Error('Endpoint URL is required.');
+
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      throw new Error('Invalid URL format. Expected http://host:port or https://host:port');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Only http:// and https:// agent endpoints are supported.');
+    }
+
+    const isHttps = parsed.protocol === 'https:';
+    const verifySsl = input.verifySsl !== false;
+    const timeoutMs = Math.min(10_000, Math.max(1000, Number(input.timeoutMs || 4000)));
+    const probeUrl = new URL('/api/v1/health', parsed.origin);
+    const t0 = Date.now();
+
+    return new Promise<EndpointProbeResult>((resolve) => {
+      const reqOpts: https.RequestOptions = {
+        method: 'GET',
+        hostname: probeUrl.hostname,
+        port: probeUrl.port || (isHttps ? 443 : 80),
+        path: probeUrl.pathname,
+        timeout: timeoutMs,
+        headers: { Accept: 'application/json', 'User-Agent': 'TGVPANEL-Controller-Probe/3.0' },
+      };
+      if (isHttps) {
+        reqOpts.rejectUnauthorized = verifySsl;
+      }
+
+      const mod = isHttps ? https : http;
+      const req = mod.request(reqOpts, (res) => {
+        let body = '';
+        res.on('data', (c) => {
+          if (body.length < 4096) body += c.toString('utf8');
+        });
+        res.on('end', () => {
+          const latencyMs = Math.max(1, Date.now() - t0);
+          const status = res.statusCode || 0;
+          let tlsInfo: EndpointProbeResult['tls'] = null;
+          if (isHttps && res.socket instanceof tls.TLSSocket) {
+            const cert = res.socket.getPeerCertificate();
+            tlsInfo = {
+              authorized: res.socket.authorized,
+              authorizationError: res.socket.authorizationError
+                ? String(res.socket.authorizationError)
+                : null,
+              subjectCN: Array.isArray(cert?.subject?.CN)
+                ? cert.subject.CN[0] || null
+                : cert?.subject?.CN || null,
+              issuerCN: Array.isArray(cert?.issuer?.CN)
+                ? cert.issuer.CN[0] || null
+                : cert?.issuer?.CN || null,
+              validTo: cert?.valid_to || null,
+              protocol: res.socket.getProtocol() || null,
+            };
+          }
+          const lower = body.toLowerCase();
+          const agentDetected =
+            status === 401 ||
+            status === 200 ||
+            lower.includes('hmac') ||
+            lower.includes('node') ||
+            lower.includes('tgvpanel') ||
+            lower.includes('capabilities');
+
+          resolve({
+            reachable: true,
+            url: parsed.origin,
+            protocol: isHttps ? 'https' : 'http',
+            latencyMs,
+            httpStatus: status,
+            agentDetected,
+            tls: tlsInfo,
+            message:
+              status === 401
+                ? `Reachable in ${latencyMs}ms — TGVPANEL Node Agent listening (HMAC authentication enforced).`
+                : status === 200
+                  ? `Reachable in ${latencyMs}ms — Health endpoint responded HTTP 200.`
+                  : `Endpoint reachable in ${latencyMs}ms (HTTP ${status}).`,
+          });
+        });
+      });
+
+      req.on('timeout', () => {
+        req.destroy(new Error(`Connection timed out after ${timeoutMs}ms`));
+      });
+
+      req.on('error', (err: any) => {
+        const latencyMs = Math.max(1, Date.now() - t0);
+        const code = err?.code ? ` (${err.code})` : '';
+        const hint =
+          isHttps && verifySsl && /self[- ]signed|unable to verify|cert/i.test(String(err?.message || ''))
+            ? ' Tip: uncheck "Verify TLS Cert" if this node uses a self-signed certificate.'
+            : '';
+        resolve({
+          reachable: false,
+          url: parsed.origin,
+          protocol: isHttps ? 'https' : 'http',
+          latencyMs,
+          httpStatus: null,
+          agentDetected: false,
+          tls: null,
+          message: `Unreachable${code}: ${err?.message || 'Connection failed'}.${hint}`,
+        });
+      });
+
+      req.end();
+    });
+  }
+
+  /**
+   * Computes transparent smart placement scores across cluster nodes for KVM or LXC workloads.
+   */
+  public async rankPlacementCandidates(engine: 'kvm' | 'lxc') {
+    const nodes = await this.listNodes();
+    return nodes
+      .map((n) => {
+        const reasons: string[] = [];
+        let eligible = true;
+
+        if (n.status !== 'online') {
+          eligible = false;
+          reasons.push(`Status is ${n.status}`);
+        }
+        if (n.maintenance_mode) {
+          eligible = false;
+          reasons.push('Cordoned (Maintenance Mode)');
+        }
+        if (n.circuit_state === 'open') {
+          eligible = false;
+          reasons.push('Circuit breaker open');
+        }
+        const maxInst = Number(n.max_instances || 100);
+        const curInst = Number(n.total_instances || 0);
+        if (maxInst > 0 && curInst >= maxInst) {
+          eligible = false;
+          reasons.push(`Instance quota full (${curInst}/${maxInst})`);
+        }
+        if (engine === 'kvm' && Number(n.supports_kvm ?? 1) === 0) {
+          eligible = false;
+          reasons.push('KVM scheduling disabled on node');
+        }
+        if (engine === 'lxc' && Number(n.supports_lxc ?? 1) === 0) {
+          eligible = false;
+          reasons.push('LXC scheduling disabled on node');
+        }
+
+        const hwReady = engine === 'kvm' ? Boolean(n.kvm_available) : Boolean(n.lxc_available);
+        const cpuPct = Number(n.live_cpu_percent ?? 10);
+        const ramTot = Math.max(1, Number(n.ram_total_mb || 1024));
+        const ramUsed = Number(n.live_ram_used_mb ?? Math.min(ramTot, Number(n.allocated_ram_mb || 0)));
+        const freeRamRatio = Math.max(0, 1 - ramUsed / ramTot);
+        const slotRatio = maxInst > 0 ? Math.max(0, 1 - curInst / maxInst) : 1;
+        const cpuHeadroom = Math.max(0, 1 - cpuPct / 100);
+
+        let score = eligible
+          ? Math.round(freeRamRatio * 45 + cpuHeadroom * 35 + slotRatio * 20 + (hwReady ? 10 : -25))
+          : 0;
+        score = Math.max(0, Math.min(100, score));
+
+        if (eligible) {
+          reasons.push(hwReady ? `${engine.toUpperCase()} hypervisor ready` : `${engine.toUpperCase()} binary not detected yet`);
+          reasons.push(`${Math.round(freeRamRatio * 100)}% free RAM headroom`);
+          reasons.push(`${curInst}/${maxInst} instance slots used`);
+        }
+
+        return {
+          nodeId: n.id,
+          name: n.name,
+          location: n.location,
+          isLocal: Boolean(n.is_local),
+          eligible,
+          hardwareReady: hwReady,
+          score,
+          reasons,
+        };
+      })
+      .sort((a, b) => Number(b.eligible) - Number(a.eligible) || b.score - a.score || a.nodeId - b.nodeId);
   }
 
   private checkCircuitAllowed(nodeId: number): void {

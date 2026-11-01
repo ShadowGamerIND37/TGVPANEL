@@ -769,6 +769,35 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  router.post(
+    '/nodes/test-connection',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const result = await ctx.nodeManager.probeEndpointConnection({
+          url: String(req.body?.url || ''),
+          verifySsl: req.body?.verifySsl !== false,
+          timeoutMs: Number(req.body?.timeoutMs || 4000),
+        });
+        res.json(result);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.get(
+    '/nodes/placement',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const [kvm, lxc] = await Promise.all([
+        ctx.nodeManager.rankPlacementCandidates('kvm'),
+        ctx.nodeManager.rankPlacementCandidates('lxc'),
+      ]);
+      res.json({ kvm, lxc });
+    }
+  );
+
   router.post('/nodes', requireRole(['admin']), async (req: Request, res: Response) => {
     try {
       const out = await ctx.nodeManager.createNode(req.body || {});
@@ -785,17 +814,242 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   });
 
+  router.get(
+    '/nodes/:id/detail',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      try {
+        const nodeId = pInt(req.params.id);
+        let node = await ctx.nodeManager.getNodeById(nodeId);
+        if (!node) return res.status(404).json({ error: 'Node not found.' });
+
+        let liveHealth: any = null;
+        let liveStats: any = null;
+        let latencyMs: number | null = node.latency_ms ?? null;
+        if (req.query.live !== '0') {
+          try {
+            const probe = await ctx.nodeManager.checkNodeHealthAndStats(nodeId);
+            node = probe.node;
+            liveHealth = probe.health;
+            liveStats = probe.stats;
+            latencyMs = probe.latencyMs;
+          } catch {
+            node = (await ctx.nodeManager.getNodeById(nodeId)) || node;
+          }
+        }
+
+        const [kvmRows, lxcRows, storagePools, recentMigrations] = await Promise.all([
+          ctx.db
+            .all<any>(
+              `SELECT vm_id AS id, vm_name AS name, os_type, status,
+                      COALESCE(cpus, cpu_cores, 1) AS cpu_cores,
+                      COALESCE(memory, 0) AS ram_mb,
+                      CAST(REPLACE(REPLACE(COALESCE(disk_size, '0'), 'G', ''), 'g', '') AS REAL) AS disk_gb,
+                      ipv4_address AS ip_address
+               FROM vms WHERE COALESCE(node_id, 1) = ? ORDER BY vm_id DESC`,
+              [nodeId]
+            )
+            .catch(() => []),
+          ctx.db
+            .all<any>(
+              `SELECT id, container_name AS name, hostname, os_template, distro, release, status,
+                      COALESCE(cpu_cores, 1) AS cpu_cores,
+                      COALESCE(ram_mb, 0) AS ram_mb,
+                      COALESCE(disk_gb, 0) AS disk_gb,
+                      ipv4_address AS ip_address
+               FROM lxc_instances WHERE COALESCE(node_id, 1) = ? ORDER BY id DESC`,
+              [nodeId]
+            )
+            .catch(() => []),
+          ctx.db
+            .all<any>(`SELECT * FROM storage_pools WHERE node_id = ? ORDER BY id ASC`, [nodeId])
+            .catch(() => []),
+          ctx.db
+            .all<any>(
+              `SELECT m.*, sn.name AS source_node_name, tn.name AS target_node_name
+               FROM vps_migrations m
+               LEFT JOIN nodes sn ON sn.id = m.source_node_id
+               LEFT JOIN nodes tn ON tn.id = m.target_node_id
+               WHERE m.source_node_id = ? OR m.target_node_id = ?
+               ORDER BY m.id DESC LIMIT 10`,
+              [nodeId, nodeId]
+            )
+            .catch(() => []),
+        ]);
+
+        const instances = [
+          ...kvmRows.map((v: any) => ({
+            id: v.id,
+            engine: 'kvm',
+            name: v.name,
+            osLabel: v.os_type || 'KVM Guest',
+            status: v.status || 'stopped',
+            cpuCores: Number(v.cpu_cores || 1),
+            ramMb: Number(v.ram_mb || 0),
+            diskGb: Number(v.disk_gb || 0),
+            ipAddress: v.ip_address || null,
+            manageUrl: `/admin/vm/${v.id}`,
+          })),
+          ...lxcRows.map((c: any) => ({
+            id: c.id,
+            engine: 'lxc',
+            name: c.name,
+            osLabel: c.os_template || `${c.distro || 'linux'}:${c.release || ''}`,
+            status: c.status || 'stopped',
+            cpuCores: Number(c.cpu_cores || 1),
+            ramMb: Number(c.ram_mb || 0),
+            diskGb: Number(c.disk_gb || 0),
+            ipAddress: c.ip_address || null,
+            manageUrl: `/lxc/${c.id}`,
+          })),
+        ];
+
+        const parseJsonArr = (raw: any): string[] => {
+          if (!raw) return [];
+          try {
+            const p = JSON.parse(String(raw));
+            return Array.isArray(p) ? p.map(String) : [];
+          } catch {
+            return [];
+          }
+        };
+
+        return res.json({
+          node: {
+            ...node,
+            parsedTags: parseJsonArr(node.tags),
+            parsedStorageBackends: parseJsonArr(node.storage_backends),
+            parsedNetworkBackends: parseJsonArr(node.network_backends),
+          },
+          latencyMs,
+          liveHealth,
+          liveStats,
+          instances,
+          storagePools,
+          recentMigrations,
+        });
+      } catch (err: any) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
   router.patch('/nodes/:id', requireRole(['admin']), async (req: Request, res: Response) => {
     try {
-      const updated = await ctx.nodeManager.updateNode(
-        pInt(req.params.id),
-        req.body || {}
-      );
+      const nodeId = pInt(req.params.id);
+      const updated = await ctx.nodeManager.updateNode(nodeId, req.body || {});
+      await ctx.db.logActivity({
+        userId: req.principal!.userId,
+        action: 'node_updated',
+        resourceType: 'node',
+        resourceId: String(nodeId),
+        details: {
+          name: updated.name,
+          maintenanceMode: Boolean(updated.maintenance_mode),
+          maxInstances: updated.max_instances,
+        },
+      });
       res.json({ node: updated });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
   });
+
+  router.post(
+    '/nodes/:id/reset-circuit',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const nodeId = pInt(req.params.id);
+        let node = await ctx.nodeManager.resetCircuitBreaker(nodeId);
+        let probeOk = false;
+        if (req.body?.probe !== false) {
+          try {
+            const checked = await ctx.nodeManager.checkNodeHealthAndStats(nodeId);
+            node = checked.node;
+            probeOk = true;
+          } catch {
+            node = (await ctx.nodeManager.getNodeById(nodeId)) || node;
+          }
+        }
+        res.json({ node, probeOk });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/nodes/:id/evacuate-lxc',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const sourceNodeId = pInt(req.params.id);
+        const targetNodeId = Number(req.body?.targetNodeId || 0);
+        const targetBridge = String(req.body?.targetBridge || 'lxcbr0').trim() || 'lxcbr0';
+        const cordonSource = req.body?.cordonSource !== false;
+
+        if (!targetNodeId || targetNodeId === sourceNodeId) {
+          return res.status(400).json({ error: 'Select a valid distinct target node for evacuation.' });
+        }
+
+        if (cordonSource) {
+          await ctx.nodeManager.updateNode(sourceNodeId, { maintenanceMode: true });
+        }
+
+        const requestedIds: number[] | null = Array.isArray(req.body?.lxcIds)
+          ? req.body.lxcIds.map((x: any) => Number(x)).filter((x: number) => x > 0)
+          : null;
+
+        const lxcOnSource = await ctx.db.all<{ id: number; container_name: string }>(
+          `SELECT id, container_name FROM lxc_instances WHERE COALESCE(node_id, 1) = ? ORDER BY id ASC`,
+          [sourceNodeId]
+        );
+        const targets = requestedIds
+          ? lxcOnSource.filter((c) => requestedIds.includes(c.id))
+          : lxcOnSource;
+
+        const results: Array<{ lxcId: number; name: string; ok: boolean; jobId?: number; error?: string }> = [];
+        for (const ct of targets) {
+          try {
+            const job = await ctx.migrationManager.startOfflineLxcMigration({
+              lxcId: ct.id,
+              targetNodeId,
+              targetBridge,
+              initiatedByUserId: req.principal!.userId,
+            });
+            results.push({ lxcId: ct.id, name: ct.container_name, ok: job.status === 'completed', jobId: job.id });
+          } catch (err: any) {
+            results.push({ lxcId: ct.id, name: ct.container_name, ok: false, error: err.message });
+          }
+        }
+
+        await ctx.db.logActivity({
+          userId: req.principal!.userId,
+          action: 'node_evacuate_lxc',
+          resourceType: 'node',
+          resourceId: String(sourceNodeId),
+          details: {
+            targetNodeId,
+            attempted: targets.length,
+            succeeded: results.filter((r) => r.ok).length,
+          },
+        });
+
+        return res.json({
+          sourceNodeId,
+          targetNodeId,
+          cordonApplied: cordonSource,
+          attempted: targets.length,
+          succeeded: results.filter((r) => r.ok).length,
+          failed: results.filter((r) => !r.ok).length,
+          results,
+        });
+      } catch (err: any) {
+        return res.status(400).json({ error: err.message });
+      }
+    }
+  );
 
   router.delete('/nodes/:id', requireRole(['admin']), async (req: Request, res: Response) => {
     try {
