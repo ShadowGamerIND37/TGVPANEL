@@ -82,6 +82,8 @@ Run directly on any clean Ubuntu / Debian / AlmaLinux / Rocky Linux server:
 curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && sudo bash menu.sh
 ```
 
+**OR**
+
 ```
 bash <(curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/refs/heads/main/menu.sh)
 ```
