@@ -437,6 +437,241 @@
     .nc-ansi-red { color: #f87171; font-weight: 600; }
     .nc-ansi-cyan { color: #22d3ee; }
     .nc-ansi-bold { color: #f8fafc; font-weight: 700; }
+
+    /* ==========================================================================
+       UNIFIED STUDIO DESIGN SYSTEM — Nodes, Storage, Monitoring & License
+       ========================================================================== */
+    .st-hero-head {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+      margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-subtle);
+    }
+    .st-hero-title-group { display: flex; align-items: flex-start; gap: 14px; }
+    .st-hero-icon {
+      width: 44px; height: 44px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0; border: 1px solid rgba(99, 102, 241, 0.32);
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.16) 0%, rgba(6, 182, 212, 0.12) 100%);
+      color: #38bdf8; box-shadow: 0 4px 18px rgba(6, 182, 212, 0.12);
+    }
+    .st-hero-icon.emerald {
+      border-color: rgba(16, 185, 129, 0.35);
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.18) 0%, rgba(6, 182, 212, 0.1) 100%);
+      color: #34d399;
+    }
+    .st-hero-icon.violet {
+      border-color: rgba(139, 92, 246, 0.35);
+      background: linear-gradient(135deg, rgba(139, 92, 246, 0.18) 0%, rgba(99, 102, 241, 0.1) 100%);
+      color: #a78bfa;
+    }
+    .st-hero-icon.amber {
+      border-color: rgba(245, 158, 11, 0.35);
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.18) 0%, rgba(239, 68, 68, 0.08) 100%);
+      color: #fbbf24;
+    }
+    .st-hero-title { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: -0.02em; color: var(--text-primary); }
+    .st-hero-sub { margin: 4px 0 0; font-size: 13px; color: var(--text-muted); line-height: 1.45; max-width: 680px; }
+    .st-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+
+    .st-kpi-grid {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px;
+    }
+    @media (max-width: 1180px) { .st-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 620px) { .st-kpi-grid { grid-template-columns: 1fr; } }
+
+    .st-kpi-card {
+      background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 14px;
+      padding: 16px 18px; position: relative; overflow: hidden; transition: border-color 0.18s ease, transform 0.18s ease;
+      font-variant-numeric: tabular-nums;
+    }
+    .st-kpi-card:hover { border-color: var(--border-color-hover, rgba(255,255,255,0.22)); transform: translateY(-1px); }
+    .st-kpi-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .st-kpi-label {
+      font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted);
+    }
+    .st-kpi-badge {
+      width: 30px; height: 30px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.04); border: 1px solid var(--border-subtle); color: var(--text-secondary);
+      flex-shrink: 0;
+    }
+    .st-kpi-val {
+      font-size: 24px; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em; line-height: 1.15;
+    }
+    .st-kpi-foot {
+      margin-top: 7px; font-size: 12px; color: var(--text-muted); display: flex; align-items: center;
+      justify-content: space-between; gap: 8px; flex-wrap: wrap;
+    }
+
+    .st-panel {
+      background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 14px;
+      margin-bottom: 18px; overflow: hidden; box-shadow: var(--shadow-card);
+    }
+    .st-panel-head {
+      padding: 15px 20px; border-bottom: 1px solid var(--border-subtle);
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+    }
+    .st-panel-title-wrap { display: flex; align-items: center; gap: 10px; }
+    .st-panel-title { margin: 0; font-size: 15px; font-weight: 700; color: var(--text-primary); }
+    .st-panel-sub { margin: 2px 0 0; font-size: 12px; color: var(--text-muted); }
+    .st-panel-body { padding: 18px 20px; }
+
+    .st-bar-track {
+      width: 100%; height: 7px; border-radius: 999px; background: var(--bg-track, rgba(255,255,255,0.09));
+      overflow: hidden; margin-top: 8px;
+    }
+    .st-bar-fill {
+      height: 100%; border-radius: 999px; transition: width 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+      background: linear-gradient(90deg, #06b6d4 0%, #6366f1 100%);
+    }
+    .st-bar-fill.ok { background: linear-gradient(90deg, #10b981 0%, #06b6d4 100%); }
+    .st-bar-fill.warn { background: linear-gradient(90deg, #f59e0b 0%, #f97316 100%); }
+    .st-bar-fill.crit { background: linear-gradient(90deg, #ef4444 0%, #dc2626 100%); }
+
+    .st-dot {
+      width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0;
+    }
+    .st-dot.online { background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2); }
+    .st-dot.offline { background: #6b7280; }
+    .st-dot.warn { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2); }
+    .st-dot.crit { background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.22); }
+
+    .st-tag {
+      display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.02em; border: 1px solid transparent; white-space: nowrap;
+    }
+    .st-tag.emerald { background: rgba(16, 185, 129, 0.14); color: #34d399; border-color: rgba(16, 185, 129, 0.28); }
+    .st-tag.cyan { background: rgba(6, 182, 212, 0.14); color: #22d3ee; border-color: rgba(6, 182, 212, 0.28); }
+    .st-tag.indigo { background: rgba(99, 102, 241, 0.14); color: #818cf8; border-color: rgba(99, 102, 241, 0.3); }
+    .st-tag.violet { background: rgba(139, 92, 246, 0.14); color: #c084fc; border-color: rgba(139, 92, 246, 0.3); }
+    .st-tag.amber { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border-color: rgba(245, 158, 11, 0.3); }
+    .st-tag.red { background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.3); }
+    .st-tag.muted { background: rgba(148, 163, 184, 0.11); color: var(--text-muted); border-color: var(--border-subtle); }
+
+    .st-mono-chip {
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 7px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px;
+      background: rgba(255,255,255,0.035); border: 1px solid var(--border-subtle); color: var(--text-secondary);
+    }
+    .st-copy-mini {
+      border: 1px solid var(--border-color); background: rgba(255,255,255,0.04); color: var(--text-secondary);
+      border-radius: 6px; padding: 2px 7px; font-size: 10.5px; font-weight: 600; cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .st-copy-mini:hover { color: var(--text-primary); border-color: #22d3ee; background: rgba(6,182,212,0.12); }
+
+    .st-seg-bar {
+      display: inline-flex; padding: 3px; border-radius: 9px; background: var(--bg-secondary, rgba(255,255,255,0.03));
+      border: 1px solid var(--border-color); gap: 3px; align-items: center;
+    }
+    .st-seg-btn {
+      padding: 5px 11px; border-radius: 7px; border: none; background: transparent; color: var(--text-muted);
+      font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s ease;
+    }
+    .st-seg-btn:hover { color: var(--text-primary); }
+    .st-seg-btn.active {
+      background: rgba(6, 182, 212, 0.16); color: #22d3ee; box-shadow: inset 0 0 0 1px rgba(6, 182, 212, 0.35);
+    }
+
+    .st-search-input {
+      padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border-color);
+      background: var(--bg-secondary, rgba(255,255,255,0.03)); color: var(--text-primary);
+      font-size: 12.5px; min-width: 210px;
+    }
+
+    .st-cmd-banner {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+      padding: 12px 15px; border-radius: 11px; margin-bottom: 16px;
+      background: linear-gradient(135deg, rgba(6, 182, 212, 0.08) 0%, rgba(99, 102, 241, 0.07) 100%);
+      border: 1px solid rgba(6, 182, 212, 0.24);
+    }
+    .st-cmd-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+      color: #22d3ee; background: rgba(0,0,0,0.35); padding: 6px 10px; border-radius: 7px;
+      border: 1px solid rgba(6, 182, 212, 0.2); word-break: break-all;
+    }
+
+    .st-switch-box {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 8px 12px; border-radius: 9px; border: 1px solid var(--border-color);
+      background: var(--bg-secondary, rgba(255,255,255,0.025)); min-height: 39px; cursor: pointer;
+    }
+    .st-switch-box input[type="checkbox"] {
+      width: 17px; height: 17px; accent-color: #06b6d4; margin: 0; cursor: pointer; flex-shrink: 0;
+    }
+
+    .st-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+    .st-table th {
+      padding: 11px 16px; text-align: left; font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--text-muted); border-bottom: 1px solid var(--border-subtle);
+      background: rgba(255,255,255,0.015); white-space: nowrap;
+    }
+    .st-table td {
+      padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-primary); vertical-align: middle;
+    }
+    .st-table tbody tr { transition: background 0.14s ease; }
+    .st-table tbody tr:hover { background: var(--bg-table-hover, rgba(255,255,255,0.025)); }
+    .st-table tbody tr:last-child td { border-bottom: none; }
+
+    .st-chart-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px;
+    }
+    @media (max-width: 1060px) { .st-chart-grid { grid-template-columns: 1fr; } }
+
+    .st-split-grid {
+      display: grid; grid-template-columns: minmax(340px, 0.95fr) minmax(0, 1.35fr); gap: 16px; align-items: start;
+    }
+    @media (max-width: 1100px) { .st-split-grid { grid-template-columns: 1fr; } }
+
+    .st-chart-legend {
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary);
+    }
+    .st-legend-item { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+    .st-legend-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+    /* License Studio */
+    .lic-hero-banner {
+      position: relative; overflow: hidden; border-radius: 16px; padding: 26px 28px; margin-bottom: 20px;
+      background:
+        radial-gradient(ellipse at 85% 15%, rgba(16, 185, 129, 0.14) 0%, transparent 55%),
+        radial-gradient(ellipse at 12% 85%, rgba(99, 102, 241, 0.13) 0%, transparent 55%),
+        var(--bg-card);
+      border: 1px solid rgba(16, 185, 129, 0.28); box-shadow: var(--shadow-card);
+    }
+    .lic-entitlement-strip {
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 20px;
+      padding-top: 18px; border-top: 1px solid var(--border-subtle);
+    }
+    @media (max-width: 980px) { .lic-entitlement-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 560px) { .lic-entitlement-strip { grid-template-columns: 1fr; } }
+    .lic-ent-box {
+      padding: 11px 14px; border-radius: 11px; background: rgba(255,255,255,0.025);
+      border: 1px solid var(--border-subtle);
+    }
+    .lic-ent-k { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); }
+    .lic-ent-v { font-size: 15px; font-weight: 800; color: var(--text-primary); margin-top: 4px; }
+    .lic-ent-s { font-size: 11.5px; color: #34d399; margin-top: 2px; font-weight: 600; }
+
+    .lic-feat-grid {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px;
+    }
+    @media (max-width: 1120px) { .lic-feat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 680px) { .lic-feat-grid { grid-template-columns: 1fr; } }
+    .lic-feat-card {
+      background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 14px;
+      padding: 18px 19px; display: flex; flex-direction: column; gap: 10px;
+      transition: border-color 0.18s ease, transform 0.18s ease;
+    }
+    .lic-feat-card:hover { border-color: rgba(16, 185, 129, 0.35); transform: translateY(-1px); }
+    .lic-feat-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .lic-feat-title { margin: 0; font-size: 14.5px; font-weight: 700; color: var(--text-primary); }
+    .lic-feat-desc { margin: 0; font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+    .lic-kv-list { display: flex; flex-direction: column; }
+    .lic-kv-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 9px 0; border-bottom: 1px dashed var(--border-subtle); font-size: 13px;
+    }
+    .lic-kv-row:last-child { border-bottom: none; }
+    .lic-kv-k { color: var(--text-muted); font-weight: 500; }
+    .lic-kv-v { color: var(--text-primary); font-weight: 700; font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
@@ -1015,60 +1250,312 @@
 
       <!-- SECTION: NODES -->
       <% if (section === 'nodes') { %>
-      <div class="v3-toolbar">
-        <div>
-          <h2 style="margin:0;color:var(--text-primary);">Hypervisor &amp; Container Nodes</h2>
-          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Centralized health checks, circuit breakers, capability detection, and HMAC credential rotation.</p>
+      <div class="st-hero-head">
+        <div class="st-hero-title-group">
+          <span class="st-hero-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+          </span>
+          <div>
+            <h2 class="st-hero-title">Hypervisor &amp; Container Nodes</h2>
+            <p class="st-hero-sub">Distributed compute fabric with replay-protected HMAC-SHA256 Node Agents, automatic circuit breakers, real-time capability discovery, and zero-downtime key rotation.</p>
+          </div>
+        </div>
+        <div class="st-actions">
+          <a href="/admin/node-console" class="btn btn-outline">Host Diagnostics &amp; Shell</a>
+          <button type="button" class="btn btn-outline" id="refreshAllNodesBtn" onclick="refreshAllNodesHealth()">Check All Nodes</button>
+          <button type="button" class="btn btn-primary" onclick="toggleNodeRegisterPanel()">+ Register Remote Node</button>
         </div>
       </div>
-      <div class="v3-card">
-        <h3>Register Remote Node Agent</h3>
-        <form onsubmit="submitAddNode(event)" class="v3-form-grid">
-          <div class="v3-field"><label>Node Name</label><input id="nName" required placeholder="eu-fra-node-02"></div>
-          <div class="v3-field"><label>Hostname</label><input id="nHost" required placeholder="fra02.example.com"></div>
-          <div class="v3-field"><label>IPv4 Address</label><input id="nIp" required placeholder="203.0.113.10"></div>
-          <div class="v3-field"><label>Agent URL (HTTPS or private HTTP)</label><input id="nUrl" required placeholder="https://203.0.113.10:8443"></div>
-          <div class="v3-field"><label>Location</label><input id="nLoc" value="Frankfurt, DE"></div>
-          <div class="v3-field" style="display:flex;align-items:center;gap:8px;padding-top:20px;">
-            <input type="checkbox" id="nVerifySsl" checked style="width:auto;margin:0;">
-            <label for="nVerifySsl" style="margin:0;cursor:pointer;font-size:12px;">Verify TLS Cert (uncheck for self-signed)</label>
+
+      <div class="st-kpi-grid" id="nodesKpiGrid">
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Cluster Topology</span>
+            <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
           </div>
-          <div class="v3-field" style="display:flex;align-items:flex-end;"><button type="submit" class="btn btn-primary" style="width:100%;">Register Node</button></div>
-        </form>
-        <div id="nodeCredsOutput" class="v3-code" style="display:none;margin-top:12px;"></div>
+          <div class="st-kpi-val" id="nkTotalVal">--</div>
+          <div class="st-kpi-foot"><span id="nkTotalSub">Scanning cluster...</span><span class="st-tag emerald" id="nkOnlinePill">Syncing</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Aggregate Compute</span>
+            <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg></span>
+          </div>
+          <div class="st-kpi-val" id="nkCoresVal">--</div>
+          <div class="st-kpi-foot"><span id="nkCpuModelSub">Detecting CPU topology...</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Cluster Memory</span>
+            <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2"><path d="M6 19v-3M10 19v-3M14 19v-3M18 19v-3M8 11V9M16 11V9M12 11V9M2 15h20M4 5h16a2 2 0 0 1 2 2v8H2V7a2 2 0 0 1 2-2Z"/></svg></span>
+          </div>
+          <div class="st-kpi-val" id="nkRamVal">--</div>
+          <div class="st-kpi-foot"><span id="nkStorageSub">Disk capacity: --</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Engine &amp; Circuit Health</span>
+            <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+          </div>
+          <div class="st-kpi-val" id="nkEnginesVal">--</div>
+          <div class="st-kpi-foot"><span id="nkCircuitSub">Circuit breakers: --</span></div>
+        </div>
       </div>
-      <div class="v3-card v3-table-wrap">
-        <table class="v3-table">
-          <thead><tr><th>ID</th><th>Node</th><th>Endpoint</th><th>Capabilities</th><th>Circuit</th><th>Hardware</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody id="nodesBody"><tr><td colspan="8">Loading nodes...</td></tr></tbody>
-        </table>
+
+      <div class="st-panel" id="nodeRegisterCard">
+        <div class="st-panel-head">
+          <div class="st-panel-title-wrap">
+            <span class="lxc-step-badge">+</span>
+            <div>
+              <h3 class="st-panel-title">Register Remote Node Agent</h3>
+              <p class="st-panel-sub">Attach a new Linux hypervisor/container host over TLS or private WireGuard mesh.</p>
+            </div>
+          </div>
+          <span class="st-tag cyan">HMAC-SHA256 + ±300s Replay Guard</span>
+        </div>
+        <div class="st-panel-body">
+          <div class="st-cmd-banner">
+            <div>
+              <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:3px;">Fastest Automated Remote Setup (Option 2 in <code>menu.sh</code>)</div>
+              <div style="font-size:11.5px;color:var(--text-muted);">Run on your remote Ubuntu/Debian/RHEL server to auto-install LXC/KVM deps, TLS certs &amp; 24/7 systemd service:</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <code class="st-cmd-code" id="nodeQuickInstallCmd">curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh &amp;&amp; sudo bash menu.sh</code>
+              <button type="button" class="st-copy-mini" onclick="copyTextWithToast(document.getElementById('nodeQuickInstallCmd').textContent, 'Installer command copied!')">Copy One-Liner</button>
+            </div>
+          </div>
+
+          <form onsubmit="submitAddNode(event)">
+            <div class="v3-form-grid" style="grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px;">
+              <div class="v3-field">
+                <label>Node Name</label>
+                <input id="nName" required placeholder="eu-fra-node-02" oninput="autoFillAgentUrl()">
+              </div>
+              <div class="v3-field">
+                <label>Hostname / FQDN</label>
+                <input id="nHost" required placeholder="fra02.example.com">
+              </div>
+              <div class="v3-field">
+                <label>IPv4 / Mesh Address</label>
+                <input id="nIp" required placeholder="203.0.113.10" oninput="autoFillAgentUrl()">
+              </div>
+              <div class="v3-field">
+                <label>Agent Endpoint URL</label>
+                <input id="nUrl" required placeholder="https://203.0.113.10:8443">
+              </div>
+              <div class="v3-field">
+                <label>Datacenter / Location</label>
+                <input id="nLoc" value="Frankfurt, DE" placeholder="Frankfurt, DE">
+              </div>
+              <div class="v3-field">
+                <label>Certificate Policy</label>
+                <label class="st-switch-box" for="nVerifySsl">
+                  <span style="font-size:12px;color:var(--text-primary);font-weight:600;">Verify TLS Cert <span style="font-weight:400;color:var(--text-muted);">(off for self-signed)</span></span>
+                  <input type="checkbox" id="nVerifySsl" checked>
+                </label>
+              </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-top:16px;padding-top:14px;border-top:1px solid var(--border-subtle);">
+              <span style="font-size:12px;color:var(--text-muted);margin-right:auto;">Credentials are encrypted at rest with AES-256-GCM and shown once on creation.</span>
+              <button type="submit" class="btn btn-primary" style="min-width:170px;">Register Node</button>
+            </div>
+          </form>
+
+          <div id="nodeCredsWrap" style="display:none;margin-top:16px;padding:15px;border-radius:11px;border:1px solid rgba(16,185,129,0.35);background:rgba(16,185,129,0.06);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span class="st-tag emerald">One-Time Secret</span>
+                <strong style="font-size:13px;color:var(--text-primary);">Node Agent Bootstrap / Rotated Credentials</strong>
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button type="button" class="st-copy-mini" onclick="copyTextWithToast(document.getElementById('nodeCredsOutput').textContent, 'Node .env credentials copied!')">Copy .env Block</button>
+                <button type="button" class="st-copy-mini" onclick="document.getElementById('nodeCredsWrap').style.display='none'">Dismiss</button>
+              </div>
+            </div>
+            <div id="nodeCredsOutput" class="v3-code" style="display:none;margin:0;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="st-panel">
+        <div class="st-panel-head">
+          <div>
+            <h3 class="st-panel-title">Registered Compute Nodes</h3>
+            <p class="st-panel-sub">Live status, hypervisor engines, hardware inventory, and circuit-breaker state per node.</p>
+          </div>
+          <div class="st-actions">
+            <div class="st-seg-bar" id="nodeFilterSeg">
+              <button type="button" class="st-seg-btn active" onclick="setNodeStatusFilter('all', this)">All</button>
+              <button type="button" class="st-seg-btn" onclick="setNodeStatusFilter('online', this)">Online</button>
+              <button type="button" class="st-seg-btn" onclick="setNodeStatusFilter('offline', this)">Offline</button>
+            </div>
+            <input type="text" id="nodeSearchInput" class="st-search-input" placeholder="Filter by name, IP, location..." oninput="renderNodesTable()">
+          </div>
+        </div>
+        <div class="v3-table-wrap">
+          <table class="st-table">
+            <thead>
+              <tr>
+                <th>Node Identity</th>
+                <th>Agent Endpoint</th>
+                <th>Engines</th>
+                <th>Circuit Breaker</th>
+                <th>Hardware Capacity</th>
+                <th>Status</th>
+                <th style="text-align:right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="nodesBody"><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:28px;">Loading cluster topology...</td></tr></tbody>
+          </table>
+        </div>
       </div>
       <% } %>
 
       <!-- SECTION: STORAGE -->
       <% if (section === 'storage') { %>
-      <div class="v3-toolbar">
-        <h2 style="margin:0;color:var(--text-primary);">Storage Pools &amp; Capacity</h2>
-        <button class="btn btn-outline" onclick="loadStorage(true)">Sync Real Disk Usage (df)</button>
-      </div>
-      <div class="v3-card">
-        <h3>Add Storage Pool</h3>
-        <form onsubmit="submitAddPool(event)" class="v3-form-grid">
-          <div class="v3-field"><label>Node</label><select id="spNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select></div>
-          <div class="v3-field"><label>Pool Name</label><input id="spName" required placeholder="nvme-pool-01"></div>
-          <div class="v3-field"><label>Backend Type</label>
-            <select id="spType"><option value="dir">Directory</option><option value="qcow2">QCOW2 Images</option><option value="raw">RAW Images</option><option value="lvm-thin">LVM Thin</option><option value="zfs">ZFS Dataset</option><option value="btrfs">Btrfs Subvolume</option></select>
+      <div class="st-hero-head">
+        <div class="st-hero-title-group">
+          <span class="st-hero-icon violet">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+          </span>
+          <div>
+            <h2 class="st-hero-title">Storage Pools &amp; Capacity</h2>
+            <p class="st-hero-sub">Real kernel <code>statfs</code> filesystem capacity tracking, thin-provisioning overcommit controls, and multi-backend KVM/LXC volume pools.</p>
           </div>
-          <div class="v3-field"><label>Engine Scope</label><select id="spScope"><option value="both">KVM + LXC</option><option value="kvm">KVM Only</option><option value="lxc">LXC Only</option></select></div>
-          <div class="v3-field"><label>Host Path</label><input id="spPath" required placeholder="/var/lib/tgvpanel/nvme"></div>
-          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Pool</button></div>
-        </form>
+        </div>
+        <div class="st-actions">
+          <button type="button" class="btn btn-outline" id="syncStorageBtn" onclick="loadStorage(true)">Sync Real Disk Usage (statfs)</button>
+          <button type="button" class="btn btn-primary" onclick="document.getElementById('spName').focus()">+ Add Storage Pool</button>
+        </div>
       </div>
-      <div class="v3-card v3-table-wrap">
-        <table class="v3-table">
-          <thead><tr><th>Pool</th><th>Node</th><th>Type</th><th>Scope</th><th>Path</th><th>Used / Total</th><th>Overcommit</th><th>Actions</th></tr></thead>
-          <tbody id="storageBody"></tbody>
-        </table>
+
+      <div class="st-kpi-grid" id="storageKpiGrid">
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Configured Pools</span>
+            <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span>
+          </div>
+          <div class="st-kpi-val" id="skPoolsVal">--</div>
+          <div class="st-kpi-foot"><span id="skPoolsSub">Scanning pools...</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Raw Usable Capacity</span>
+            <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span>
+          </div>
+          <div class="st-kpi-val" id="skTotalVal">--</div>
+          <div class="st-kpi-foot"><span id="skTotalSub">Unique filesystem capacity</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Allocated / Used</span>
+            <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></span>
+          </div>
+          <div class="st-kpi-val" id="skUsedVal">--</div>
+          <div class="st-bar-track"><div class="st-bar-fill" id="skUsedBar" style="width:0%"></div></div>
+          <div class="st-kpi-foot"><span id="skUsedPctSub">0% utilized</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Available Headroom</span>
+            <span class="st-kpi-badge"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></span>
+          </div>
+          <div class="st-kpi-val" id="skFreeVal">--</div>
+          <div class="st-kpi-foot"><span id="skFreeSub">Ready for provisioning</span></div>
+        </div>
+      </div>
+
+      <div class="st-panel">
+        <div class="st-panel-head">
+          <div class="st-panel-title-wrap">
+            <span class="lxc-step-badge" style="background:rgba(139,92,246,0.16);color:#c084fc;border-color:rgba(139,92,246,0.35);">+</span>
+            <div>
+              <h3 class="st-panel-title">Create Storage Pool</h3>
+              <p class="st-panel-sub">Register a local or mounted NVMe, ZFS, LVM, Btrfs, or directory datastore for VM disks and container rootfs volumes.</p>
+            </div>
+          </div>
+          <div class="lxc-chip-row" style="margin:0;">
+            <span style="font-size:11px;color:var(--text-muted);align-self:center;margin-right:4px;">Path presets:</span>
+            <button type="button" class="lxc-chip" onclick="applyPoolPreset('nvme-vms', 'qcow2', 'kvm', '/var/lib/tgvpanel/vms')">KVM QCOW2</button>
+            <button type="button" class="lxc-chip" onclick="applyPoolPreset('lxc-fast', 'dir', 'lxc', '/var/lib/lxc')">LXC Rootfs</button>
+            <button type="button" class="lxc-chip" onclick="applyPoolPreset('shared-nvme', 'dir', 'both', '/var/lib/tgvpanel/shared')">Unified NVMe</button>
+          </div>
+        </div>
+        <div class="st-panel-body">
+          <form onsubmit="submitAddPool(event)">
+            <div class="v3-form-grid" style="grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 14px;">
+              <div class="v3-field">
+                <label>Target Node</label>
+                <select id="spNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select>
+              </div>
+              <div class="v3-field">
+                <label>Pool Identifier</label>
+                <input id="spName" required placeholder="nvme-pool-01">
+              </div>
+              <div class="v3-field">
+                <label>Storage Backend</label>
+                <select id="spType">
+                  <option value="dir">Directory (Filesystem)</option>
+                  <option value="qcow2">QCOW2 Thin Images</option>
+                  <option value="raw">RAW Block Images</option>
+                  <option value="lvm-thin">LVM Thinpool</option>
+                  <option value="zfs">ZFS Dataset</option>
+                  <option value="btrfs">Btrfs Subvolume</option>
+                </select>
+              </div>
+              <div class="v3-field">
+                <label>Workload Scope</label>
+                <select id="spScope">
+                  <option value="both">KVM + LXC (Unified)</option>
+                  <option value="kvm">KVM Virtual Machines</option>
+                  <option value="lxc">LXC Containers</option>
+                </select>
+              </div>
+              <div class="v3-field" style="grid-column: span 2;">
+                <label>Host Mount / Directory Path</label>
+                <input id="spPath" required placeholder="/var/lib/tgvpanel/nvme">
+              </div>
+              <div class="v3-field">
+                <label>Overcommit Ratio</label>
+                <input id="spOvercommit" type="number" step="0.1" min="0.5" max="10" value="1.5">
+              </div>
+              <div class="v3-field" style="display:flex;align-items:flex-end;">
+                <button class="btn btn-primary" type="submit" style="width:100%;">Create Pool</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="st-panel">
+        <div class="st-panel-head">
+          <div>
+            <h3 class="st-panel-title">Active Datastores &amp; Utilization</h3>
+            <p class="st-panel-sub">Real-time block capacity, filesystem utilization bars, and engine bindings.</p>
+          </div>
+          <div class="st-seg-bar" id="storageFilterSeg">
+            <button type="button" class="st-seg-btn active" onclick="setStorageScopeFilter('all', this)">All Pools</button>
+            <button type="button" class="st-seg-btn" onclick="setStorageScopeFilter('kvm', this)">KVM</button>
+            <button type="button" class="st-seg-btn" onclick="setStorageScopeFilter('lxc', this)">LXC</button>
+            <button type="button" class="st-seg-btn" onclick="setStorageScopeFilter('both', this)">Shared</button>
+          </div>
+        </div>
+        <div class="v3-table-wrap">
+          <table class="st-table">
+            <thead>
+              <tr>
+                <th>Datastore Pool</th>
+                <th>Node</th>
+                <th>Backend &amp; Scope</th>
+                <th>Mount Path</th>
+                <th style="min-width:240px;">Capacity &amp; Utilization</th>
+                <th>Overcommit</th>
+                <th style="text-align:right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="storageBody"><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:28px;">Syncing datastore capacities...</td></tr></tbody>
+          </table>
+        </div>
       </div>
       <% } %>
 
@@ -1269,27 +1756,178 @@
 
       <!-- SECTION: MONITORING -->
       <% if (section === 'monitoring') { %>
-      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Live &amp; Historical Telemetry + Threshold Alerts</h2></div>
-      <div class="v3-card">
-        <h3>Node Historical Telemetry</h3>
-        <div style="margin-bottom:12px;">
-          <select id="monNodeSelect" onchange="loadMonitoring()" style="padding:8px 12px;border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-color);">
-            <% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %>
-          </select>
-          <button class="btn btn-outline" onclick="pollNodeNow()">Collect Live Sample Now</button>
+      <div class="st-hero-head">
+        <div class="st-hero-title-group">
+          <span class="st-hero-icon emerald">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          </span>
+          <div>
+            <h2 class="st-hero-title">Live &amp; Historical Telemetry + Threshold Alerts</h2>
+            <p class="st-hero-sub">Real Linux <code>/proc</code> &amp; <code>statfs</code> host telemetry streams, historical resource curves, and automated webhook/notification alert rules.</p>
+          </div>
         </div>
-        <div id="monMetricsBox" class="v3-table-wrap"></div>
+        <div class="st-actions">
+          <select id="monNodeSelect" onchange="loadMonitoring()" style="padding:8px 13px;border-radius:9px;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-color);font-size:13px;font-weight:600;">
+            <% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %><%= n.is_local ? ' (local)' : '' %></option><% }) %>
+          </select>
+          <div class="st-seg-bar" id="monRangeSeg">
+            <button type="button" class="st-seg-btn" onclick="setMonRange(1, this)">1h</button>
+            <button type="button" class="st-seg-btn" onclick="setMonRange(6, this)">6h</button>
+            <button type="button" class="st-seg-btn active" onclick="setMonRange(24, this)">24h</button>
+            <button type="button" class="st-seg-btn" onclick="setMonRange(168, this)">7d</button>
+          </div>
+          <button type="button" class="btn btn-outline" id="monAutoBtn" onclick="toggleMonAutoRefresh()">Auto 15s: Off</button>
+          <button type="button" class="btn btn-primary" id="monPollNowBtn" onclick="pollNodeNow()">Collect Live Sample Now</button>
+        </div>
       </div>
-      <div class="v3-card">
-        <h3>Resource Threshold Alert Rules</h3>
-        <form onsubmit="submitAlertRule(event)" class="v3-form-grid" style="margin-bottom:14px;">
-          <div class="v3-field"><label>Rule Name</label><input id="alName" required placeholder="High Host CPU"></div>
-          <div class="v3-field"><label>Metric</label><select id="alMetric"><option value="cpu_percent">CPU %</option><option value="ram_percent">RAM %</option><option value="disk_percent">Disk %</option></select></div>
-          <div class="v3-field"><label>Threshold (%)</label><input id="alThresh" type="number" value="90"></div>
-          <div class="v3-field"><label>Severity</label><select id="alSev"><option value="warning">Warning</option><option value="critical">Critical</option></select></div>
-          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Alert Rule</button></div>
-        </form>
-        <table class="v3-table"><thead><tr><th>Name</th><th>Metric</th><th>Condition</th><th>Severity</th><th>Last Triggered</th><th>Delete</th></tr></thead><tbody id="alertsBody"></tbody></table>
+
+      <div class="st-kpi-grid">
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">CPU Utilization</span>
+            <span class="st-tag cyan" id="monCpuLoadTag">Load --</span>
+          </div>
+          <div class="st-kpi-val" id="monCpuVal">--%</div>
+          <div class="st-bar-track"><div class="st-bar-fill" id="monCpuBar" style="width:0%"></div></div>
+          <div class="st-kpi-foot"><span id="monCpuMeta">Awaiting sample...</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Memory Pressure</span>
+            <span class="st-tag indigo" id="monRamPctTag">--%</span>
+          </div>
+          <div class="st-kpi-val" id="monRamVal">--</div>
+          <div class="st-bar-track"><div class="st-bar-fill" id="monRamBar" style="width:0%"></div></div>
+          <div class="st-kpi-foot"><span id="monRamMeta">-- / -- MB</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Filesystem Footprint</span>
+            <span class="st-tag violet" id="monDiskPctTag">--%</span>
+          </div>
+          <div class="st-kpi-val" id="monDiskVal">--</div>
+          <div class="st-bar-track"><div class="st-bar-fill" id="monDiskBar" style="width:0%"></div></div>
+          <div class="st-kpi-foot"><span id="monDiskMeta">-- / -- GB</span></div>
+        </div>
+        <div class="st-kpi-card">
+          <div class="st-kpi-top">
+            <span class="st-kpi-label">Network &amp; Alert Engine</span>
+            <span class="st-tag emerald" id="monAlertStateTag">Healthy</span>
+          </div>
+          <div class="st-kpi-val" id="monNetVal">--</div>
+          <div class="st-kpi-foot"><span id="monNetMeta">RX -- • TX --</span><span id="monSampleAge">--</span></div>
+        </div>
+      </div>
+
+      <div class="st-chart-grid">
+        <div class="st-panel" style="margin-bottom:0;">
+          <div class="st-panel-head">
+            <div>
+              <h3 class="st-panel-title">CPU &amp; Memory Utilization Curve</h3>
+              <p class="st-panel-sub" id="monComputeChartSub">Real percentage trajectory across recorded telemetry samples</p>
+            </div>
+            <div class="st-chart-legend">
+              <span class="st-legend-item"><span class="st-legend-swatch" style="background:#22d3ee;"></span>CPU %</span>
+              <span class="st-legend-item"><span class="st-legend-swatch" style="background:#818cf8;"></span>RAM %</span>
+            </div>
+          </div>
+          <div class="st-panel-body" id="monChartCompute" style="padding:14px 18px;min-height:205px;display:flex;align-items:center;justify-content:center;">
+            <span style="color:var(--text-muted);font-size:12.5px;">Loading telemetry curve...</span>
+          </div>
+        </div>
+
+        <div class="st-panel" style="margin-bottom:0;">
+          <div class="st-panel-head">
+            <div>
+              <h3 class="st-panel-title">Disk Utilization &amp; 1m Load Trend</h3>
+              <p class="st-panel-sub" id="monSystemChartSub">Storage consumption (%) &amp; kernel run-queue load average (1m)</p>
+            </div>
+            <div class="st-chart-legend">
+              <span class="st-legend-item"><span class="st-legend-swatch" style="background:#34d399;"></span>Disk %</span>
+              <span class="st-legend-item"><span class="st-legend-swatch" style="background:#fbbf24;"></span>Load (1m)</span>
+            </div>
+          </div>
+          <div class="st-panel-body" id="monChartSystem" style="padding:14px 18px;min-height:205px;display:flex;align-items:center;justify-content:center;">
+            <span style="color:var(--text-muted);font-size:12.5px;">Loading system curve...</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="st-split-grid">
+        <div class="st-panel" style="margin-bottom:0;">
+          <div class="st-panel-head">
+            <div>
+              <h3 class="st-panel-title">Resource Threshold Alert Rules</h3>
+              <p class="st-panel-sub">15-minute cooldown, admin bell notifications &amp; HMAC webhook dispatch.</p>
+            </div>
+            <span class="st-tag amber" id="monRulesCountBadge">0 Rules</span>
+          </div>
+          <div class="st-panel-body">
+            <form onsubmit="submitAlertRule(event)" style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border-subtle);">
+              <div class="v3-form-grid" style="grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px;">
+                <div class="v3-field" style="grid-column: span 2;">
+                  <label>Policy Name</label>
+                  <input id="alName" required placeholder="e.g. Sustained Host CPU Spike">
+                </div>
+                <div class="v3-field">
+                  <label>Monitored Metric</label>
+                  <select id="alMetric">
+                    <option value="cpu_percent">Host CPU (%)</option>
+                    <option value="ram_percent">Host Memory (%)</option>
+                    <option value="disk_percent">Host Disk (%)</option>
+                  </select>
+                </div>
+                <div class="v3-field">
+                  <label>Condition &amp; Threshold (%)</label>
+                  <div style="display:flex;gap:6px;">
+                    <select id="alOp" style="width:74px;flex-shrink:0;">
+                      <option value=">=">&gt;=</option>
+                      <option value=">">&gt;</option>
+                      <option value="<=">&lt;=</option>
+                    </select>
+                    <input id="alThresh" type="number" min="1" max="100" value="90" required>
+                  </div>
+                </div>
+                <div class="v3-field">
+                  <label>Severity Level</label>
+                  <select id="alSev">
+                    <option value="warning">Warning</option>
+                    <option value="critical">Critical</option>
+                  </select>
+                </div>
+                <div class="v3-field" style="display:flex;align-items:flex-end;">
+                  <button class="btn btn-primary" type="submit" style="width:100%;">+ Add Alert Rule</button>
+                </div>
+              </div>
+            </form>
+
+            <div class="v3-table-wrap">
+              <table class="st-table">
+                <thead>
+                  <tr>
+                    <th>Rule</th>
+                    <th>Condition</th>
+                    <th>Severity</th>
+                    <th>Last Fired</th>
+                    <th style="text-align:right;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="alertsBody"><tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:18px;">No alert rules configured.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="st-panel" style="margin-bottom:0;">
+          <div class="st-panel-head">
+            <div>
+              <h3 class="st-panel-title">Node Historical Telemetry Log</h3>
+              <p class="st-panel-sub">Most recent point-in-time host snapshots retained in SQLite (14-day rolling window).</p>
+            </div>
+            <span class="st-tag muted" id="monSamplesCountBadge">0 Samples</span>
+          </div>
+          <div id="monMetricsBox" class="v3-table-wrap" style="max-height:460px;overflow-y:auto;"></div>
+        </div>
       </div>
       <% } %>
 
@@ -1595,11 +2233,171 @@
 
       <!-- SECTION: LICENSE -->
       <% if (section === 'license') { %>
-      <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">TGVPANEL V3 Edition &amp; License</h2></div>
-      <div class="v3-card">
-        <h3>Unified Free &amp; Open Control Plane</h3>
-        <p style="font-size:14px;color:var(--text-secondary);">This TGVPANEL V3 installation is permanently unlocked with multi-node QEMU/KVM + Native LXC support, offline verified migrations, RBAC, and REST API v1.</p>
-        <div class="v3-code"><%= JSON.stringify(licenseInfo, null, 2) %></div>
+      <%
+        const ls = (typeof licenseStats !== 'undefined' && licenseStats) ? licenseStats : {};
+        const upSec = Number(ls.uptimeSec || 0);
+        const upH = Math.floor(upSec / 3600);
+        const upM = Math.floor((upSec % 3600) / 60);
+        const uptimeHuman = upH > 0 ? (upH + 'h ' + upM + 'm') : (upM + 'm ' + (upSec % 60) + 's');
+      %>
+      <div class="st-hero-head">
+        <div class="st-hero-title-group">
+          <span class="st-hero-icon emerald">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+          </span>
+          <div>
+            <h2 class="st-hero-title">TGVPANEL V3 Edition &amp; License</h2>
+            <p class="st-hero-sub">Self-hosted enterprise virtualization control plane — 100% unlocked with zero artificial node, VM, container, or API restrictions.</p>
+          </div>
+        </div>
+        <div class="st-actions">
+          <a href="/admin/nodes" class="btn btn-outline">Manage Cluster Nodes</a>
+          <a href="/admin/api-keys" class="btn btn-outline">API Keys &amp; Webhooks</a>
+        </div>
+      </div>
+
+      <div class="lic-hero-banner">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+          <div>
+            <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:10px;">
+              <span class="st-tag emerald"><span class="st-dot online" style="width:6px;height:6px;"></span> PERMANENTLY UNLOCKED</span>
+              <span class="st-tag cyan">V3.0 UNIFIED EDITION</span>
+              <span class="st-tag indigo">ZERO PHONE-HOME / 100% SELF-HOSTED</span>
+            </div>
+            <h3 style="margin:0;font-size:22px;font-weight:800;color:var(--text-primary);letter-spacing:-0.02em;">
+              <%= (licenseInfo && licenseInfo.edition) ? licenseInfo.edition : 'TGVPANEL V3 Free Unified Edition' %>
+            </h3>
+            <p style="margin:7px 0 0;font-size:13.5px;color:var(--text-secondary);max-width:760px;line-height:1.55;">
+              This TGVPANEL installation is permanently activated with full multi-node QEMU/KVM hardware virtualization, native Linux LXC system containers, 7-stage SHA-256 verified cross-node migrations, role-based access control, and REST API v1.
+            </p>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);">License Status</div>
+            <div style="font-size:20px;font-weight:800;color:#34d399;margin-top:3px;">Verified &amp; Active</div>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">Perpetual • No Expiration</div>
+          </div>
+        </div>
+
+        <div class="lic-entitlement-strip">
+          <div class="lic-ent-box">
+            <div class="lic-ent-k">Compute Nodes</div>
+            <div class="lic-ent-v">Unlimited Nodes</div>
+            <div class="lic-ent-s"><%= ls.nodesOnline ?? 1 %> / <%= ls.nodesTotal ?? 1 %> online right now</div>
+          </div>
+          <div class="lic-ent-box">
+            <div class="lic-ent-k">KVM &amp; LXC Workloads</div>
+            <div class="lic-ent-v">Unlimited Instances</div>
+            <div class="lic-ent-s"><%= ls.kvmCount ?? 0 %> KVM VMs • <%= ls.lxcCount ?? 0 %> LXC CTs</div>
+          </div>
+          <div class="lic-ent-box">
+            <div class="lic-ent-k">Automation &amp; RBAC</div>
+            <div class="lic-ent-v">Full API v1 + Webhooks</div>
+            <div class="lic-ent-s"><%= ls.usersCount ?? 1 %> Users • <%= ls.apiKeysCount ?? 0 %> API Keys</div>
+          </div>
+          <div class="lic-ent-box">
+            <div class="lic-ent-k">Data Sovereignty</div>
+            <div class="lic-ent-v">Air-Gap Ready</div>
+            <div class="lic-ent-s">No external license server required</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="lic-feat-grid">
+        <div class="lic-feat-card">
+          <div class="lic-feat-top">
+            <span class="st-tag indigo">QEMU / KVM</span>
+            <span class="st-tag emerald">Unlocked</span>
+          </div>
+          <h4 class="lic-feat-title">Hardware Virtualization</h4>
+          <p class="lic-feat-desc">Cloud-Init OS provisioning, custom bootable ISO library, VirtIO block/network drivers, Browser noVNC console, live QCOW2 snapshots, and SHA-256 verified backups.</p>
+        </div>
+
+        <div class="lic-feat-card">
+          <div class="lic-feat-top">
+            <span class="st-tag cyan">NATIVE LXC</span>
+            <span class="st-tag emerald">Unlocked</span>
+          </div>
+          <h4 class="lic-feat-title">Cgroups v2 System Containers</h4>
+          <p class="lic-feat-desc">Strict kernel cgroup v2 CPU/RAM delegation, sparse ext4 loop hard disk quotas, optional <code>/dev/kvm</code> nested virtualization, and WebSocket PTY consoles.</p>
+        </div>
+
+        <div class="lic-feat-card">
+          <div class="lic-feat-top">
+            <span class="st-tag violet">MULTI-NODE</span>
+            <span class="st-tag emerald">Unlocked</span>
+          </div>
+          <h4 class="lic-feat-title">HMAC-Authenticated Cluster</h4>
+          <p class="lic-feat-desc">Attach unlimited remote hypervisor nodes over TLS/mTLS with ±300s timestamp + nonce replay defense, automatic 30s circuit breakers, and live capability sync.</p>
+        </div>
+
+        <div class="lic-feat-card">
+          <div class="lic-feat-top">
+            <span class="st-tag amber">MIGRATIONS</span>
+            <span class="st-tag emerald">Unlocked</span>
+          </div>
+          <h4 class="lic-feat-title">7-Stage Verified Transfers</h4>
+          <p class="lic-feat-desc">Cross-node offline LXC container migration with end-to-end SHA-256 archive verification, automatic target configuration rewrite, and safe failure rollback.</p>
+        </div>
+
+        <div class="lic-feat-card">
+          <div class="lic-feat-top">
+            <span class="st-tag emerald">ZERO-TRUST</span>
+            <span class="st-tag emerald">Unlocked</span>
+          </div>
+          <h4 class="lic-feat-title">Vault, TOTP 2FA &amp; RBAC</h4>
+          <p class="lic-feat-desc">AES-256-GCM secret vault (<code>.tgvpanel-secret</code>), RFC 6238 authenticator 2FA, granular instance sharing, CSRF guards, and immutable admin audit logs.</p>
+        </div>
+
+        <div class="lic-feat-card">
+          <div class="lic-feat-top">
+            <span class="st-tag cyan">TELEMETRY &amp; CLI</span>
+            <span class="st-tag emerald">Unlocked</span>
+          </div>
+          <h4 class="lic-feat-title">Observability &amp; 24/7 Ops</h4>
+          <p class="lic-feat-desc">Non-blocking <code>/proc</code> telemetry history, threshold alert policies, HMAC-signed outbound webhooks, and one-command <code>menu.sh</code> 24/7 management.</p>
+        </div>
+      </div>
+
+      <div class="st-split-grid">
+        <div class="st-panel" style="margin-bottom:0;">
+          <div class="st-panel-head">
+            <div>
+              <h3 class="st-panel-title">Installation &amp; Runtime Footprint</h3>
+              <p class="st-panel-sub">Live verified telemetry from this Controller instance.</p>
+            </div>
+            <span class="st-tag cyan"><%= ls.schemaVersion || 'v010' %> Schema</span>
+          </div>
+          <div class="st-panel-body">
+            <div class="lic-kv-list">
+              <div class="lic-kv-row"><span class="lic-kv-k">Control Plane Edition</span><span class="lic-kv-v">TGVPANEL V3 Unified</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Cryptographic Vault</span><span class="lic-kv-v" style="color:#34d399;">AES-256-GCM Active</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Database Schema</span><span class="lic-kv-v">SQLite WAL • <%= ls.schemaVersion || 'v010' %></span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Node.js Runtime</span><span class="lic-kv-v"><%= ls.nodeJsVersion || process.version %> (<%= ls.platformArch || process.platform %>)</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Controller Uptime</span><span class="lic-kv-v"><%= uptimeHuman %></span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Configured Storage Pools</span><span class="lic-kv-v"><%= ls.poolsCount ?? 0 %> Pools</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Active Signed Webhooks</span><span class="lic-kv-v"><%= ls.webhooksCount ?? 0 %> Endpoints</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="st-panel" style="margin-bottom:0;">
+          <div class="st-panel-head">
+            <div>
+              <h3 class="st-panel-title">Edition Entitlement Manifest</h3>
+              <p class="st-panel-sub">Machine-readable license summary exposed to internal health &amp; API checks.</p>
+            </div>
+            <button type="button" class="st-copy-mini" onclick="copyTextWithToast(document.getElementById('licenseJsonPre').textContent, 'License manifest copied!')">Copy JSON</button>
+          </div>
+          <div class="st-panel-body">
+            <div id="licenseJsonPre" class="v3-code" style="margin:0;max-height:260px;"><%= JSON.stringify({
+              ...licenseInfo,
+              controlPlane: 'TGVPANEL V3.0',
+              engines: ['qemu-kvm', 'lxc'],
+              limits: { maxNodes: 'unlimited', maxInstances: 'unlimited', apiV1: true },
+              schema: ls.schemaVersion || 'v010'
+            }, null, 2) %></div>
+          </div>
+        </div>
       </div>
       <% } %>
 
@@ -2196,22 +2994,250 @@ async function submitCreateLxc(e) {
   }
 }
 
+let __cachedNodes = [];
+let __nodeStatusFilter = 'all';
+let __cachedPools = [];
+let __storageScopeFilter = 'all';
+
+function copyTextWithToast(text, msg) {
+  const val = String(text || '').trim();
+  if (!val) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(val).then(() => hkvmToast(msg || 'Copied to clipboard')).catch(() => {
+      fallbackCopyText(val, msg);
+    });
+  } else {
+    fallbackCopyText(val, msg);
+  }
+}
+
+function fallbackCopyText(val, msg) {
+  const ta = document.createElement('textarea');
+  ta.value = val;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); hkvmToast(msg || 'Copied to clipboard'); } catch (_) {}
+  document.body.removeChild(ta);
+}
+
+function fmtBytesCompact(bytes) {
+  const b = Number(bytes || 0);
+  if (!b || b <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let idx = 0;
+  let v = b;
+  while (v >= 1024 && idx < units.length - 1) { v /= 1024; idx++; }
+  return (idx >= 3 ? v.toFixed(2) : v.toFixed(1)) + ' ' + units[idx];
+}
+
+function fmtMbAsGb(mb) {
+  const m = Number(mb || 0);
+  if (m >= 1024) return (m / 1024).toFixed(m >= 10240 ? 1 : 2) + ' GB';
+  return m + ' MB';
+}
+
+function fmtRelTimestamp(ts) {
+  if (!ts) return 'Never';
+  const iso = String(ts).includes('T') ? String(ts) : String(ts).replace(' ', 'T') + 'Z';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(ts);
+  const diffSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (diffSec < 15) return 'just now';
+  if (diffSec < 60) return diffSec + 's ago';
+  if (diffSec < 3600) return Math.floor(diffSec / 60) + 'm ago';
+  if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h ago';
+  return Math.floor(diffSec / 86400) + 'd ago';
+}
+
+function barToneClass(pct) {
+  const p = Number(pct || 0);
+  if (p >= 85) return 'crit';
+  if (p >= 70) return 'warn';
+  return 'ok';
+}
+
+function toggleNodeRegisterPanel() {
+  const card = document.getElementById('nodeRegisterCard');
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const inp = document.getElementById('nName');
+  if (inp) setTimeout(() => inp.focus(), 180);
+}
+
+function autoFillAgentUrl() {
+  const ip = (document.getElementById('nIp')?.value || '').trim();
+  const urlEl = document.getElementById('nUrl');
+  const hostEl = document.getElementById('nHost');
+  if (ip && hostEl && !hostEl.dataset.touched && !hostEl.value) {
+    hostEl.placeholder = ip;
+  }
+  if (ip && urlEl && !urlEl.dataset.touched) {
+    urlEl.value = 'https://' + ip + ':8443';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const uEl = document.getElementById('nUrl');
+  if (uEl) uEl.addEventListener('input', () => { uEl.dataset.touched = '1'; });
+});
+
+function setNodeStatusFilter(filter, btnEl) {
+  __nodeStatusFilter = filter;
+  document.querySelectorAll('#nodeFilterSeg .st-seg-btn').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  renderNodesTable();
+}
+
 async function loadNodes() {
   const data = await hkvmApi('/api/v1/nodes');
-  document.getElementById('nodesBody').innerHTML = data.nodes.map(n => `<tr>
-    <td>#${n.id}</td>
-    <td><strong>${hkvmEsc(n.name)}</strong> ${n.is_local ? '<span class="v3-pill lxc">LOCAL</span>' : ''}</td>
-    <td><code>${hkvmEsc(n.url)}</code></td>
-    <td>KVM:${n.kvm_available ? 'Yes' : 'No'} / LXC:${n.lxc_available ? 'Yes' : 'No'}</td>
-    <td>${hkvmEsc(n.circuit_state)}</td>
-    <td>${n.cpu_cores}c • ${n.ram_total_mb}MB • ${n.disk_total_gb}GB</td>
-    <td><span class="v3-pill ${n.status}">${hkvmEsc(n.status)}</span></td>
-    <td class="v3-btn-row">
-      <button class="btn btn-outline" onclick="checkNode(${n.id})">Check Health</button>
-      <button class="btn btn-outline" onclick="rotateNode(${n.id})">Rotate Keys</button>
-      ${!n.is_local ? `<button class="btn btn-outline" style="color:#ef4444;" onclick="delNode(${n.id})">Remove</button>` : ''}
-    </td>
-  </tr>`).join('');
+  __cachedNodes = data.nodes || [];
+
+  const total = __cachedNodes.length;
+  const online = __cachedNodes.filter(n => n.status === 'online').length;
+  const localCnt = __cachedNodes.filter(n => n.is_local).length;
+  const remoteCnt = total - localCnt;
+  const totalCores = __cachedNodes.reduce((s, n) => s + Number(n.cpu_cores || 0), 0);
+  const totalRamMb = __cachedNodes.reduce((s, n) => s + Number(n.ram_total_mb || 0), 0);
+  const totalDiskGb = __cachedNodes.reduce((s, n) => s + Number(n.disk_total_gb || 0), 0);
+  const kvmReady = __cachedNodes.filter(n => n.kvm_available).length;
+  const lxcReady = __cachedNodes.filter(n => n.lxc_available).length;
+  const openCircuits = __cachedNodes.filter(n => n.circuit_state === 'open').length;
+  const cpuModels = Array.from(new Set(__cachedNodes.map(n => n.cpu_model).filter(Boolean)));
+
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('nkTotalVal', online + ' / ' + total + ' Online');
+  setTxt('nkTotalSub', localCnt + ' local • ' + remoteCnt + ' remote');
+  const pill = document.getElementById('nkOnlinePill');
+  if (pill) {
+    pill.className = 'st-tag ' + (online === total && total > 0 ? 'emerald' : (online > 0 ? 'amber' : 'red'));
+    pill.textContent = online === total && total > 0 ? 'All Healthy' : (total - online) + ' Degraded';
+  }
+  setTxt('nkCoresVal', totalCores + ' vCPU Cores');
+  setTxt('nkCpuModelSub', cpuModels[0] ? String(cpuModels[0]).slice(0, 38) : 'Host CPU telemetry ready');
+  setTxt('nkRamVal', fmtMbAsGb(totalRamMb));
+  setTxt('nkStorageSub', 'Cluster root disk: ' + totalDiskGb.toFixed(1) + ' GB');
+  setTxt('nkEnginesVal', 'KVM ' + kvmReady + ' • LXC ' + lxcReady);
+  setTxt('nkCircuitSub', openCircuits === 0 ? 'All circuit breakers closed' : openCircuits + ' circuit breaker(s) open');
+
+  renderNodesTable();
+}
+
+function renderNodesTable() {
+  const tbody = document.getElementById('nodesBody');
+  if (!tbody) return;
+  const q = (document.getElementById('nodeSearchInput')?.value || '').trim().toLowerCase();
+
+  const list = __cachedNodes.filter(n => {
+    if (__nodeStatusFilter === 'online' && n.status !== 'online') return false;
+    if (__nodeStatusFilter === 'offline' && n.status === 'online') return false;
+    if (q) {
+      const hay = [n.name, n.hostname, n.ip_address, n.location, n.url, n.cpu_model].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:26px;">No nodes match the selected filter.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = list.map(n => {
+    const isHttps = String(n.url || '').startsWith('https://');
+    const protoBadge = n.is_local
+      ? '<span class="st-tag cyan">IN-PROCESS</span>'
+      : (isHttps
+          ? '<span class="st-tag emerald">' + (n.verify_ssl ? 'TLS VERIFIED' : 'TLS SELF-SIGNED') + '</span>'
+          : '<span class="st-tag amber">PLAIN HTTP</span>');
+
+    const kvmTag = n.kvm_available
+      ? '<span class="st-tag indigo">&#10003; KVM' + (n.qemu_version ? ' ' + hkvmEsc(String(n.qemu_version).split(' ')[0]) : '') + '</span>'
+      : '<span class="st-tag muted">KVM N/A</span>';
+    const lxcTag = n.lxc_available
+      ? '<span class="st-tag cyan">&#10003; LXC' + (n.lxc_version ? ' ' + hkvmEsc(String(n.lxc_version)) : '') + '</span>'
+      : '<span class="st-tag muted">LXC N/A</span>';
+    const cgTag = n.cgroup_version === 'v2' ? '<span class="st-tag emerald">cgroup v2</span>' : '';
+
+    const cState = String(n.circuit_state || 'closed');
+    const cTag = cState === 'closed'
+      ? '<span class="st-tag emerald"><span class="st-dot online" style="width:6px;height:6px;"></span> Closed</span>'
+      : (cState === 'half-open'
+          ? '<span class="st-tag amber">Half-Open</span>'
+          : '<span class="st-tag red">Open (' + Number(n.consecutive_failures || 0) + ' err)</span>');
+
+    const statusDot = n.status === 'online' ? 'online' : (n.status === 'degraded' ? 'warn' : 'offline');
+    const statusTag = n.status === 'online' ? 'emerald' : (n.status === 'degraded' ? 'amber' : 'muted');
+    const hbText = n.last_heartbeat ? fmtRelTimestamp(n.last_heartbeat) : (n.is_local ? 'live' : 'never');
+
+    return `<tr>
+      <td>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="width:34px;height:34px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;background:rgba(99,102,241,0.12);border:1px solid rgba(99,102,241,0.28);color:#818cf8;font-weight:800;font-size:12px;flex-shrink:0;">#${n.id}</span>
+          <div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <strong style="font-size:13.5px;color:var(--text-primary);">${hkvmEsc(n.name)}</strong>
+              ${n.is_local ? '<span class="st-tag cyan">LOCAL</span>' : '<span class="st-tag violet">REMOTE</span>'}
+            </div>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">
+              ${hkvmEsc(n.location || 'Datacenter')} &bull; <code>${hkvmEsc(n.ip_address || n.hostname || '127.0.0.1')}</code>
+            </div>
+          </div>
+        </div>
+      </td>
+      <td>
+        <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-start;">
+          <span class="st-mono-chip">${hkvmEsc(n.url)}</span>
+          <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+            ${protoBadge}
+            ${n.agent_version ? '<span style="font-size:11px;color:var(--text-muted);">v' + hkvmEsc(n.agent_version) + '</span>' : ''}
+          </div>
+        </div>
+      </td>
+      <td>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;max-width:220px;">
+          ${kvmTag}
+          ${lxcTag}
+          ${cgTag}
+        </div>
+      </td>
+      <td>${cTag}</td>
+      <td>
+        <div style="font-weight:700;font-size:12.5px;color:var(--text-primary);">
+          ${Number(n.cpu_cores || 0)} vCPU &bull; ${fmtMbAsGb(n.ram_total_mb)} &bull; ${Number(n.disk_total_gb || 0).toFixed(1)} GB
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${hkvmEsc(n.cpu_model || '')}">
+          ${hkvmEsc(n.cpu_model || (n.kernel_version ? 'Linux ' + n.kernel_version : 'Click Check Health to probe'))}
+        </div>
+      </td>
+      <td>
+        <span class="st-tag ${statusTag}"><span class="st-dot ${statusDot}" style="width:6px;height:6px;"></span> ${hkvmEsc(String(n.status || 'unknown').toUpperCase())}</span>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Seen: ${hkvmEsc(hbText)}</div>
+      </td>
+      <td style="text-align:right;">
+        <div class="v3-btn-row" style="justify-content:flex-end;">
+          <button class="btn btn-outline" id="chkNodeBtn_${n.id}" onclick="checkNode(${n.id})" style="font-size:12px;padding:6px 10px;">Check Health</button>
+          <button class="btn btn-outline" onclick="rotateNode(${n.id})" style="font-size:12px;padding:6px 10px;">Rotate Keys</button>
+          ${!n.is_local ? `<button class="btn btn-outline" style="color:#ef4444;font-size:12px;padding:6px 10px;" onclick="delNode(${n.id})">Remove</button>` : ''}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function refreshAllNodesHealth() {
+  const btn = document.getElementById('refreshAllNodesBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking...'; }
+  try {
+    for (const n of __cachedNodes) {
+      await hkvmApi('/api/v1/nodes/' + n.id + '/check', { method: 'POST' }).catch(() => null);
+    }
+    await loadNodes();
+    hkvmToast('Cluster health & capabilities synchronized');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Check All Nodes'; }
+  }
 }
 
 async function submitAddNode(e) {
@@ -2220,88 +3246,232 @@ async function submitAddNode(e) {
     const out = await hkvmApi('/api/v1/nodes', {
       method: 'POST',
       body: {
-        name: document.getElementById('nName').value,
-        hostname: document.getElementById('nHost').value,
-        ipAddress: document.getElementById('nIp').value,
-        url: document.getElementById('nUrl').value,
-        location: document.getElementById('nLoc').value,
+        name: document.getElementById('nName').value.trim(),
+        hostname: document.getElementById('nHost').value.trim(),
+        ipAddress: document.getElementById('nIp').value.trim(),
+        url: document.getElementById('nUrl').value.trim(),
+        location: document.getElementById('nLoc').value.trim(),
         verifySsl: document.getElementById('nVerifySsl') ? document.getElementById('nVerifySsl').checked : true
       }
     });
     let parsedPort = '8443';
     try {
-      const u = new URL(document.getElementById('nUrl').value);
+      const u = new URL(document.getElementById('nUrl').value.trim());
       parsedPort = u.port || (u.protocol === 'https:' ? '443' : '80');
     } catch (_e) {}
+    const wrap = document.getElementById('nodeCredsWrap');
     const box = document.getElementById('nodeCredsOutput');
+    if (wrap) wrap.style.display = 'block';
     box.style.display = 'block';
     box.textContent =
-      '# Remote Node Bootstrap Credentials — paste into /opt/tgvpanel/.env on the remote node:\n' +
+      '# Remote Node Bootstrap Credentials — paste into /opt/tgvpanel/.env (or menu.sh Option 2):\n' +
       'TGVPANEL_NODE_ID=' + out.node.id + '\n' +
       'TGVPANEL_AGENT_HOST=0.0.0.0\n' +
       'TGVPANEL_AGENT_PORT=' + parsedPort + '\n' +
       'TGVPANEL_NODE_API_KEY=' + out.bootstrapCredentials.apiKey + '\n' +
       'TGVPANEL_NODE_HMAC_SECRET=' + out.bootstrapCredentials.hmacSecret;
+    hkvmToast('Node "' + out.node.name + '" registered! Copy your bootstrap credentials below.');
     loadNodes();
   } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
 async function checkNode(id) {
+  const btn = document.getElementById('chkNodeBtn_' + id);
+  if (btn) { btn.disabled = true; btn.textContent = 'Probing...'; }
   try {
     await hkvmApi('/api/v1/nodes/' + id + '/check', { method: 'POST' });
-    hkvmToast('Node health & telemetry updated');
-    loadNodes();
-  } catch (err) { hkvmToast(err.message, 'error'); loadNodes(); }
+    hkvmToast('Node #' + id + ' health & telemetry updated');
+    await loadNodes();
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+    await loadNodes();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Check Health'; }
+  }
 }
 
 async function rotateNode(id) {
-  const out = await hkvmApi('/api/v1/nodes/' + id + '/rotate-credentials', { method: 'POST' });
-  const box = document.getElementById('nodeCredsOutput');
-  box.style.display = 'block';
-  box.textContent = 'Rotated Node #' + id + ' Credentials:\nAPI Key: ' + out.apiKey + '\nHMAC Secret: ' + out.hmacSecret;
-  hkvmToast('Node credentials rotated');
+  if (!confirm('Rotate HMAC & API credentials for Node #' + id + '?')) return;
+  try {
+    const out = await hkvmApi('/api/v1/nodes/' + id + '/rotate-credentials', { method: 'POST' });
+    const wrap = document.getElementById('nodeCredsWrap');
+    const box = document.getElementById('nodeCredsOutput');
+    if (wrap) wrap.style.display = 'block';
+    box.style.display = 'block';
+    box.textContent =
+      '# Rotated Credentials for Node #' + id + (out.pushedToAgent ? ' (live-pushed to agent)' : ' (update .env on remote node)') + ':\n' +
+      'TGVPANEL_NODE_ID=' + id + '\n' +
+      'TGVPANEL_NODE_API_KEY=' + out.apiKey + '\n' +
+      'TGVPANEL_NODE_HMAC_SECRET=' + out.hmacSecret;
+    if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    hkvmToast('Node #' + id + ' credentials rotated');
+  } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
 async function delNode(id) {
-  if (!confirm('Remove remote node #' + id + '?')) return;
-  try { await hkvmApi('/api/v1/nodes/' + id, { method: 'DELETE' }); loadNodes(); }
+  if (!confirm('Remove remote node #' + id + ' from cluster registry?')) return;
+  try { await hkvmApi('/api/v1/nodes/' + id, { method: 'DELETE' }); hkvmToast('Node #' + id + ' removed'); loadNodes(); }
   catch (err) { hkvmToast(err.message, 'error'); }
 }
 
+function applyPoolPreset(name, type, scope, poolPath) {
+  const nEl = document.getElementById('spName');
+  const tEl = document.getElementById('spType');
+  const sEl = document.getElementById('spScope');
+  const pEl = document.getElementById('spPath');
+  if (nEl && !nEl.value) nEl.value = name;
+  if (tEl) tEl.value = type;
+  if (sEl) sEl.value = scope;
+  if (pEl) pEl.value = poolPath;
+}
+
+function setStorageScopeFilter(scope, btnEl) {
+  __storageScopeFilter = scope;
+  document.querySelectorAll('#storageFilterSeg .st-seg-btn').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  renderStorageTable();
+}
+
 async function loadStorage(sync) {
-  const data = await hkvmApi('/api/v1/storage/pools' + (sync ? '?sync=1' : ''));
-  document.getElementById('storageBody').innerHTML = data.pools.map(p => `<tr>
-    <td><strong>${hkvmEsc(p.name)}</strong></td>
-    <td>${hkvmEsc(p.node_name || '#' + p.node_id)}</td>
-    <td><span class="v3-pill kvm">${hkvmEsc(p.pool_type)}</span></td>
-    <td>${hkvmEsc(p.engine_scope)}</td>
-    <td><code>${hkvmEsc(p.path)}</code></td>
-    <td>${(p.used_bytes / 1073741824).toFixed(2)} / ${(p.total_bytes / 1073741824).toFixed(2)} GB</td>
-    <td>${p.overcommit_ratio}x</td>
-    <td><button class="btn btn-outline" style="color:#ef4444;" onclick="delPool(${p.id})">Delete</button></td>
-  </tr>`).join('');
+  const btn = document.getElementById('syncStorageBtn');
+  if (sync && btn) { btn.disabled = true; btn.textContent = 'Syncing statfs...'; }
+  try {
+    const data = await hkvmApi('/api/v1/storage/pools' + (sync ? '?sync=1' : ''));
+    __cachedPools = data.pools || [];
+
+    // Deduplicate identical underlying filesystems per node (e.g. two dir pools on same root partition)
+    const fsMap = new Map();
+    for (const p of __cachedPools) {
+      const tot = Number(p.total_bytes || 0);
+      const used = Number(p.used_bytes || 0);
+      const avail = Number(p.available_bytes || Math.max(0, tot - used));
+      const fsKey = tot > 0 ? (p.node_id + ':' + tot) : ('pool:' + p.id);
+      if (!fsMap.has(fsKey)) {
+        fsMap.set(fsKey, { total: tot, used, avail });
+      }
+    }
+    let uniqueTotal = 0, uniqueUsed = 0, uniqueAvail = 0;
+    fsMap.forEach(v => { uniqueTotal += v.total; uniqueUsed += v.used; uniqueAvail += v.avail; });
+    const pct = uniqueTotal > 0 ? Math.min(100, (uniqueUsed / uniqueTotal) * 100) : 0;
+
+    const kvmCnt = __cachedPools.filter(p => p.engine_scope === 'kvm' || p.engine_scope === 'both').length;
+    const lxcCnt = __cachedPools.filter(p => p.engine_scope === 'lxc' || p.engine_scope === 'both').length;
+
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setTxt('skPoolsVal', __cachedPools.length + (__cachedPools.length === 1 ? ' Pool' : ' Pools'));
+    setTxt('skPoolsSub', kvmCnt + ' KVM-capable • ' + lxcCnt + ' LXC-capable');
+    setTxt('skTotalVal', (uniqueTotal / 1073741824).toFixed(2) + ' GB');
+    setTxt('skTotalSub', fsMap.size + ' backing filesystem' + (fsMap.size === 1 ? '' : 's'));
+    setTxt('skUsedVal', (uniqueUsed / 1073741824).toFixed(2) + ' GB');
+    setTxt('skUsedPctSub', pct.toFixed(1) + '% of raw capacity used');
+    const bar = document.getElementById('skUsedBar');
+    if (bar) {
+      bar.style.width = pct.toFixed(1) + '%';
+      bar.className = 'st-bar-fill ' + barToneClass(pct);
+    }
+    setTxt('skFreeVal', (uniqueAvail / 1073741824).toFixed(2) + ' GB');
+    setTxt('skFreeSub', pct >= 85 ? 'High disk utilization — expand soon' : 'Healthy free capacity');
+
+    renderStorageTable();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sync Real Disk Usage (statfs)'; }
+  }
+}
+
+function renderStorageTable() {
+  const tbody = document.getElementById('storageBody');
+  if (!tbody) return;
+  const list = __cachedPools.filter(p => {
+    if (__storageScopeFilter === 'all') return true;
+    return String(p.engine_scope || 'both') === __storageScopeFilter;
+  });
+
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:26px;">No storage pools match this filter.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = list.map(p => {
+    const usedGb = Number(p.used_bytes || 0) / 1073741824;
+    const totalGb = Number(p.total_bytes || 0) / 1073741824;
+    const freeGb = Math.max(0, totalGb - usedGb);
+    const pct = totalGb > 0 ? Math.min(100, (usedGb / totalGb) * 100) : 0;
+    const tone = barToneClass(pct);
+
+    const scopeVal = String(p.engine_scope || 'both');
+    const scopeBadge = scopeVal === 'kvm'
+      ? '<span class="st-tag indigo">KVM</span>'
+      : (scopeVal === 'lxc' ? '<span class="st-tag cyan">LXC</span>' : '<span class="st-tag emerald">KVM + LXC</span>');
+
+    const statusOnline = p.status === 'online' || totalGb > 0;
+    const volCnt = Number(p.volume_count || 0);
+
+    return `<tr>
+      <td>
+        <div style="display:flex;align-items:center;gap:9px;">
+          <span class="st-dot ${statusOnline ? 'online' : 'warn'}"></span>
+          <div>
+            <strong style="font-size:13.5px;color:var(--text-primary);">${hkvmEsc(p.name)}</strong>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+              ${volCnt} tracked volume${volCnt === 1 ? '' : 's'} &bull; ${hkvmEsc(p.status || 'online')}
+            </div>
+          </div>
+        </div>
+      </td>
+      <td><span class="st-tag muted">${hkvmEsc(p.node_name || '#' + p.node_id)}</span></td>
+      <td>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+          <span class="st-tag violet">${hkvmEsc(String(p.pool_type || 'dir').toUpperCase())}</span>
+          ${scopeBadge}
+        </div>
+      </td>
+      <td>
+        <div style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <span class="st-mono-chip">${hkvmEsc(p.path)}</span>
+          <button type="button" class="st-copy-mini" data-path="${hkvmEsc(p.path)}" onclick="copyTextWithToast(this.dataset.path, 'Mount path copied!')">Copy</button>
+        </div>
+      </td>
+      <td>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;">
+          <span><strong>${usedGb.toFixed(2)}</strong> <span style="color:var(--text-muted);">/ ${totalGb.toFixed(2)} GB</span></span>
+          <span style="font-size:11.5px;font-weight:700;color:${pct >= 85 ? '#f87171' : (pct >= 70 ? '#fbbf24' : '#38bdf8')};">${totalGb > 0 ? pct.toFixed(1) + '%' : 'Unprobed'}</span>
+        </div>
+        <div class="st-bar-track" style="margin-top:6px;"><div class="st-bar-fill ${tone}" style="width:${pct.toFixed(1)}%"></div></div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">${freeGb.toFixed(2)} GB free</div>
+      </td>
+      <td><span class="st-tag muted">${Number(p.overcommit_ratio || 1.5)}x</span></td>
+      <td style="text-align:right;">
+        <button class="btn btn-outline" style="color:#ef4444;font-size:12px;padding:6px 11px;" onclick="delPool(${p.id}, '${hkvmEsc(p.name)}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
 }
 
 async function submitAddPool(e) {
   e.preventDefault();
   try {
+    const rawPath = document.getElementById('spPath').value.trim();
     await hkvmApi('/api/v1/storage/pools', {
       method: 'POST',
       body: {
         nodeId: Number(document.getElementById('spNode').value),
-        name: document.getElementById('spName').value,
+        name: document.getElementById('spName').value.trim(),
         poolType: document.getElementById('spType').value,
         engineScope: document.getElementById('spScope').value,
-        poolPath: document.getElementById('spPath').value
+        path: rawPath,
+        poolPath: rawPath,
+        overcommitRatio: Number(document.getElementById('spOvercommit')?.value || 1.5)
       }
     });
-    hkvmToast('Storage pool created');
+    document.getElementById('spName').value = '';
+    hkvmToast('Storage pool created & capacity synced');
     loadStorage(true);
   } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
-async function delPool(id) {
-  try { await hkvmApi('/api/v1/storage/pools/' + id, { method: 'DELETE' }); loadStorage(false); }
+async function delPool(id, name) {
+  if (!confirm('Remove storage pool "' + (name || '#' + id) + '" from registry? (Existing files on disk are not deleted)')) return;
+  try { await hkvmApi('/api/v1/storage/pools/' + id, { method: 'DELETE' }); hkvmToast('Storage pool removed'); loadStorage(false); }
   catch (err) { hkvmToast(err.message, 'error'); }
 }
 
@@ -2604,50 +3774,297 @@ async function submitMigration(e) {
   } catch (err) { hkvmToast(err.message, 'error'); loadMigrations(); }
 }
 
-async function loadMonitoring() {
-  const nodeId = document.getElementById('monNodeSelect').value;
-  const [mData, aData] = await Promise.all([
-    hkvmApi('/api/v1/nodes/' + nodeId + '/metrics?hours=24'),
-    hkvmApi('/api/v1/monitoring/alerts')
-  ]);
-  const rows = mData.history.slice(-15).reverse();
-  document.getElementById('monMetricsBox').innerHTML = rows.length
-    ? `<table class="v3-table"><thead><tr><th>Recorded At</th><th>CPU %</th><th>Load (1m)</th><th>RAM Used</th><th>Disk Used</th></tr></thead><tbody>` +
-      rows.map(r => `<tr><td>${hkvmEsc(r.recorded_at)}</td><td>${r.cpu_percent}%</td><td>${r.load_avg_1}</td><td>${r.ram_used_mb} / ${r.ram_total_mb} MB</td><td>${r.disk_used_gb} / ${r.disk_total_gb} GB</td></tr>`).join('') +
-      `</tbody></table>`
-    : '<p style="color:var(--text-muted);font-size:13px;">Click "Collect Live Sample Now" to record an immediate telemetry sample.</p>';
+let __monHours = 24;
+let __monAutoTimer = null;
 
-  document.getElementById('alertsBody').innerHTML = aData.rules.map(a => `<tr>
-    <td><strong>${hkvmEsc(a.name)}</strong></td><td>${hkvmEsc(a.metric)}</td>
-    <td>${hkvmEsc(a.operator)} ${a.threshold}%</td><td><span class="v3-pill warning">${hkvmEsc(a.severity)}</span></td>
-    <td>${hkvmEsc(a.last_triggered_at || 'Never')}</td>
-    <td><button class="btn btn-outline" onclick="delAlert(${a.id})">Delete</button></td>
-  </tr>`).join('');
+function setMonRange(hours, btnEl) {
+  __monHours = Number(hours || 24);
+  document.querySelectorAll('#monRangeSeg .st-seg-btn').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  loadMonitoring();
 }
 
-async function pollNodeNow() {
-  const nodeId = document.getElementById('monNodeSelect').value;
-  await hkvmApi('/api/v1/nodes/' + nodeId + '/check', { method: 'POST' });
-  hkvmToast('Live sample collected');
-  loadMonitoring();
+function toggleMonAutoRefresh() {
+  const btn = document.getElementById('monAutoBtn');
+  if (__monAutoTimer) {
+    clearInterval(__monAutoTimer);
+    __monAutoTimer = null;
+    if (btn) {
+      btn.textContent = 'Auto 15s: Off';
+      btn.style.borderColor = '';
+      btn.style.color = '';
+    }
+    hkvmToast('Live auto-refresh paused');
+  } else {
+    if (btn) {
+      btn.textContent = '● Auto 15s: Live';
+      btn.style.borderColor = 'rgba(16,185,129,0.5)';
+      btn.style.color = '#34d399';
+    }
+    pollNodeNow(true);
+    __monAutoTimer = setInterval(() => {
+      pollNodeNow(true);
+    }, 15000);
+    hkvmToast('Live 15-second telemetry streaming enabled');
+  }
+}
+
+function renderDualSeriesSvg(containerId, points, s1Cfg, s2Cfg) {
+  const box = document.getElementById(containerId);
+  if (!box) return;
+  if (!points || points.length === 0) {
+    box.innerHTML =
+      '<div style="text-align:center;padding:28px 16px;">' +
+      '<div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;">No telemetry samples in this window yet</div>' +
+      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Click <strong>Collect Live Sample Now</strong> above to capture an immediate host reading.</div>' +
+      '<button type="button" class="btn btn-outline" onclick="pollNodeNow()" style="font-size:12px;padding:6px 12px;">Capture Sample</button>' +
+      '</div>';
+    return;
+  }
+
+  const W = 560, H = 175, padL = 36, padR = 14, padT = 12, padB = 26;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const v1 = points.map(p => Math.max(0, Number(s1Cfg.get(p) || 0)));
+  const v2 = points.map(p => Math.max(0, Number(s2Cfg.get(p) || 0)));
+  const maxVal = s1Cfg.fixedMax || Math.max(100, ...v1, ...v2);
+
+  const xAt = (idx) => points.length === 1 ? padL + plotW / 2 : padL + (idx / (points.length - 1)) * plotW;
+  const yAt = (val) => padT + plotH - (Math.min(maxVal, Math.max(0, val)) / maxVal) * plotH;
+
+  const mkPath = (arr) => arr.map((val, i) => (i === 0 ? 'M' : 'L') + xAt(i).toFixed(1) + ',' + yAt(val).toFixed(1)).join(' ');
+  const mkArea = (arr) => {
+    if (arr.length < 2) return '';
+    return mkPath(arr) + ` L${xAt(arr.length - 1).toFixed(1)},${(padT + plotH).toFixed(1)} L${xAt(0).toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
+  };
+
+  const gridSteps = [0, 0.25, 0.5, 0.75, 1];
+  const gridSvg = gridSteps.map(g => {
+    const y = (padT + plotH * (1 - g)).toFixed(1);
+    const lbl = Math.round(maxVal * g) + (s1Cfg.unit || '%');
+    return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3,3"/>` +
+           `<text x="${padL - 6}" y="${Number(y) + 3.5}" text-anchor="end" fill="rgba(160,170,185,0.75)" font-size="9.5" font-family="monospace">${lbl}</text>`;
+  }).join('');
+
+  const fmtTimeShort = (raw) => {
+    if (!raw) return '';
+    const str = String(raw);
+    return str.length >= 16 ? str.slice(11, 16) : str;
+  };
+  const firstLbl = hkvmEsc(fmtTimeShort(points[0].recorded_at));
+  const midLbl = points.length > 2 ? hkvmEsc(fmtTimeShort(points[Math.floor(points.length / 2)].recorded_at)) : '';
+  const lastLbl = hkvmEsc(fmtTimeShort(points[points.length - 1].recorded_at));
+
+  const grad1 = containerId + '_g1';
+  const grad2 = containerId + '_g2';
+  const lastIdx = points.length - 1;
+
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:180px;display:block;overflow:visible;">
+    <defs>
+      <linearGradient id="${grad1}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${s1Cfg.color}" stop-opacity="0.28"/>
+        <stop offset="100%" stop-color="${s1Cfg.color}" stop-opacity="0.0"/>
+      </linearGradient>
+      <linearGradient id="${grad2}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${s2Cfg.color}" stop-opacity="0.20"/>
+        <stop offset="100%" stop-color="${s2Cfg.color}" stop-opacity="0.0"/>
+      </linearGradient>
+    </defs>
+    ${gridSvg}
+    ${points.length > 1 ? `<path d="${mkArea(v2)}" fill="url(#${grad2})"/>` : ''}
+    ${points.length > 1 ? `<path d="${mkArea(v1)}" fill="url(#${grad1})"/>` : ''}
+    ${points.length > 1 ? `<path d="${mkPath(v2)}" fill="none" stroke="${s2Cfg.color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>` : ''}
+    ${points.length > 1 ? `<path d="${mkPath(v1)}" fill="none" stroke="${s1Cfg.color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>` : ''}
+    <circle cx="${xAt(lastIdx).toFixed(1)}" cy="${yAt(v2[lastIdx]).toFixed(1)}" r="3.5" fill="${s2Cfg.color}"/>
+    <circle cx="${xAt(lastIdx).toFixed(1)}" cy="${yAt(v1[lastIdx]).toFixed(1)}" r="4" fill="${s1Cfg.color}"/>
+    <text x="${padL}" y="${H - 6}" text-anchor="start" fill="rgba(160,170,185,0.75)" font-size="9.5" font-family="monospace">${firstLbl}</text>
+    ${midLbl ? `<text x="${(padL + plotW / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="rgba(160,170,185,0.75)" font-size="9.5" font-family="monospace">${midLbl}</text>` : ''}
+    <text x="${W - padR}" y="${H - 6}" text-anchor="end" fill="rgba(160,170,185,0.75)" font-size="9.5" font-family="monospace">${lastLbl}</text>
+  </svg>`;
+}
+
+async function loadMonitoring() {
+  const sel = document.getElementById('monNodeSelect');
+  if (!sel) return;
+  const nodeId = sel.value;
+  const [mData, aData] = await Promise.all([
+    hkvmApi('/api/v1/nodes/' + nodeId + '/metrics?hours=' + __monHours),
+    hkvmApi('/api/v1/monitoring/alerts')
+  ]);
+
+  const history = mData.history || [];
+  const rules = aData.rules || [];
+  const latest = history.length ? history[history.length - 1] : null;
+
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTxt('monSamplesCountBadge', history.length + (history.length === 1 ? ' Sample' : ' Samples'));
+  setTxt('monRulesCountBadge', rules.length + (rules.length === 1 ? ' Rule' : ' Rules'));
+
+  if (latest) {
+    const cpuPct = Math.min(100, Math.max(0, Number(latest.cpu_percent || 0)));
+    const ramTot = Math.max(1, Number(latest.ram_total_mb || 1));
+    const ramUsed = Number(latest.ram_used_mb || 0);
+    const ramPct = Math.min(100, Math.max(0, (ramUsed / ramTot) * 100));
+    const diskTot = Math.max(0.01, Number(latest.disk_total_gb || 0));
+    const diskUsed = Number(latest.disk_used_gb || 0);
+    const diskPct = diskTot > 0 ? Math.min(100, Math.max(0, (diskUsed / diskTot) * 100)) : 0;
+
+    const avgCpu = history.reduce((s, r) => s + Number(r.cpu_percent || 0), 0) / history.length;
+    const peakCpu = Math.max(...history.map(r => Number(r.cpu_percent || 0)));
+
+    setTxt('monCpuVal', cpuPct.toFixed(2) + '%');
+    setTxt('monCpuLoadTag', 'Load ' + Number(latest.load_avg_1 || 0).toFixed(2));
+    setTxt('monCpuMeta', 'Avg ' + avgCpu.toFixed(1) + '% • Peak ' + peakCpu.toFixed(1) + '%');
+    const cBar = document.getElementById('monCpuBar');
+    if (cBar) { cBar.style.width = cpuPct.toFixed(1) + '%'; cBar.className = 'st-bar-fill ' + barToneClass(cpuPct); }
+
+    setTxt('monRamVal', fmtMbAsGb(ramUsed) + ' / ' + fmtMbAsGb(ramTot));
+    setTxt('monRamPctTag', ramPct.toFixed(1) + '%');
+    setTxt('monRamMeta', ramUsed + ' / ' + ramTot + ' MB (' + fmtMbAsGb(Math.max(0, ramTot - ramUsed)) + ' free)');
+    const rBar = document.getElementById('monRamBar');
+    if (rBar) { rBar.style.width = ramPct.toFixed(1) + '%'; rBar.className = 'st-bar-fill ' + barToneClass(ramPct); }
+
+    setTxt('monDiskVal', diskUsed.toFixed(2) + ' / ' + diskTot.toFixed(2) + ' GB');
+    setTxt('monDiskPctTag', diskPct.toFixed(1) + '%');
+    setTxt('monDiskMeta', Math.max(0, diskTot - diskUsed).toFixed(2) + ' GB free headroom');
+    const dBar = document.getElementById('monDiskBar');
+    if (dBar) { dBar.style.width = diskPct.toFixed(1) + '%'; dBar.className = 'st-bar-fill ' + barToneClass(diskPct); }
+
+    setTxt('monNetVal', fmtBytesCompact(Number(latest.net_rx_bytes || 0) + Number(latest.net_tx_bytes || 0)));
+    setTxt('monNetMeta', 'RX ' + fmtBytesCompact(latest.net_rx_bytes) + ' • TX ' + fmtBytesCompact(latest.net_tx_bytes));
+    setTxt('monSampleAge', fmtRelTimestamp(latest.recorded_at));
+  } else {
+    setTxt('monCpuVal', '--%');
+    setTxt('monCpuLoadTag', 'No data');
+    setTxt('monCpuMeta', 'Click Collect Live Sample Now');
+    setTxt('monRamVal', '--');
+    setTxt('monRamPctTag', '--%');
+    setTxt('monRamMeta', 'No samples recorded yet');
+    setTxt('monDiskVal', '--');
+    setTxt('monDiskPctTag', '--%');
+    setTxt('monDiskMeta', 'No samples recorded yet');
+    setTxt('monNetVal', '0 B');
+    setTxt('monNetMeta', 'RX 0 B • TX 0 B');
+    setTxt('monSampleAge', 'Idle');
+  }
+
+  const firedRules = rules.filter(r => r.last_triggered_at).length;
+  const alTag = document.getElementById('monAlertStateTag');
+  if (alTag) {
+    alTag.className = 'st-tag ' + (firedRules > 0 ? 'amber' : 'emerald');
+    alTag.textContent = rules.length === 0 ? 'No Rules' : (firedRules > 0 ? firedRules + ' Triggered' : rules.length + ' Armed');
+  }
+
+  const chartSlice = history.slice(-60);
+  renderDualSeriesSvg(
+    'monChartCompute',
+    chartSlice,
+    { color: '#22d3ee', fixedMax: 100, unit: '%', get: (r) => Number(r.cpu_percent || 0) },
+    { color: '#818cf8', fixedMax: 100, unit: '%', get: (r) => r.ram_total_mb > 0 ? (Number(r.ram_used_mb || 0) / Number(r.ram_total_mb)) * 100 : 0 }
+  );
+  renderDualSeriesSvg(
+    'monChartSystem',
+    chartSlice,
+    { color: '#34d399', fixedMax: 100, unit: '%', get: (r) => r.disk_total_gb > 0 ? (Number(r.disk_used_gb || 0) / Number(r.disk_total_gb)) * 100 : 0 },
+    { color: '#fbbf24', fixedMax: 100, unit: '%', get: (r) => Math.min(100, Number(r.load_avg_1 || 0) * 12.5) }
+  );
+
+  const rows = history.slice(-25).reverse();
+  document.getElementById('monMetricsBox').innerHTML = rows.length
+    ? `<table class="st-table"><thead><tr><th>Timestamp</th><th>CPU %</th><th>Load (1m)</th><th>Memory</th><th>Disk</th><th>Net RX / TX</th></tr></thead><tbody>` +
+      rows.map(r => {
+        const cpuP = Math.min(100, Math.max(0, Number(r.cpu_percent || 0)));
+        const ramP = r.ram_total_mb > 0 ? Math.min(100, (Number(r.ram_used_mb || 0) / Number(r.ram_total_mb)) * 100) : 0;
+        const dskP = r.disk_total_gb > 0 ? Math.min(100, (Number(r.disk_used_gb || 0) / Number(r.disk_total_gb)) * 100) : 0;
+        return `<tr>
+          <td>
+            <div style="font-weight:600;font-size:12px;">${hkvmEsc(r.recorded_at)}</div>
+            <div style="font-size:10.5px;color:var(--text-muted);">${hkvmEsc(fmtRelTimestamp(r.recorded_at))}</div>
+          </td>
+          <td style="min-width:105px;">
+            <div style="font-weight:700;font-size:12.5px;">${cpuP.toFixed(2)}%</div>
+            <div class="st-bar-track" style="height:5px;margin-top:4px;"><div class="st-bar-fill ${barToneClass(cpuP)}" style="width:${cpuP.toFixed(1)}%"></div></div>
+          </td>
+          <td><span class="st-mono-chip">${Number(r.load_avg_1 || 0).toFixed(2)}</span></td>
+          <td style="min-width:135px;">
+            <div style="font-size:12px;"><strong>${r.ram_used_mb}</strong> <span style="color:var(--text-muted);">/ ${r.ram_total_mb} MB</span></div>
+            <div class="st-bar-track" style="height:5px;margin-top:4px;"><div class="st-bar-fill ${barToneClass(ramP)}" style="width:${ramP.toFixed(1)}%"></div></div>
+          </td>
+          <td style="min-width:125px;">
+            <div style="font-size:12px;"><strong>${Number(r.disk_used_gb || 0).toFixed(1)}</strong> <span style="color:var(--text-muted);">/ ${Number(r.disk_total_gb || 0).toFixed(1)} GB</span></div>
+            <div class="st-bar-track" style="height:5px;margin-top:4px;"><div class="st-bar-fill ${barToneClass(dskP)}" style="width:${dskP.toFixed(1)}%"></div></div>
+          </td>
+          <td style="font-size:11.5px;color:var(--text-secondary);white-space:nowrap;">
+            &darr; ${fmtBytesCompact(r.net_rx_bytes)}<br>&uarr; ${fmtBytesCompact(r.net_tx_bytes)}
+          </td>
+        </tr>`;
+      }).join('') +
+      `</tbody></table>`
+    : '<div style="padding:32px 20px;text-align:center;color:var(--text-muted);font-size:13px;">Click <strong>Collect Live Sample Now</strong> to record an immediate telemetry snapshot.</div>';
+
+  const metricLabel = (m) => {
+    if (m === 'cpu_percent') return 'Host CPU';
+    if (m === 'ram_percent') return 'Host Memory';
+    if (m === 'disk_percent') return 'Host Disk';
+    return m;
+  };
+
+  document.getElementById('alertsBody').innerHTML = rules.length
+    ? rules.map(a => {
+        const isCrit = String(a.severity || '').toLowerCase() === 'critical';
+        return `<tr>
+          <td>
+            <strong style="font-size:13px;">${hkvmEsc(a.name)}</strong>
+            <div style="font-size:11px;color:var(--text-muted);">${hkvmEsc(metricLabel(a.metric))}</div>
+          </td>
+          <td><span class="st-mono-chip">${hkvmEsc(a.operator || '>=')} ${a.threshold}%</span></td>
+          <td><span class="st-tag ${isCrit ? 'red' : 'amber'}">${hkvmEsc(String(a.severity || 'warning').toUpperCase())}</span></td>
+          <td style="font-size:12px;color:var(--text-muted);">${a.last_triggered_at ? hkvmEsc(fmtRelTimestamp(a.last_triggered_at)) : 'Never'}</td>
+          <td style="text-align:right;"><button class="btn btn-outline" style="color:#ef4444;font-size:11.5px;padding:5px 9px;" onclick="delAlert(${a.id})">Delete</button></td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px;">No alert rules configured yet. Create one above to monitor CPU, RAM, or Disk spikes.</td></tr>';
+}
+
+async function pollNodeNow(silent) {
+  const btn = document.getElementById('monPollNowBtn');
+  if (!silent && btn) { btn.disabled = true; btn.textContent = 'Sampling...'; }
+  try {
+    const nodeId = document.getElementById('monNodeSelect').value;
+    await hkvmApi('/api/v1/nodes/' + nodeId + '/check', { method: 'POST' });
+    if (!silent) hkvmToast('Live telemetry sample recorded');
+    await loadMonitoring();
+  } catch (err) {
+    if (!silent) hkvmToast(err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Collect Live Sample Now'; }
+  }
 }
 
 async function submitAlertRule(e) {
   e.preventDefault();
-  await hkvmApi('/api/v1/monitoring/alerts', {
-    method: 'POST',
-    body: {
-      name: document.getElementById('alName').value,
-      metric: document.getElementById('alMetric').value,
-      threshold: Number(document.getElementById('alThresh').value),
-      severity: document.getElementById('alSev').value
-    }
-  });
-  loadMonitoring();
+  try {
+    await hkvmApi('/api/v1/monitoring/alerts', {
+      method: 'POST',
+      body: {
+        name: document.getElementById('alName').value.trim(),
+        metric: document.getElementById('alMetric').value,
+        operator: document.getElementById('alOp') ? document.getElementById('alOp').value : '>=',
+        threshold: Number(document.getElementById('alThresh').value),
+        severity: document.getElementById('alSev').value
+      }
+    });
+    document.getElementById('alName').value = '';
+    hkvmToast('Alert policy created');
+    loadMonitoring();
+  } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
 async function delAlert(id) {
+  if (!confirm('Delete alert rule #' + id + '?')) return;
   await hkvmApi('/api/v1/monitoring/alerts/' + id, { method: 'DELETE' });
+  hkvmToast('Alert rule removed');
   loadMonitoring();
 }
 

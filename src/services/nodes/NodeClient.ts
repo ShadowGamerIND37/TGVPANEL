@@ -41,6 +41,10 @@ export interface NodeRecord {
   supports_lxc?: number;
   kvm_available?: number;
   lxc_available?: number;
+  cgroup_version?: string | null;
+  qemu_version?: string | null;
+  lxc_version?: string | null;
+  kernel_version?: string | null;
 }
 
 interface CircuitBreakerEntry {
@@ -81,7 +85,8 @@ export class NodeManager {
   public async listNodes(): Promise<NodeRecord[]> {
     return this.db.all<NodeRecord>(
       `SELECT n.*,
-              c.supports_kvm, c.supports_lxc, c.kvm_available, c.lxc_available
+              c.supports_kvm, c.supports_lxc, c.kvm_available, c.lxc_available,
+              c.cgroup_version, c.qemu_version, c.lxc_version, c.kernel_version
        FROM nodes n
        LEFT JOIN node_capabilities c ON c.node_id = n.id
        ORDER BY n.is_local DESC, n.id ASC`

@@ -811,9 +811,29 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     requireRole(['admin', 'subadmin', 'operator']),
     async (req: Request, res: Response) => {
       try {
-        const report = await ctx.nodeManager.checkNodeHealthAndStats(
-          pInt(req.params.id)
-        );
+        const nodeId = pInt(req.params.id);
+        const report = await ctx.nodeManager.checkNodeHealthAndStats(nodeId);
+        if (report?.stats) {
+          const s = report.stats;
+          await ctx.db
+            .run(
+              `INSERT INTO metrics_history
+                 (target_type, target_id, cpu_percent, ram_used_mb, ram_total_mb, disk_used_gb, disk_total_gb, net_rx_bytes, net_tx_bytes, load_avg_1)
+               VALUES ('node', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                nodeId,
+                s.cpuPercent,
+                s.ramUsedMb,
+                s.ramTotalMb,
+                s.diskUsedGb,
+                s.diskTotalGb,
+                s.netRxBytes,
+                s.netTxBytes,
+                s.loadAvg1,
+              ]
+            )
+            .catch(() => undefined);
+        }
         res.json(report);
       } catch (err: any) {
         res.status(502).json({ error: err.message });

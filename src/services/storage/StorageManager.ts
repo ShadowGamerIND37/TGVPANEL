@@ -12,27 +12,74 @@ export class StorageManager {
 
   public async listPools(): Promise<any[]> {
     return this.db.all(
-      `SELECT sp.*, n.name AS node_name
+      `SELECT sp.*,
+              n.name AS node_name,
+              COALESCE(n.is_local, 0) AS node_is_local,
+              (SELECT COUNT(*) FROM storage_volumes sv WHERE sv.pool_id = sp.id) AS volume_count
        FROM storage_pools sp
        LEFT JOIN nodes n ON n.id = sp.node_id
        ORDER BY sp.id ASC`
     );
   }
 
+  private resolveNearestExistingAncestor(targetPath: string): string | null {
+    let cur = path.resolve(targetPath);
+    while (true) {
+      if (fs.existsSync(cur)) return cur;
+      const parent = path.dirname(cur);
+      if (!parent || parent === cur) break;
+      cur = parent;
+    }
+    return null;
+  }
+
   public async syncPoolCapacities(): Promise<any[]> {
     const pools = await this.listPools();
     for (const p of pools) {
-      if (p.path && fs.existsSync(p.path)) {
+      if (!p.path) continue;
+      const isLocal = Number(p.node_is_local || 0) === 1 || Number(p.node_id) === 1;
+      let effectivePath = String(p.path);
+
+      // Heal legacy seeded sandbox path (/home/user/vms) on local-kvm when running elsewhere
+      if (
+        isLocal &&
+        p.name === 'local-kvm' &&
+        effectivePath === '/home/user/vms' &&
+        !fs.existsSync(effectivePath)
+      ) {
+        const appVmsDir = path.resolve(process.cwd(), 'vms');
         try {
-          const st = fs.statfsSync(p.path);
+          fs.mkdirSync(appVmsDir, { recursive: true });
+        } catch {
+          // ignore if read-only
+        }
+        if (fs.existsSync(appVmsDir)) {
+          effectivePath = appVmsDir;
+          await this.db.run(`UPDATE storage_pools SET path = ? WHERE id = ?`, [
+            effectivePath,
+            p.id,
+          ]);
+        }
+      }
+
+      const statTarget = isLocal
+        ? this.resolveNearestExistingAncestor(effectivePath)
+        : fs.existsSync(effectivePath)
+          ? effectivePath
+          : null;
+
+      if (statTarget) {
+        try {
+          const st = fs.statfsSync(statTarget);
           const totalBytes = Number(st.blocks) * Number(st.bsize);
           const availBytes = Number(st.bavail) * Number(st.bsize);
           const usedBytes = Math.max(0, totalBytes - availBytes);
+          const poolState = fs.existsSync(effectivePath) ? 'online' : 'ready';
           await this.db.run(
             `UPDATE storage_pools
-             SET total_bytes = ?, used_bytes = ?, available_bytes = ?, status = 'online', updated_at = datetime('now')
+             SET total_bytes = ?, used_bytes = ?, available_bytes = ?, status = ?, updated_at = datetime('now')
              WHERE id = ?`,
-            [totalBytes, usedBytes, availBytes, p.id]
+            [totalBytes, usedBytes, availBytes, poolState, p.id]
           );
         } catch {
           // Retain cached values when filesystem statfs is restricted
@@ -47,18 +94,32 @@ export class StorageManager {
     name: string;
     poolType?: string;
     engineScope?: string;
-    path: string;
+    path?: string;
+    poolPath?: string;
     overcommitRatio?: number;
   }): Promise<any> {
     const nodeId = Number(input.nodeId || 1);
     const name = String(input.name || '').trim();
-    const rawPath = String(input.path || '').trim();
+    const rawPath = String(input.path || input.poolPath || '').trim();
     if (!name || !rawPath) {
       throw new Error('Storage pool name and path are required.');
     }
     const cleanPath = path.resolve(rawPath);
     const poolType = String(input.poolType || 'dir').trim();
     const engineScope = String(input.engineScope || 'both').trim();
+    const overcommit = Math.max(0.5, Math.min(10, Number(input.overcommitRatio || 1.5)));
+
+    const nodeRow = await this.db.get<{ is_local?: number }>(
+      `SELECT is_local FROM nodes WHERE id = ?`,
+      [nodeId]
+    );
+    if (nodeId === 1 || Number(nodeRow?.is_local || 0) === 1) {
+      try {
+        fs.mkdirSync(cleanPath, { recursive: true });
+      } catch {
+        // Directory may require root or manual mount; statfs will probe nearest ancestor
+      }
+    }
 
     const ins = await this.db.run(
       `INSERT INTO storage_pools (node_id, name, engine, pool_type, engine_scope, path, overcommit_ratio, enabled, is_active)
@@ -70,9 +131,10 @@ export class StorageManager {
         poolType,
         engineScope,
         cleanPath,
-        Number(input.overcommitRatio || 1.5),
+        overcommit,
       ]
     );
+    await this.syncPoolCapacities().catch(() => undefined);
     return this.db.get(`SELECT * FROM storage_pools WHERE id = ?`, [ins.lastID]);
   }
 

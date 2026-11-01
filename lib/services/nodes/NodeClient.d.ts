@@ -30,6 +30,10 @@ export interface NodeRecord {
     supports_lxc?: number;
     kvm_available?: number;
     lxc_available?: number;
+    cgroup_version?: string | null;
+    qemu_version?: string | null;
+    lxc_version?: string | null;
+    kernel_version?: string | null;
 }
 /**
  * Communicates with remote Node Agents over HTTPS/HTTP using replay-protected HMAC-SHA256 signatures

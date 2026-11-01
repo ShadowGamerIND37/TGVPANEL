@@ -396,12 +396,50 @@ export function createUnifiedWebRouter(
     requirePrincipal,
     requireRole(['admin']),
     async (req: Request, res: Response) => {
+      const [
+        nodeAgg,
+        kvmRow,
+        lxcRow,
+        userRow,
+        poolRow,
+        keyRow,
+        hookRow,
+        migVerRow,
+      ] = await Promise.all([
+        ctx.db.get<{ total: number; online: number }>(
+          `SELECT COUNT(*) AS total, SUM(CASE WHEN status = 'online' THEN 1 ELSE 0 END) AS online FROM nodes`
+        ),
+        ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM vms`).catch(() => ({ cnt: 0 })),
+        ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM lxc_instances`).catch(() => ({ cnt: 0 })),
+        ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM users`).catch(() => ({ cnt: 0 })),
+        ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM storage_pools`).catch(() => ({ cnt: 0 })),
+        ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM api_keys`).catch(() => ({ cnt: 0 })),
+        ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM webhooks WHERE is_active = 1`).catch(() => ({ cnt: 0 })),
+        ctx.db.get<{ max_v: number }>(`SELECT MAX(version) AS max_v FROM schema_migrations`).catch(() => ({ max_v: 10 })),
+      ]);
+
+      const licenseStats = {
+        nodesTotal: Number(nodeAgg?.total || 1),
+        nodesOnline: Number(nodeAgg?.online || 0),
+        kvmCount: Number(kvmRow?.cnt || 0),
+        lxcCount: Number(lxcRow?.cnt || 0),
+        usersCount: Number(userRow?.cnt || 0),
+        poolsCount: Number(poolRow?.cnt || 0),
+        apiKeysCount: Number(keyRow?.cnt || 0),
+        webhooksCount: Number(hookRow?.cnt || 0),
+        schemaVersion: `v${String(migVerRow?.max_v || 10).padStart(3, '0')}`,
+        nodeJsVersion: process.version,
+        platformArch: `${process.platform} / ${process.arch}`,
+        uptimeSec: Math.floor(process.uptime()),
+      };
+
       res.render('admin/unified-page', {
         title: 'Edition & License Status - TGVPANEL',
         currentPage: 'license',
         section: 'license',
         user: res.locals.user || (req as any).session?.user,
         licenseInfo: getLicenseSummary ? getLicenseSummary() : { edition: 'TGVPANEL V3 Free Unified Edition', valid: true },
+        licenseStats,
       });
     }
   );
