@@ -986,7 +986,7 @@ function renderGridView(vms, container) {
 
 function renderVMCard(vm) {
   const icon = vm.template_icon;
-  const displayIcon = (icon && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+  const displayIcon = (icon && !icon.includes('imgur.com') && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : '/images/os/linux.svg';
   const status = vm.status || 'stopped';
   
   return `
@@ -994,7 +994,7 @@ function renderVMCard(vm) {
       <div class="vm-card-header">
         <div class="vm-title-block">
           <div class="vm-os-icon">
-            <img src="${displayIcon}" alt="OS" onerror="this.src='https://i.imgur.com/wu0Ob6B.png'">
+            <img src="${displayIcon}" alt="OS" onerror="this.onerror=null;this.src='/images/os/linux.svg'">
           </div>
           <div style="min-width: 0; flex: 1;">
             <div class="vm-name-enhanced">${escHtml(vm.vm_name)}</div>
@@ -1081,7 +1081,7 @@ function renderListView(vms, container) {
           <tbody>
             ${vms.map(vm => {
               const icon = vm.template_icon;
-              const displayIcon = (icon && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+              const displayIcon = (icon && !icon.includes('imgur.com') && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : '/images/os/linux.svg';
               const status = vm.status || 'stopped';
               
               return `
@@ -1089,7 +1089,7 @@ function renderListView(vms, container) {
                 <td>
                   <div style="display: flex; align-items: center; gap: 12px;">
                     <div class="vm-os-icon" style="width: 36px; height: 36px; padding: 5px;">
-                      <img src="${displayIcon}" alt="OS" onerror="this.src='https://i.imgur.com/wu0Ob6B.png'">
+                      <img src="${displayIcon}" alt="OS" onerror="this.onerror=null;this.src='/images/os/linux.svg'">
                     </div>
                     <div>
                       <a href="/vm/${vm.vm_id}" class="vm-name-link">${escHtml(vm.vm_name)}</a>

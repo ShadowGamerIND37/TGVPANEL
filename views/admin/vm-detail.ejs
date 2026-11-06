@@ -234,7 +234,7 @@ function renderPage(vm, stats) {
   const statusCls = vm.status === 'running' ? 'badge-running' : vm.status === 'error' ? 'badge-error' : 'badge-stopped';
   const isRunning = vm.status === 'running';
   const icon = vm.template_icon;
-  const displayIcon = (icon && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+  const displayIcon = (icon && !icon.includes('imgur.com') && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : '/images/os/linux.svg';
   const isProxmox = Boolean(vm.is_proxmox || String(vm.template_type || vm.os_type || '').toLowerCase().includes('proxmox'));
   const pvePort = vm.web_ui_port || ((vm.http_port && Number(vm.http_port) !== 80) ? vm.http_port : 8006);
   const pveHost = (vm.network_type === 'static_public' && vm.ipv4_address) ? vm.ipv4_address : (window.location.hostname || 'localhost');
@@ -249,7 +249,7 @@ function renderPage(vm, stats) {
           Back
         </a>
         <div style="min-width: 0; flex: 1; display: flex; align-items: center; gap: 12px;">
-          <img src="${displayIcon}" alt="OS" style="width: 40px; height: 40px; object-fit: contain; border-radius: 10px; padding:6px; background:linear-gradient(135deg,rgba(99,102,241,0.12),rgba(139,92,246,0.06)); border:1px solid rgba(99,102,241,0.2);" onerror="this.src='https://i.imgur.com/wu0Ob6B.png';">
+          <img src="${displayIcon}" alt="OS" style="width: 40px; height: 40px; object-fit: contain; border-radius: 10px; padding:6px; background:linear-gradient(135deg,rgba(99,102,241,0.12),rgba(139,92,246,0.06)); border:1px solid rgba(99,102,241,0.2);" onerror="this.onerror=null;this.src='/images/os/linux.svg';">
           <div style="min-width: 0; flex: 1;">
             <h1 class="page-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin:0;">
               ${escHtml(vm.vm_name)}

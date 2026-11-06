@@ -343,14 +343,14 @@ function renderGridView(vms, container) {
 
 function renderVMCard(vm) {
   const icon = vm.template_icon;
-  const displayIcon = (icon && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+  const displayIcon = (icon && !icon.includes('imgur.com') && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : '/images/os/linux.svg';
   const status = vm.status || 'stopped';
   
   return `
     <div class="vm-card ${status}" onclick="window.location.href='/admin/vm/${vm.vm_id}'">
       <div class="vm-header">
         <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
-          <img src="${displayIcon}" alt="OS" style="width: 34px; height: 34px; object-fit: contain; border-radius: 8px; padding: 4px; background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.15);" onerror="this.src='https://i.imgur.com/wu0Ob6B.png'">
+          <img src="${displayIcon}" alt="OS" style="width: 34px; height: 34px; object-fit: contain; border-radius: 8px; padding: 4px; background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.15);" onerror="this.onerror=null;this.src='/images/os/linux.svg'">
           <div style="min-width:0; flex:1;">
             <div class="vm-name">${escHtml(vm.vm_name)}</div>
             <div class="vm-os">${escHtml(vm.template_name || vm.os_type || 'Custom')} · #${vm.vm_id}</div>
@@ -410,13 +410,13 @@ function renderListView(vms, container) {
           <tbody>
             ${vms.map(vm => {
               const icon = vm.template_icon;
-              const displayIcon = (icon && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+              const displayIcon = (icon && !icon.includes('imgur.com') && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : '/images/os/linux.svg';
               const status = vm.status || 'stopped';
               return `
               <tr>
                 <td>
                   <div style="display: flex; align-items: center; gap: 12px;">
-                    <img src="${displayIcon}" style="width: 32px; height: 32px; object-fit: contain; border-radius: 8px; padding: 4px; background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.15);" onerror="this.src='https://i.imgur.com/wu0Ob6B.png'">
+                    <img src="${displayIcon}" style="width: 32px; height: 32px; object-fit: contain; border-radius: 8px; padding: 4px; background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.15);" onerror="this.onerror=null;this.src='/images/os/linux.svg'">
                     <div>
                       <a href="/admin/vm/${vm.vm_id}" class="strong" style="text-decoration: none; color: var(--text-primary); font-weight:600;">${escHtml(vm.vm_name)}</a>
                       <div style="font-size: 11px; color: var(--text-muted); margin-top:2px;">

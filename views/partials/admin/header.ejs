@@ -261,7 +261,7 @@ async function performSearch(query) {
     } else {
       el.innerHTML = results.map(vm => {
         const icon = vm.template_icon;
-        const displayIcon = (icon && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+        const displayIcon = (icon && !icon.includes('imgur.com') && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : '/images/os/linux.svg';
         return `
         <a href="/admin/vm/${vm.vm_id}" style="display:flex; align-items:center; gap:10px; padding:10px 14px; text-decoration:none; color:var(--text-secondary); border-bottom:1px solid var(--border-subtle); transition:background 0.15s;">
           <img src="${displayIcon}" style="width:20px; height:20px; object-fit:cover; border-radius:3px;" onerror="this.style.fontSize='18px'; this.style.width='auto'; this.style.height='auto'; this.textContent='';">
