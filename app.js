@@ -265,7 +265,7 @@ const OS_TEMPLATES = {
   ubuntu_22_cloud: {
     name: 'Ubuntu 22.04 LTS',
     type: 'cloud-init',
-    icon: 'https://i.imgur.com/wu0Ob6B.png',
+    icon: '/images/os/ubuntu.svg',
     disk_size: '20G',
     memory: 2048,
     cpus: 2,
@@ -276,7 +276,7 @@ const OS_TEMPLATES = {
   ubuntu_24_cloud: {
     name: 'Ubuntu 24.04 LTS',
     type: 'cloud-init',
-    icon: 'https://i.imgur.com/wu0Ob6B.png',
+    icon: '/images/os/ubuntu.svg',
     disk_size: '20G',
     memory: 2048,
     cpus: 2,
@@ -287,7 +287,7 @@ const OS_TEMPLATES = {
   debian_12_cloud: {
     name: 'Debian 12',
     type: 'cloud-init',
-    icon: 'https://i.imgur.com/C4SiENP.png',
+    icon: '/images/os/debian.svg',
     disk_size: '20G',
     memory: 2048,
     cpus: 2,
@@ -298,7 +298,7 @@ const OS_TEMPLATES = {
   fedora_40_cloud: {
     name: 'Fedora 40',
     type: 'cloud-init',
-    icon: 'https://i.imgur.com/iq4y3J8.png',
+    icon: '/images/os/fedora.svg',
     disk_size: '20G',
     memory: 2048,
     cpus: 2,
@@ -309,7 +309,7 @@ const OS_TEMPLATES = {
   centos_9_cloud: {
     name: 'CentOS Stream 9',
     type: 'cloud-init',
-    icon: 'https://i.imgur.com/MgxK5WZ.png',
+    icon: '/images/os/centos.svg',
     disk_size: '20G',
     memory: 2048,
     cpus: 2,
@@ -320,7 +320,7 @@ const OS_TEMPLATES = {
   almalinux_9_cloud: {
     name: 'AlmaLinux 9',
     type: 'cloud-init',
-    icon: 'https://i.imgur.com/YcYGa2c.png',
+    icon: '/images/os/almalinux.svg',
     disk_size: '20G',
     memory: 2048,
     cpus: 2,
@@ -350,7 +350,7 @@ const OS_TEMPLATES = {
     type: 'cloud-init',
     category: 'hypervisor',
     proxmox_codename: 'trixie',
-    proxmox_gpg_url: 'https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg',
+    proxmox_gpg_url: 'https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg',
     web_port: 8006,
     description: 'Proxmox Virtual Environment 9 on Debian 13 Trixie (KVM + LXC Hypervisor, HTTPS Web UI on :8006)',
     icon: '/images/os/proxmox.svg',
@@ -362,6 +362,25 @@ const OS_TEMPLATES = {
     password: 'proxmox'
   }
 };
+
+function inferDistroLocalIcon(hintText) {
+  const s = String(hintText || '').toLowerCase();
+  if (s.includes('proxmox') || s.includes('pve')) return '/images/os/proxmox.svg';
+  if (s.includes('ubuntu')) return '/images/os/ubuntu.svg';
+  if (s.includes('debian')) return '/images/os/debian.svg';
+  if (s.includes('fedora')) return '/images/os/fedora.svg';
+  if (s.includes('centos')) return '/images/os/centos.svg';
+  if (s.includes('alma')) return '/images/os/almalinux.svg';
+  return '/images/os/linux.svg';
+}
+
+function normalizeOsIcon(icon, hintText = '') {
+  const raw = String(icon || '').trim();
+  if (!raw || raw === '⚫' || raw.includes('imgur.com')) {
+    return inferDistroLocalIcon(hintText);
+  }
+  return raw;
+}
 
 function isProxmoxTemplate(vmOrKey) {
   if (!vmOrKey) return false;
@@ -393,14 +412,17 @@ function enrichVmTemplateMetadata(vm) {
   if (!vm || typeof vm !== 'object') return vm;
   const builtIn = vm.template_type && OS_TEMPLATES[vm.template_type] ? OS_TEMPLATES[vm.template_type] : null;
   if (builtIn) {
-    if (!vm.template_icon || vm.template_icon === '⚫') {
+    if (!vm.template_icon || vm.template_icon === '⚫' || String(vm.template_icon).includes('imgur.com')) {
       vm.template_icon = builtIn.icon;
     }
     if (!vm.template_name || vm.template_name === 'Custom') {
       vm.template_name = builtIn.name;
     }
-  } else if (isProxmoxTemplate(vm) && (!vm.template_icon || vm.template_icon === '⚫')) {
-    vm.template_icon = '/images/os/proxmox.svg';
+  } else {
+    vm.template_icon = normalizeOsIcon(
+      vm.template_icon,
+      `${vm.template_type || ''} ${vm.os_type || ''} ${vm.template_name || ''}`
+    );
   }
   if (isProxmoxTemplate(vm)) {
     vm.is_proxmox = true;
@@ -1140,11 +1162,15 @@ app.get('/api/os-templates', (req, res) => {
     // Add custom templates from DB
     if (dbTemplates && dbTemplates.length > 0) {
       dbTemplates.forEach(t => {
+        if (OS_TEMPLATES[t.template_key] && !t.is_custom) {
+          return;
+        }
         allTemplates[t.template_key] = {
           template_key: t.template_key,
           name: t.template_name,
           type: t.template_type,
-          icon: t.icon,
+          icon: normalizeOsIcon(t.icon, `${t.template_key} ${t.template_name}`),
+          description: t.description || null,
           disk_size: t.disk_size,
           memory: t.memory,
           cpus: t.cpus,
@@ -1207,12 +1233,15 @@ app.get('/api/admin/templates', checkAuth, checkAdmin, (req, res) => {
     // Add custom templates first
     if (dbTemplates && Array.isArray(dbTemplates)) {
       dbTemplates.forEach(t => {
+        if (OS_TEMPLATES[t.template_key] && !t.is_custom) {
+          return;
+        }
         allTemplates.push({
           template_id: t.template_id,
           template_key: t.template_key,
           template_name: t.template_name,
           template_type: t.template_type,
-          icon: t.icon,
+          icon: normalizeOsIcon(t.icon, `${t.template_key} ${t.template_name}`),
           description: t.description,
           disk_size: t.disk_size,
           memory: t.memory,
@@ -4200,9 +4229,13 @@ function generateProxmoxCloudInitConfig(vm) {
     String(vm.os_type || '').toLowerCase().includes('9')
   );
   const codename = isPve9 ? 'trixie' : 'bookworm';
-  const gpgUrl = (builtIn && builtIn.proxmox_gpg_url)
-    ? builtIn.proxmox_gpg_url
-    : `https://enterprise.proxmox.com/debian/proxmox-release-${codename}.gpg`;
+  const defaultGpgUrl = isPve9
+    ? 'https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg'
+    : 'https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg';
+  const fallbackGpgUrl = isPve9
+    ? 'https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg'
+    : 'https://enterprise.proxmox.com/debian/proxmox-archive-keyring-bookworm.gpg';
+  const gpgUrl = (builtIn && builtIn.proxmox_gpg_url) ? builtIn.proxmox_gpg_url : defaultGpgUrl;
   const pveReleaseLabel = isPve9 ? 'Proxmox VE 9 (Debian 13 Trixie)' : 'Proxmox VE 8 (Debian 12 Bookworm)';
 
   const rawHost = String(vm.hostname || 'pve').trim().toLowerCase();
@@ -4255,10 +4288,38 @@ function generateProxmoxCloudInitConfig(vm) {
     chpasswdLines.push(`    ${safeUser}:${cleanPass}`);
   }
 
+  const profileStatusScriptLines = [
+    '#!/bin/sh',
+    'case "$-" in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac',
+    'if [ -f /var/lib/tgvpanel-proxmox-installed ]; then',
+    '  PVE_IP=$(hostname -I 2>/dev/null | awk \'{print $1}\')',
+    '  echo "=================================================================="',
+    `  echo " [TGVPANEL] ${pveReleaseLabel} is READY"`,
+    '  echo " Web Console: https://${PVE_IP:-127.0.0.1}:8006  (login: root / PAM)"',
+    '  echo "=================================================================="',
+    'elif systemctl is-active --quiet tgvpanel-proxmox-setup.service 2>/dev/null; then',
+    '  CUR_STEP=$(cat /run/tgvpanel-proxmox-step 2>/dev/null || echo "Installing Proxmox VE packages...")',
+    '  echo "=================================================================="',
+    `  echo " [TGVPANEL] ${pveReleaseLabel} Bootstrap IN PROGRESS"`,
+    '  echo " Status: ${CUR_STEP}"',
+    '  echo " Note: APT/dpkg is temporarily locked while installing proxmox-ve."',
+    '  echo " Live log: tail -f /var/log/proxmox-install.log"',
+    '  echo " The VM will automatically reboot into Proxmox VE (:8006) when done."',
+    '  echo "=================================================================="',
+    'elif systemctl is-failed --quiet tgvpanel-proxmox-setup.service 2>/dev/null; then',
+    '  echo "=================================================================="',
+    '  echo " [TGVPANEL] Proxmox VE bootstrap encountered an issue."',
+    '  echo " Check log: cat /var/log/proxmox-install.log"',
+    '  echo " Retry:     systemctl restart tgvpanel-proxmox-setup.service"',
+    '  echo "=================================================================="',
+    'fi',
+  ];
+
   const installerScriptLines = [
     '#!/bin/bash',
     'set -euo pipefail',
     'MARKER_FILE="/var/lib/tgvpanel-proxmox-installed"',
+    'STEP_FILE="/run/tgvpanel-proxmox-step"',
     'LOG_FILE="/var/log/proxmox-install.log"',
     'if [ -f "$MARKER_FILE" ]; then',
     '  echo "[TGVPANEL-PVE] Proxmox VE already installed, skipping."',
@@ -4267,15 +4328,32 @@ function generateProxmoxCloudInitConfig(vm) {
     'exec > >(tee -a "$LOG_FILE" /dev/console) 2>&1',
     `echo "=== [TGVPANEL] Starting Unattended ${pveReleaseLabel} Bootstrap ==="`,
     'export DEBIAN_FRONTEND=noninteractive',
+    'APT_OPTS=(-y -o DPkg::Lock::Timeout=300 -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold")',
+    'echo "[1/6] Stopping background apt-daily timers to prevent APT lock contention" > "$STEP_FILE"',
+    'systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null || true',
+    'systemctl mask apt-daily.service apt-daily-upgrade.service 2>/dev/null || true',
     `SHORT_HOST="${shortHost}"`,
     `FQDN_HOST="${fqdn}"`,
     `CODENAME="${codename}"`,
     `GPG_URL="${gpgUrl}"`,
+    `FALLBACK_GPG_URL="${fallbackGpgUrl}"`,
     `NET_MODE="${isStatic ? 'static_public' : 'nat'}"`,
     `STATIC_IP="${staticIp}"`,
     `STATIC_CIDR="${cidrNum}"`,
     `STATIC_GW="${staticGateway}"`,
     `DNS_SERVERS="${dnsList || '8.8.8.8 1.1.1.1'}"`,
+    'download_file() {',
+    '  local url="$1" dest="$2"',
+    '  if command -v curl >/dev/null 2>&1; then',
+    '    curl -fsSL --retry 3 --connect-timeout 15 "$url" -o "$dest"',
+    '  elif command -v wget >/dev/null 2>&1; then',
+    '    wget -q --tries=3 --timeout=15 "$url" -O "$dest"',
+    '  elif command -v python3 >/dev/null 2>&1; then',
+    '    python3 -c "import sys,urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" "$url" "$dest"',
+    '  else',
+    '    return 1',
+    '  fi',
+    '}',
     'PRIMARY_IFACE=$(ip -o -4 route show to default | awk \'{print $5}\' | head -n1 || true)',
     'if [ -z "$PRIMARY_IFACE" ]; then',
     '  PRIMARY_IFACE=$(ls /sys/class/net | grep -vE "^(lo|vmbr|tap|veth|fwbr|fwpr|fwln)" | head -n1 || echo "eth0")',
@@ -4283,11 +4361,16 @@ function generateProxmoxCloudInitConfig(vm) {
     'if [ "$NET_MODE" = "static_public" ] && [ -n "$STATIC_IP" ]; then',
     '  HOST_IP="$STATIC_IP"',
     'else',
-    '  HOST_IP=$(ip -4 -o addr show dev "$PRIMARY_IFACE" scope global | awk \'{print $4}\' | cut -d/ -f1 | head -n1 || true)',
-    '  if [ -z "$HOST_IP" ]; then',
+    '  for _i in 1 2 3 4 5 6 7 8 9 10; do',
+    '    HOST_IP=$(ip -4 -o addr show dev "$PRIMARY_IFACE" scope global | awk \'{print $4}\' | cut -d/ -f1 | head -n1 || true)',
+    '    [ -n "$HOST_IP" ] && break',
+    '    sleep 1',
+    '  done',
+    '  if [ -z "${HOST_IP:-}" ]; then',
     '    HOST_IP="10.0.2.15"',
     '  fi',
     'fi',
+    'echo "[2/6] Configuring hostname (${FQDN_HOST}) and Proxmox APT repository" > "$STEP_FILE"',
     'hostnamectl set-hostname "$SHORT_HOST" || echo "$SHORT_HOST" > /etc/hostname',
     'cat > /etc/hosts <<EOF',
     '127.0.0.1 localhost',
@@ -4297,22 +4380,42 @@ function generateProxmoxCloudInitConfig(vm) {
     'ff02::2 ip6-allrouters',
     'EOF',
     'echo "[TGVPANEL-PVE] Configured /etc/hosts with ${HOST_IP} -> ${FQDN_HOST} (${SHORT_HOST})"',
-    'apt-get update -y',
-    'apt-get install -y curl wget gnupg ca-certificates debconf-utils iproute2 iptables',
-    'mkdir -p /usr/share/keyrings /etc/apt/trusted.gpg.d',
-    'curl -fsSL "$GPG_URL" -o /usr/share/keyrings/proxmox-archive-keyring.gpg',
-    'cp /usr/share/keyrings/proxmox-archive-keyring.gpg "/etc/apt/trusted.gpg.d/proxmox-release-${CODENAME}.gpg"',
-    'chmod 0644 /usr/share/keyrings/proxmox-archive-keyring.gpg "/etc/apt/trusted.gpg.d/proxmox-release-${CODENAME}.gpg"',
-    'cat > /etc/apt/sources.list.d/pve-no-subscription.list <<EOF',
+    'mkdir -p /usr/share/keyrings /etc/apt/trusted.gpg.d /etc/apt/sources.list.d',
+    'if ! download_file "$GPG_URL" /usr/share/keyrings/proxmox-archive-keyring.gpg || [ ! -s /usr/share/keyrings/proxmox-archive-keyring.gpg ]; then',
+    '  download_file "$FALLBACK_GPG_URL" /usr/share/keyrings/proxmox-archive-keyring.gpg',
+    'fi',
+    'test -s /usr/share/keyrings/proxmox-archive-keyring.gpg',
+    'cp /usr/share/keyrings/proxmox-archive-keyring.gpg "/etc/apt/trusted.gpg.d/proxmox-archive-keyring-${CODENAME}.gpg"',
+    'chmod 0644 /usr/share/keyrings/proxmox-archive-keyring.gpg "/etc/apt/trusted.gpg.d/proxmox-archive-keyring-${CODENAME}.gpg"',
+    'if [ "$CODENAME" = "trixie" ]; then',
+    '  rm -f /etc/apt/sources.list.d/pve-no-subscription.list',
+    '  cat > /etc/apt/sources.list.d/pve-install-repo.sources <<EOF',
+    'Types: deb',
+    'URIs: http://download.proxmox.com/debian/pve',
+    'Suites: trixie',
+    'Components: pve-no-subscription',
+    'Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg',
+    'EOF',
+    'else',
+    '  cat > /etc/apt/sources.list.d/pve-no-subscription.list <<EOF',
     'deb [signed-by=/usr/share/keyrings/proxmox-archive-keyring.gpg] http://download.proxmox.com/debian/pve ${CODENAME} pve-no-subscription',
     'EOF',
+    'fi',
     'echo "postfix postfix/main_mailer_type select Local only" | debconf-set-selections',
     'echo "postfix postfix/mailname string ${FQDN_HOST}" | debconf-set-selections',
-    'apt-get update -y',
-    'apt-get full-upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"',
-    'apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" proxmox-default-kernel proxmox-ve postfix open-iscsi chrony ifupdown2',
+    'echo "samba-common samba-common/workgroup string WORKGROUP" | debconf-set-selections || true',
+    'echo "samba-common samba-common/dhcp boolean false" | debconf-set-selections || true',
+    'echo "[3/6] Refreshing APT package lists & upgrading Debian base (${CODENAME})" > "$STEP_FILE"',
+    'apt-get update -o DPkg::Lock::Timeout=300',
+    'apt-get full-upgrade "${APT_OPTS[@]}"',
+    'echo "[4/6] Installing Proxmox VE kernel (${CODENAME})" > "$STEP_FILE"',
+    'apt-get install "${APT_OPTS[@]}" proxmox-default-kernel',
+    'echo "[5/6] Installing Proxmox VE hypervisor, LXC, QEMU & Web UI (:8006)" > "$STEP_FILE"',
+    'apt-get install "${APT_OPTS[@]}" proxmox-ve postfix open-iscsi chrony ifupdown2 iptables curl wget gnupg',
+    'apt-get install "${APT_OPTS[@]}" isc-dhcp-client || apt-get install "${APT_OPTS[@]}" dhcpcd-base || true',
     'rm -f /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pve-enterprise.sources /etc/apt/sources.list.d/ceph.list /etc/apt/sources.list.d/ceph.sources || true',
-    'apt-get remove -y os-prober || true',
+    'apt-get remove "${APT_OPTS[@]}" os-prober || true',
+    'echo "[6/6] Finalizing vmbr0 bridge, serial GRUB & rebooting into PVE kernel" > "$STEP_FILE"',
     'if [ -f /etc/default/grub ]; then',
     '  sed -i \'s/^GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"/\' /etc/default/grub',
     '  update-grub || true',
@@ -4352,22 +4455,30 @@ function generateProxmoxCloudInitConfig(vm) {
     '    post-down iptables -t nat -D POSTROUTING -s 10.10.10.0/24 -o ${PRIMARY_IFACE} -j MASQUERADE',
     'EOF',
     'fi',
+    'mkdir -p /etc/cloud/cloud.cfg.d',
+    'echo "network: {config: disabled}" > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg',
     'rm -f /etc/netplan/*.yaml || true',
+    'systemctl enable networking.service 2>/dev/null || true',
+    'systemctl unmask apt-daily.service apt-daily-upgrade.service 2>/dev/null || true',
     'mkdir -p /var/lib',
     'date -u +"%Y-%m-%dT%H:%M:%SZ" > "$MARKER_FILE"',
+    'rm -f "$STEP_FILE"',
     'echo "=== [TGVPANEL] Proxmox VE installation complete! Rebooting into PVE kernel (Web UI: https://${HOST_IP}:8006) ==="',
     'systemctl reboot',
   ];
 
-  // Ensure every script line inside YAML block scalar uses 2-space-multiple indentation
-  const formattedScriptBlock = installerScriptLines
-    .map((line) => {
-      if (!line) return '';
-      const leading = line.match(/^ */)[0].length;
-      const evenLeading = leading % 2 === 0 ? leading : leading + 1;
-      return ' '.repeat(6 + evenLeading) + line.trimStart();
-    })
-    .join('\n');
+  const formatYamlBlock = (linesArr) =>
+    linesArr
+      .map((line) => {
+        if (!line) return '';
+        const leading = line.match(/^ */)[0].length;
+        const evenLeading = leading % 2 === 0 ? leading : leading + 1;
+        return ' '.repeat(6 + evenLeading) + line.trimStart();
+      })
+      .join('\n');
+
+  const formattedProfileBlock = formatYamlBlock(profileStatusScriptLines);
+  const formattedScriptBlock = formatYamlBlock(installerScriptLines);
 
   const config = `#cloud-config
 hostname: ${shortHost}
@@ -4389,6 +4500,14 @@ write_files:
     content: |
       PasswordAuthentication yes
       PermitRootLogin yes
+  - path: /etc/apt/apt.conf.d/99-tgvpanel-lock-timeout
+    permissions: '0644'
+    content: |
+      DPkg::Lock::Timeout "180";
+  - path: /etc/profile.d/tgvpanel-proxmox-status.sh
+    permissions: '0755'
+    content: |
+${formattedProfileBlock}
   - path: /usr/local/sbin/tgvpanel-install-proxmox.sh
     permissions: '0755'
     content: |
@@ -4406,6 +4525,8 @@ ${formattedScriptBlock}
       Type=oneshot
       ExecStart=/usr/local/sbin/tgvpanel-install-proxmox.sh
       RemainAfterExit=yes
+      Restart=on-failure
+      RestartSec=15
       StandardOutput=journal+console
       StandardError=journal+console
 

@@ -3239,9 +3239,15 @@ exec "$@"
       fs.mkdirSync(templatesDir, { recursive: true });
       fs.mkdirSync(cloudVmDir, { recursive: true });
 
-      // 24a. Verify /api/os-templates, /api/admin/templates, /images/os/proxmox.svg & builtin viewer
+      // 24a. Verify all built-in OS templates use local /images/os/*.svg icons & Proxmox VE 8/9 metadata
       const osTplRes = await adminClient.request('GET', '/api/os-templates');
       assert.strictEqual(osTplRes.status, 200);
+      assert.strictEqual(osTplRes.json.ubuntu_22_cloud.icon, '/images/os/ubuntu.svg');
+      assert.strictEqual(osTplRes.json.ubuntu_24_cloud.icon, '/images/os/ubuntu.svg');
+      assert.strictEqual(osTplRes.json.debian_12_cloud.icon, '/images/os/debian.svg');
+      assert.strictEqual(osTplRes.json.fedora_40_cloud.icon, '/images/os/fedora.svg');
+      assert.strictEqual(osTplRes.json.centos_9_cloud.icon, '/images/os/centos.svg');
+      assert.strictEqual(osTplRes.json.almalinux_9_cloud.icon, '/images/os/almalinux.svg');
       assert.ok(osTplRes.json.proxmox_ve_8, 'Expected proxmox_ve_8 in /api/os-templates');
       assert.ok(osTplRes.json.proxmox_ve_9, 'Expected proxmox_ve_9 in /api/os-templates');
       assert.strictEqual(osTplRes.json.proxmox_ve_8.name, 'Proxmox VE 8');
@@ -3253,7 +3259,18 @@ exec "$@"
       assert.strictEqual(osTplRes.json.proxmox_ve_8.icon, '/images/os/proxmox.svg');
       assert.strictEqual(osTplRes.json.proxmox_ve_9.name, 'Proxmox VE 9');
       assert.strictEqual(osTplRes.json.proxmox_ve_9.proxmox_codename, 'trixie');
+      assert.strictEqual(
+        osTplRes.json.proxmox_ve_9.proxmox_gpg_url,
+        'https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg'
+      );
       assert.strictEqual(osTplRes.json.proxmox_ve_9.icon, '/images/os/proxmox.svg');
+      for (const [k, tpl] of Object.entries(osTplRes.json)) {
+        assert.strictEqual(
+          String(tpl.icon || '').includes('imgur.com'),
+          false,
+          `Template ${k} must not use external imgur.com icon`
+        );
+      }
 
       const adminTplRes = await adminClient.request('GET', '/api/admin/templates');
       assert.strictEqual(adminTplRes.status, 200);
@@ -3267,9 +3284,11 @@ exec "$@"
         'Expected proxmox_ve_9 in /api/admin/templates'
       );
 
-      const svgRes = await adminClient.request('GET', '/images/os/proxmox.svg');
-      assert.strictEqual(svgRes.status, 200);
-      assert.ok(svgRes.text.includes('<svg') && svgRes.text.includes('#E57000'), 'Expected valid Proxmox SVG icon');
+      for (const svgName of ['proxmox.svg', 'ubuntu.svg', 'debian.svg', 'fedora.svg', 'centos.svg', 'almalinux.svg', 'linux.svg']) {
+        const svgRes = await adminClient.request('GET', `/images/os/${svgName}`);
+        assert.strictEqual(svgRes.status, 200, `Expected /images/os/${svgName} to return 200`);
+        assert.ok(svgRes.text.includes('<svg'), `Expected valid SVG payload for ${svgName}`);
+      }
 
       const builtinView8 = await adminClient.request('GET', '/admin/templates/builtin/proxmox_ve_8/edit');
       assert.strictEqual(builtinView8.status, 200);
@@ -3364,22 +3383,42 @@ fi
         assert.ok(isoText.includes('root:Pve8Root!Secret'), 'Seed ISO must configure root@pam password');
         assert.ok(isoText.includes('CODENAME="bookworm"'), 'PVE 8 seed ISO must target bookworm repository');
         assert.ok(isoText.includes('pve-no-subscription'), 'Seed ISO must configure pve-no-subscription APT repo');
-        assert.ok(isoText.includes('proxmox-default-kernel proxmox-ve'), 'Seed ISO must install proxmox-ve packages');
+        assert.ok(isoText.includes('proxmox-default-kernel'), 'Seed ISO must install proxmox-default-kernel');
+        assert.ok(isoText.includes('proxmox-ve postfix open-iscsi chrony'), 'Seed ISO must install proxmox-ve packages');
+        assert.ok(isoText.includes('DPkg::Lock::Timeout "180"'), 'Seed ISO must configure global APT lock timeout');
+        assert.ok(isoText.includes('tgvpanel-proxmox-status.sh'), 'Seed ISO must install SSH login status banner');
+        assert.ok(isoText.includes('systemctl stop apt-daily.timer'), 'Seed ISO must stop apt-daily timers during bootstrap');
         assert.ok(isoText.includes('address 10.10.10.1/24'), 'NAT Proxmox seed ISO must configure internal vmbr0 bridge');
         assert.ok(isoText.includes('console=tty0 console=ttyS0,115200n8'), 'Seed ISO must preserve serial console in GRUB');
 
-        // Verify generator produces 0 YAML indentation/tab warnings
-        const generatedCfg8 = app.proxmoxHelpers.generateProxmoxCloudInitConfig({
-          os_template: 'proxmox_ve_8',
-          hostname: 'pve8-node1',
-          username: 'root',
-          password: 'Pve8Root!Secret',
-          network_type: 'nat',
-        });
-        for (const [idx, line] of generatedCfg8.split('\n').entries()) {
-          assert.strictEqual(line.includes('\t'), false, `Line ${idx + 1} must not contain tabs`);
-          const indent = line.match(/^ */)[0].length;
-          assert.strictEqual(indent % 2, 0, `Line ${idx + 1} indentation (${indent}) must be a multiple of 2`);
+        // Verify generator produces 0 YAML indentation/tab warnings & valid bash syntax for both PVE 8 & PVE 9
+        for (const tplKey of ['proxmox_ve_8', 'proxmox_ve_9']) {
+          const generatedCfg = app.proxmoxHelpers.generateProxmoxCloudInitConfig({
+            os_template: tplKey,
+            hostname: 'pve-node1',
+            username: 'root',
+            password: 'PveRoot!Secret',
+            network_type: 'nat',
+          });
+          for (const [idx, line] of generatedCfg.split('\n').entries()) {
+            assert.strictEqual(line.includes('\t'), false, `${tplKey} line ${idx + 1} must not contain tabs`);
+            const indent = line.match(/^ */)[0].length;
+            assert.strictEqual(indent % 2, 0, `${tplKey} line ${idx + 1} indentation (${indent}) must be a multiple of 2`);
+          }
+          // Extract /usr/local/sbin/tgvpanel-install-proxmox.sh block and validate with bash -n
+          const markerStart = '  - path: /usr/local/sbin/tgvpanel-install-proxmox.sh\n    permissions: \'0755\'\n    content: |\n';
+          const markerEnd = '\n  - path: /etc/systemd/system/tgvpanel-proxmox-setup.service';
+          const sIdx = generatedCfg.indexOf(markerStart);
+          const eIdx = generatedCfg.indexOf(markerEnd);
+          assert.ok(sIdx > 0 && eIdx > sIdx, `Expected installer script block in ${tplKey} cloud-config`);
+          const extractedScript = generatedCfg
+            .slice(sIdx + markerStart.length, eIdx)
+            .split('\n')
+            .map((l) => (l.startsWith('      ') ? l.slice(6) : l))
+            .join('\n');
+          const tmpScriptPath = path.join(tmpRoot, `check-${tplKey}.sh`);
+          fs.writeFileSync(tmpScriptPath, extractedScript, 'utf8');
+          require('child_process').execFileSync('/bin/bash', ['-n', tmpScriptPath]);
         }
 
         // Verify QEMU NAT netdev forwards BOTH SSH and Proxmox HTTPS :8006
@@ -3426,6 +3465,14 @@ fi
         createdVmIds.push(createPve9Static.json.vm_id);
         const staticSeedText = fs.readFileSync(path.join(vmDir, `vm-${createPve9Static.json.vm_id}-seed.iso`), 'utf8');
         assert.ok(staticSeedText.includes('CODENAME="trixie"'), 'PVE 9 seed ISO must target trixie repository');
+        assert.ok(
+          staticSeedText.includes('proxmox-archive-keyring-trixie.gpg'),
+          'PVE 9 seed ISO must use official proxmox-archive-keyring-trixie.gpg URL'
+        );
+        assert.ok(
+          staticSeedText.includes('/etc/apt/sources.list.d/pve-install-repo.sources'),
+          'PVE 9 seed ISO must configure DEB822 pve-install-repo.sources'
+        );
         assert.ok(staticSeedText.includes('STATIC_IP="203.0.113.50"'), 'Static PVE seed ISO must embed static IPv4');
         assert.ok(staticSeedText.includes('bridge-ports ${PRIMARY_IFACE}'), 'Static PVE seed ISO must bridge primary NIC into vmbr0');
 
@@ -3479,7 +3526,7 @@ fi
         assert.ok(afterReinstallRow.http_port >= 8006, `Expected Proxmox Web UI port >= 8006 after reinstall, got ${afterReinstallRow.http_port}`);
         const reinstallIsoText = fs.readFileSync(afterReinstallRow.seed_file, 'utf8');
         assert.ok(reinstallIsoText.includes('root:ReinstallPvePass!99'), 'Reinstalled Proxmox seed ISO must embed decrypted root password');
-        assert.ok(reinstallIsoText.includes('proxmox-default-kernel proxmox-ve'), 'Reinstalled Proxmox seed ISO must include Proxmox bootstrap');
+        assert.ok(reinstallIsoText.includes('proxmox-ve postfix open-iscsi chrony'), 'Reinstalled Proxmox seed ISO must include Proxmox bootstrap');
       } finally {
         process.env.PATH = origPath;
         for (const id of createdVmIds) {
