@@ -624,7 +624,7 @@
                 return;
             }
 
-            if (value.startsWith('http://') || value.startsWith('https://')) {
+            if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('/') || value.startsWith('data:image/')) {
                 preview.innerHTML = `<img src="${value}" alt="Template icon" onerror="this.parentElement.innerHTML='❌';">`;
             } else {
                 preview.innerHTML = value.substring(0, 2);

@@ -451,8 +451,13 @@
                 <div class="form-row">
                   <div class="form-group">
                     <label class="form-label">SSH Port</label>
-                    <input type="number" class="form-control" name="ssh_port" id="ssh_port" placeholder="2222" min="1024">
-                    <div class="form-hint">Host port for SSH forwarding</div>
+                    <input type="number" class="form-control" name="ssh_port" id="ssh_port" placeholder="2222" min="1024" max="65535">
+                    <div class="form-hint">Host port for SSH forwarding (→ VM :22)</div>
+                  </div>
+                  <div class="form-group" id="proxmoxWebPortGroup" style="display: none;">
+                    <label class="form-label">Proxmox Web UI Port (HTTPS)</label>
+                    <input type="number" class="form-control" name="http_port" id="http_port" placeholder="8006" min="1024" max="65535">
+                    <div class="form-hint">Host port forwarded to Proxmox GUI (→ VM :8006, login: root@pam)</div>
                   </div>
                 </div>
               </div>
@@ -760,6 +765,22 @@ async function init() {
   updatePreview();
 }
 
+let lastAutoTemplateSpec = { memory: '2048', cpus: '2', diskNum: '20', diskUnit: 'G' };
+
+function resolveTemplateIconUrl(icon) {
+  if (icon && (icon.startsWith('http://') || icon.startsWith('https://') || icon.startsWith('/') || icon.startsWith('data:image/'))) {
+    return icon;
+  }
+  return 'https://i.imgur.com/wu0Ob6B.png';
+}
+
+function isProxmoxTemplateKey(key) {
+  if (!key) return false;
+  const tmpl = osTemplates[key];
+  if (tmpl && (tmpl.category === 'hypervisor' || tmpl.web_port === 8006)) return true;
+  return String(key).toLowerCase().startsWith('proxmox');
+}
+
 async function loadTemplates() {
   try {
     const res = await fetch('/api/os-templates');
@@ -770,7 +791,10 @@ async function loadTemplates() {
     if (!grid) return;
     
     grid.innerHTML = Object.entries(osTemplates).map(([key, tmpl]) => {
-      const iconUrl = tmpl.icon && tmpl.icon.startsWith('http') ? tmpl.icon : 'https://i.imgur.com/wu0Ob6B.png';
+      const iconUrl = resolveTemplateIconUrl(tmpl.icon);
+      const isPve = tmpl.category === 'hypervisor' || String(key).toLowerCase().startsWith('proxmox');
+      const badgeText = isPve ? 'hypervisor • :8006' : tmpl.type;
+      const badgeStyle = isPve ? 'color:#E57000;font-weight:600;' : '';
       const iconHtml = `<img src="${iconUrl}" style="width: 48px; height: 48px; object-fit: contain; border-radius: 8px; padding:4px; background:rgba(99,102,241,0.05);" onerror="this.src='https://i.imgur.com/wu0Ob6B.png';" alt="${tmpl.name}">`;
       return `
       <label class="template-card">
@@ -778,7 +802,7 @@ async function loadTemplates() {
         <div class="template-card-inner">
           <div class="template-icon">${iconHtml}</div>
           <div class="template-name">${tmpl.name}</div>
-          <div class="template-type">${tmpl.type}</div>
+          <div class="template-type" style="${badgeStyle}">${badgeText}</div>
         </div>
       </label>`;
     }).join('');
@@ -794,22 +818,76 @@ function selectTemplate(key) {
   
   document.getElementById('os_template').value = key;
   document.getElementById('iso_file').value = '';
+  const isPve = isProxmoxTemplateKey(key);
   
   const details = document.getElementById('templateDetails');
   if (details) {
+    const webUiRow = isPve
+      ? `<div style="font-size: 12px; color: var(--text-muted);">Web UI:</div><div style="font-size: 12px; color: #E57000; font-weight:600;">HTTPS :${tmpl.web_port || 8006} (root@pam)</div>`
+      : '';
+    const descRow = tmpl.description
+      ? `<div style="grid-column: 1 / -1; font-size: 11px; color: var(--text-muted); margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border-subtle);">${escHtml(tmpl.description)}</div>`
+      : '';
     details.innerHTML = `
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-        <div style="font-size: 12px; color: var(--text-muted);">Type:</div><div style="font-size: 12px; color: var(--text-primary); font-weight:500;">${tmpl.type}</div>
+        <div style="font-size: 12px; color: var(--text-muted);">Type:</div><div style="font-size: 12px; color: var(--text-primary); font-weight:500;">${isPve ? 'cloud-init (Proxmox Hypervisor)' : tmpl.type}</div>
         <div style="font-size: 12px; color: var(--text-muted);">Default RAM:</div><div style="font-size: 12px; color: var(--text-primary); font-weight:500;">${tmpl.memory}MB</div>
         <div style="font-size: 12px; color: var(--text-muted);">Default CPUs:</div><div style="font-size: 12px; color: var(--text-primary); font-weight:500;">${tmpl.cpus} vCPUs</div>
         <div style="font-size: 12px; color: var(--text-muted);">Disk:</div><div style="font-size: 12px; color: var(--text-primary); font-weight:500;">${tmpl.disk_size}</div>
         <div style="font-size: 12px; color: var(--text-muted);">Username:</div><div style="font-size: 12px; color: var(--accent-primary); font-weight:600;">${tmpl.username}</div>
+        ${webUiRow}
+        ${descRow}
       </div>`;
   }
   
-  if (document.getElementById('custom_memory').value === '2048' || !document.getElementById('custom_memory').value) {
-    document.getElementById('custom_memory').value = tmpl.memory;
+  const memEl = document.getElementById('custom_memory');
+  const nextMem = String(tmpl.memory || 2048);
+  if (memEl && (!memEl.value || memEl.value === lastAutoTemplateSpec.memory)) {
+    memEl.value = nextMem;
+    document.querySelectorAll('input[name="_mem_preset"]').forEach(r => { r.checked = (r.value === nextMem); });
   }
+
+  const coresEl = document.getElementById('cpu_cores');
+  const socketsEl = document.getElementById('cpu_sockets');
+  const threadsEl = document.getElementById('cpu_threads');
+  const nextCpus = String(tmpl.cpus || 2);
+  if (coresEl && (coresEl.value === lastAutoTemplateSpec.cpus || !coresEl.value)) {
+    if (socketsEl) socketsEl.value = '1';
+    if (threadsEl) threadsEl.value = '1';
+    coresEl.value = nextCpus;
+    updateTotalCPU();
+  }
+
+  const diskMatch = String(tmpl.disk_size || '20G').match(/^(\d+)([GT]?)$/i);
+  const nextDiskNum = diskMatch ? diskMatch[1] : '20';
+  const nextDiskUnit = (diskMatch && diskMatch[2]) ? diskMatch[2].toUpperCase() : 'G';
+  const diskNumEl = document.getElementById('disk_size_num');
+  const diskUnitEl = document.getElementById('disk_size_unit');
+  if (diskNumEl && (diskNumEl.value === lastAutoTemplateSpec.diskNum || !diskNumEl.value)) {
+    diskNumEl.value = nextDiskNum;
+    if (diskUnitEl) diskUnitEl.value = nextDiskUnit;
+    updateDiskSize();
+  }
+
+  const userEl = document.getElementById('custom_username');
+  if (userEl) {
+    userEl.placeholder = `Default: ${tmpl.username || 'root'}`;
+  }
+
+  const pvePortGroup = document.getElementById('proxmoxWebPortGroup');
+  const httpPortEl = document.getElementById('http_port');
+  if (pvePortGroup) {
+    pvePortGroup.style.display = isPve ? 'block' : 'none';
+  }
+  if (httpPortEl) {
+    if (isPve && (!httpPortEl.value || httpPortEl.value === '80')) {
+      httpPortEl.value = String(tmpl.web_port || 8006);
+    } else if (!isPve && httpPortEl.value === '8006') {
+      httpPortEl.value = '';
+    }
+  }
+
+  lastAutoTemplateSpec = { memory: nextMem, cpus: nextCpus, diskNum: nextDiskNum, diskUnit: nextDiskUnit };
   updatePreview();
 }
 
@@ -1102,7 +1180,9 @@ function buildReview() {
           <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color:#3B82F6; margin-bottom: 10px; display:inline-flex; align-items:center; gap:6px;">${svg('i-network', 12)} Network</div>
           ${reviewRow('Network Type', data.network_type)}
           ${reviewRow('SSH Port', data.ssh_port || 'Auto')}
-          ${reviewRow('HTTP Port', data.http_port || '80')}
+          ${isProxmoxTemplateKey(data.os_template)
+            ? reviewRow('Proxmox Web UI', `HTTPS :${data.http_port || '8006'} (root@pam)`)
+            : reviewRow('HTTP Port', data.http_port || '80')}
           ${reviewRow('IPv4 Address', data.ipv4_address || (data.network_type === 'nat' ? 'DHCP (Auto)' : '—'))}
         </div>
         <div>
@@ -1249,7 +1329,7 @@ function updatePreview() {
   const osLogoBox = document.getElementById('osLogoBox');
   if (osLogoBox && template && osTemplates[template]) {
     const tmpl = osTemplates[template];
-    const iconUrl = tmpl.icon && tmpl.icon.startsWith('http') ? tmpl.icon : 'https://i.imgur.com/wu0Ob6B.png';
+    const iconUrl = resolveTemplateIconUrl(tmpl.icon);
     osLogoBox.innerHTML = `<img src="${iconUrl}" style="width: 48px; height: 48px; object-fit: contain; border-radius: 8px; padding: 4px; background: white;" onerror="this.src='https://i.imgur.com/wu0Ob6B.png';" alt="${tmpl.name}">`;
   } else if (osLogoBox) {
     osLogoBox.innerHTML = '<svg width="30" height="30" style="color: #6366F1;"><use href="#i-server"/></svg>';

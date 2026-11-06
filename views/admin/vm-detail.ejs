@@ -234,7 +234,11 @@ function renderPage(vm, stats) {
   const statusCls = vm.status === 'running' ? 'badge-running' : vm.status === 'error' ? 'badge-error' : 'badge-stopped';
   const isRunning = vm.status === 'running';
   const icon = vm.template_icon;
-  const displayIcon = (icon && icon.startsWith('http')) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+  const displayIcon = (icon && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+  const isProxmox = Boolean(vm.is_proxmox || String(vm.template_type || vm.os_type || '').toLowerCase().includes('proxmox'));
+  const pvePort = vm.web_ui_port || ((vm.http_port && Number(vm.http_port) !== 80) ? vm.http_port : 8006);
+  const pveHost = (vm.network_type === 'static_public' && vm.ipv4_address) ? vm.ipv4_address : (window.location.hostname || 'localhost');
+  const pveUrl = `https://${pveHost}:${pvePort}`;
   
   document.getElementById('pageContent').innerHTML = `
     <!-- Page Header -->
@@ -334,12 +338,28 @@ function renderPage(vm, stats) {
               <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #10B981; margin-bottom: 12px; display:inline-flex; align-items:center; gap:6px;">${svg('i-shield', 12)} Access Information</div>
               ${renderInfoRow('Username', vm.username || '—', false, true)}
               ${renderInfoRow('SSH Port', vm.ssh_port || vm.ssh_port_static || '22')}
+              ${isProxmox ? renderInfoRow('Proxmox Web UI', `HTTPS :${pvePort} (root@pam)`) : ''}
               ${renderInfoRow('Network Type', vm.network_type === 'nat' ? 'NAT (User Mode)' : (vm.network_type === 'static_public' ? 'Static Public IPv4' : vm.network_type))}
               ${renderInfoRow('MAC Address', vm.mac_address || '—', true)}
               ${renderInfoRow('KVM Enabled', vm.enable_kvm ? renderStatusIcon(true, 'Yes') : renderStatusIcon(false, 'No'))}
               ${renderInfoRow('ACPI Enabled', vm.enable_acpi ? renderStatusIcon(true, 'Yes') : renderStatusIcon(false, 'No'))}
             </div>
           </div>
+
+          ${isProxmox ? `
+          <div style="margin-top: 20px; padding: 16px; background: linear-gradient(135deg, rgba(229, 112, 0, 0.10), rgba(245, 158, 11, 0.04)); border: 1px solid rgba(229, 112, 0, 0.28); border-radius: var(--radius-md);">
+            <div style="font-size: 11px; color: #E57000; font-weight: 700; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.8px; display:inline-flex; align-items:center; gap:6px;">
+              ${svg('i-globe', 12)} Proxmox VE Web Console (Login: root / PAM)
+            </div>
+            <div class="code-block" style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; font-family: monospace; flex-wrap: wrap;">
+              <span id="pveWebUrl">${escHtml(pveUrl)}</span>
+              <div style="display:flex; gap:8px;">
+                <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard?.writeText('${escHtml(pveUrl)}'); showToast('Proxmox Web UI URL copied!', 'success');">${svg('i-copy', 12)} Copy</button>
+                <a href="${escHtml(pveUrl)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" style="background:#E57000;border-color:#E57000;">Open Web UI ↗</a>
+              </div>
+            </div>
+          </div>
+          ` : ''}
           
           ${vm.ssh_port || vm.ssh_port_static ? `
           <div style="margin-top: 20px; padding: 16px; background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(139,92,246,0.03)); border: 1px solid rgba(99, 102, 241, 0.2); border-radius: var(--radius-md);">

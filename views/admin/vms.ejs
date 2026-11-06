@@ -343,7 +343,7 @@ function renderGridView(vms, container) {
 
 function renderVMCard(vm) {
   const icon = vm.template_icon;
-  const displayIcon = (icon && icon.startsWith('http')) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+  const displayIcon = (icon && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
   const status = vm.status || 'stopped';
   
   return `
@@ -410,7 +410,7 @@ function renderListView(vms, container) {
           <tbody>
             ${vms.map(vm => {
               const icon = vm.template_icon;
-              const displayIcon = (icon && icon.startsWith('http')) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
+              const displayIcon = (icon && (icon.startsWith('http') || icon.startsWith('/') || icon.startsWith('data:image/'))) ? icon : 'https://i.imgur.com/wu0Ob6B.png';
               const status = vm.status || 'stopped';
               return `
               <tr>
