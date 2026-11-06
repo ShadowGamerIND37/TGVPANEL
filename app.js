@@ -327,8 +327,112 @@ const OS_TEMPLATES = {
     url: 'https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2',
     username: 'almalinux',
     password: 'almalinux'
+  },
+  proxmox_ve_8: {
+    name: 'Proxmox VE 8',
+    type: 'cloud-init',
+    category: 'hypervisor',
+    proxmox_codename: 'bookworm',
+    proxmox_gpg_url: 'https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg',
+    base_cache_key: 'debian_12_cloud',
+    web_port: 8006,
+    description: 'Proxmox Virtual Environment 8 on Debian 12 Bookworm (KVM + LXC Hypervisor, HTTPS Web UI on :8006)',
+    icon: '/images/os/proxmox.svg',
+    disk_size: '40G',
+    memory: 4096,
+    cpus: 4,
+    url: 'https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2',
+    username: 'root',
+    password: 'proxmox'
+  },
+  proxmox_ve_9: {
+    name: 'Proxmox VE 9',
+    type: 'cloud-init',
+    category: 'hypervisor',
+    proxmox_codename: 'trixie',
+    proxmox_gpg_url: 'https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg',
+    web_port: 8006,
+    description: 'Proxmox Virtual Environment 9 on Debian 13 Trixie (KVM + LXC Hypervisor, HTTPS Web UI on :8006)',
+    icon: '/images/os/proxmox.svg',
+    disk_size: '40G',
+    memory: 4096,
+    cpus: 4,
+    url: 'https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2',
+    username: 'root',
+    password: 'proxmox'
   }
 };
+
+function isProxmoxTemplate(vmOrKey) {
+  if (!vmOrKey) return false;
+  if (typeof vmOrKey === 'string') {
+    const key = vmOrKey.trim().toLowerCase();
+    return Boolean(
+      (OS_TEMPLATES[vmOrKey] && OS_TEMPLATES[vmOrKey].proxmox_codename) ||
+      key.startsWith('proxmox')
+    );
+  }
+  const tplKey = String(vmOrKey.os_template || vmOrKey.template_type || '').trim();
+  if (tplKey && OS_TEMPLATES[tplKey] && OS_TEMPLATES[tplKey].proxmox_codename) {
+    return true;
+  }
+  const combined = `${tplKey} ${vmOrKey.os_type || ''} ${vmOrKey.template_name || ''}`.toLowerCase();
+  return combined.includes('proxmox');
+}
+
+function getProxmoxWebUiPort(vm) {
+  if (!vm) return 8006;
+  const parsed = parseInt(vm.http_port, 10);
+  if (!Number.isNaN(parsed) && parsed >= 1024 && parsed <= 65535 && parsed !== 80) {
+    return parsed;
+  }
+  return 8006;
+}
+
+function enrichVmTemplateMetadata(vm) {
+  if (!vm || typeof vm !== 'object') return vm;
+  const builtIn = vm.template_type && OS_TEMPLATES[vm.template_type] ? OS_TEMPLATES[vm.template_type] : null;
+  if (builtIn) {
+    if (!vm.template_icon || vm.template_icon === '⚫') {
+      vm.template_icon = builtIn.icon;
+    }
+    if (!vm.template_name || vm.template_name === 'Custom') {
+      vm.template_name = builtIn.name;
+    }
+  } else if (isProxmoxTemplate(vm) && (!vm.template_icon || vm.template_icon === '⚫')) {
+    vm.template_icon = '/images/os/proxmox.svg';
+  }
+  if (isProxmoxTemplate(vm)) {
+    vm.is_proxmox = true;
+    vm.web_ui_port = getProxmoxWebUiPort(vm);
+  }
+  return vm;
+}
+
+function resolveAvailableProxmoxWebPort(preferredPort = 8006, excludeVmId = null) {
+  return new Promise((resolve) => {
+    const query = excludeVmId
+      ? `SELECT http_port, ssh_port, ssh_port_static FROM vms WHERE vm_id != ?`
+      : `SELECT http_port, ssh_port, ssh_port_static FROM vms`;
+    const params = excludeVmId ? [excludeVmId] : [];
+    db.all(query, params, (err, rows) => {
+      if (err || !Array.isArray(rows)) {
+        return resolve(preferredPort);
+      }
+      const usedPorts = new Set();
+      for (const r of rows) {
+        if (r.http_port) usedPorts.add(Number(r.http_port));
+        if (r.ssh_port) usedPorts.add(Number(r.ssh_port));
+        if (r.ssh_port_static) usedPorts.add(Number(r.ssh_port_static));
+      }
+      let candidate = Number(preferredPort) || 8006;
+      while (usedPorts.has(candidate) && candidate < 65000) {
+        candidate += 1;
+      }
+      resolve(candidate);
+    });
+  });
+}
 
 // Middleware
 app.use(
@@ -1080,10 +1184,12 @@ app.get('/api/admin/templates', checkAuth, checkAdmin, (req, res) => {
         template_name: template.name,
         template_type: template.type,
         icon: template.icon,
-        description: `Built-in template for ${template.name}`,
+        description: template.description || `Built-in template for ${template.name}`,
         disk_size: template.disk_size,
         memory: template.memory,
         cpus: template.cpus,
+        web_port: template.web_port || null,
+        category: template.category || 'os',
         download_url: template.url,
         local_path: null,
         username: template.username,
@@ -1718,10 +1824,11 @@ app.get('/admin/templates/builtin/:key/edit', checkAuth, checkAdmin, (req, res) 
     template_name: template.name,
     template_type: template.type,
     icon: template.icon,
-    description: `Built-in template for ${template.name}`,
+    description: template.description || `Built-in template for ${template.name}`,
     disk_size: template.disk_size,
     memory: template.memory,
     cpus: template.cpus,
+    web_port: template.web_port || null,
     download_url: template.url,
     username: template.username,
     password: template.password,
@@ -1972,8 +2079,9 @@ app.get('/api/vms', checkAuth, (req, res) => {
       return res.status(500).json({ error: err.message });
     }
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
-    console.log(`[API Success] /api/vms: User ${userId} (${req.session.role}) fetched ${vms ? vms.length : 0} VMs (own VMs only)`);
-    res.json(vms || []);
+    const enriched = (vms || []).map(enrichVmTemplateMetadata);
+    console.log(`[API Success] /api/vms: User ${userId} (${req.session.role}) fetched ${enriched.length} VMs (own VMs only)`);
+    res.json(enriched);
   });
 });
 
@@ -1994,8 +2102,9 @@ app.get('/api/admin/vms', checkAuth, checkAdmin, (req, res) => {
       return res.status(500).json({ error: err.message });
     }
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
-    console.log(`[API Success] /api/admin/vms: Admin ${userId} fetched ${vms ? vms.length : 0} VMs (all VMs)`);
-    res.json(vms || []);
+    const enriched = (vms || []).map(enrichVmTemplateMetadata);
+    console.log(`[API Success] /api/admin/vms: Admin ${userId} fetched ${enriched.length} VMs (all VMs)`);
+    res.json(enriched);
   });
 });
 
@@ -2005,7 +2114,8 @@ app.get('/api/vms/:vm_id', checkAuth, (req, res) => {
     SELECT 
       vms.*,
       COALESCE(vms.ipv4_gateway, vms.gateway) as gateway,
-      COALESCE(ot.icon, '⚫') as template_icon
+      COALESCE(ot.icon, '⚫') as template_icon,
+      COALESCE(ot.template_name, vms.os_type) as template_name
     FROM vms
     LEFT JOIN os_templates ot ON vms.template_type = ot.template_key
     WHERE vms.vm_id = ?
@@ -2025,6 +2135,7 @@ app.get('/api/vms/:vm_id', checkAuth, (req, res) => {
         vm.password = decryptSecret(vm.password);
       } catch (e) {}
     }
+    enrichVmTemplateMetadata(vm);
     res.json(vm);
   });
 });
@@ -2554,13 +2665,23 @@ app.post('/api/vms/:vm_id/reinstall', checkAuth, async (req, res) => {
 
         // NOTE: Keep log files for audit trail
 
+        const encryptedPassword = password
+          ? (isEncryptedSecret(String(password)) ? String(password) : encryptSecret(String(password)))
+          : '';
+        let nextHttpPort = vm.http_port || 80;
+        if (isProxmoxTemplate(new_os_template) && (!vm.http_port || Number(vm.http_port) === 80)) {
+          nextHttpPort = vm.network_type === 'nat'
+            ? await resolveAvailableProxmoxWebPort(8006, vm_id)
+            : 8006;
+        }
+
         // Update VM with new template info and credentials
         db.run(
           `UPDATE vms SET 
-            os_type = ?, template_type = ?, username = ?, password = ?,
+            os_type = ?, template_type = ?, username = ?, password = ?, http_port = ?,
             img_file = '', seed_file = ?, disk_file = ?
           WHERE vm_id = ?`,
-          [templateName, new_os_template, username, password, targetSeedFile, targetDiskFile, vm_id],
+          [templateName, new_os_template, username, encryptedPassword, nextHttpPort, targetSeedFile, targetDiskFile, vm_id],
           async (err) => {
             if (err) {
               console.error(`[VM-${vm_id}] Failed to update VM info:`, err.message);
@@ -2585,13 +2706,20 @@ app.post('/api/vms/:vm_id/reinstall', checkAuth, async (req, res) => {
                     let imgSourcePath = null;
 
                     if (OS_TEMPLATES[new_os_template]) {
-                      // Built-in template - check cache
+                      // Built-in template - check cache (or shared base cloud image cache)
                       const cachedTemplateName = `${new_os_template}-template.qcow2`;
                       const cachedTemplatePath = path.join(TEMPLATES_DIR, cachedTemplateName);
+                      const baseCacheKey = OS_TEMPLATES[new_os_template].base_cache_key;
+                      const baseCachedPath = baseCacheKey
+                        ? path.join(TEMPLATES_DIR, `${baseCacheKey}-template.qcow2`)
+                        : null;
 
                       if (fs.existsSync(cachedTemplatePath)) {
                         console.log(`[VM-${vm_id}] ✓ Using cached template: ${cachedTemplatePath}`);
                         imgSourcePath = cachedTemplatePath;
+                      } else if (baseCachedPath && fs.existsSync(baseCachedPath)) {
+                        console.log(`[VM-${vm_id}] ✓ Reusing shared base cloud image cache: ${baseCachedPath}`);
+                        imgSourcePath = baseCachedPath;
                       } else {
                         // Download template
                         const downloadUrl = OS_TEMPLATES[new_os_template].url;
@@ -2719,9 +2847,9 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
     ipv6_address, ipv6_gateway, mac_address, vlan_id, owner_id
   } = req.body;
   
-  // Alias gateway to ipv4_gateway for consistency
-  const ipv4_gateway = gateway;
-  const ipv4_netmask = netmask;
+  // Alias gateway/netmask to ipv4_gateway/ipv4_netmask (accepting either field name)
+  const ipv4_gateway = req.body.ipv4_gateway || gateway;
+  const ipv4_netmask = req.body.ipv4_netmask || netmask;
   // Parse DNS servers - can be comma-separated
   const dns_list = dns_servers ? dns_servers.split(',').map(d => d.trim()) : ['8.8.8.8', '8.8.4.4'];
   const dns_primary = dns_list[0] || '8.8.8.8';
@@ -2732,16 +2860,20 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Please select a template or upload ISO' });
   }
 
-  // Validate memory - remove strict limits, allow any positive value
-  const memoryNum = parseInt(custom_memory);
-  if (!memoryNum || memoryNum < 1) {
-    return res.status(400).json({ error: 'Memory must be at least 1 MB' });
+  // Validate memory when explicitly provided (otherwise template default is used below)
+  if (custom_memory !== undefined && custom_memory !== null && String(custom_memory).trim() !== '') {
+    const memoryNum = parseInt(custom_memory, 10);
+    if (!memoryNum || memoryNum < 1) {
+      return res.status(400).json({ error: 'Memory must be at least 1 MB' });
+    }
   }
 
-  // Validate CPUs - remove strict limits, allow any positive value
-  const cpusNum = parseInt(custom_cpus);
-  if (!cpusNum || cpusNum < 1) {
-    return res.status(400).json({ error: 'CPUs must be at least 1' });
+  // Validate CPUs when explicitly provided (otherwise template default is used below)
+  if (custom_cpus !== undefined && custom_cpus !== null && String(custom_cpus).trim() !== '') {
+    const cpusNum = parseInt(custom_cpus, 10);
+    if (!cpusNum || cpusNum < 1) {
+      return res.status(400).json({ error: 'CPUs must be at least 1' });
+    }
   }
 
   // Validate bridge device if using static IP
@@ -2803,6 +2935,18 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
   
   // Handle SSH port - prefer ssh_port_static if provided, else use ssh_port
   const sshPortVal = ssh_port_static || ssh_port || 22;
+  const isProxmoxVm = isProxmoxTemplate({ os_template, os_type: templateName });
+  let effectiveHttpPort = parseInt(http_port, 10) || 80;
+  if (isProxmoxVm) {
+    const requestedWebPort = parseInt(http_port, 10);
+    if (!Number.isNaN(requestedWebPort) && requestedWebPort >= 1024 && requestedWebPort <= 65535 && requestedWebPort !== 80) {
+      effectiveHttpPort = requestedWebPort;
+    } else if (netType === 'nat') {
+      effectiveHttpPort = await resolveAvailableProxmoxWebPort(8006);
+    } else {
+      effectiveHttpPort = 8006;
+    }
+  }
   
   // Insert VM first to get vm_id
   db.run(
@@ -2828,7 +2972,7 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
       smbios_version || '1.0', smbios_serial || `vm-${Date.now()}`,
       extra_args || '', enable_acpi !== false ? 1 : 0, enable_kvm !== false ? 1 : 0,
       netType, ipv4_address || null, ipv4_gateway || null, ipv4_netmask || '255.255.255.0',
-      dns_servers || '8.8.8.8,8.8.4.4', dns_primary || '8.8.8.8', dns_secondary || '8.8.4.4', null, sshPortVal, http_port || 80,
+      dns_servers || '8.8.8.8,8.8.4.4', dns_primary || '8.8.8.8', dns_secondary || '8.8.4.4', null, sshPortVal, effectiveHttpPort,
       ipv6_address || null, ipv6_gateway || null,
       macAddr, bridge_device || 'vmbr0', vlan_id || null, vmOwner
     ],
@@ -2861,13 +3005,20 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
                 let templateSourcePath = null;
 
                 if (OS_TEMPLATES[os_template]) {
-                  // Built-in template - use cache in /vms/templates
+                  // Built-in template - use cache in /vms/templates (or shared base cloud image cache)
                   const cachedTemplateName = `${os_template}-template.qcow2`;
                   const cachedTemplatePath = path.join(TEMPLATES_DIR, cachedTemplateName);
+                  const baseCacheKey = OS_TEMPLATES[os_template].base_cache_key;
+                  const baseCachedPath = baseCacheKey
+                    ? path.join(TEMPLATES_DIR, `${baseCacheKey}-template.qcow2`)
+                    : null;
 
                   if (fs.existsSync(cachedTemplatePath)) {
                     console.log(`[VM-${vm_id}] Using cached built-in template from: ${cachedTemplatePath}`);
                     templateSourcePath = cachedTemplatePath;
+                  } else if (baseCachedPath && fs.existsSync(baseCachedPath)) {
+                    console.log(`[VM-${vm_id}] Reusing shared base cloud image cache: ${baseCachedPath}`);
+                    templateSourcePath = baseCachedPath;
                   } else {
                     console.log(`[VM-${vm_id}] Cached template not found at ${cachedTemplatePath}`);
                     console.log(`[VM-${vm_id}] Downloading built-in template: ${templateName} to cache...`);
@@ -2968,17 +3119,23 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
                 const vmData = {
                   vm_id,
                   vm_name,
+                  os_template,
+                  template_type: os_template,
+                  os_type: templateName,
                   hostname,
                   username,
                   password,
+                  http_port: effectiveHttpPort,
                   network_type: netType,
                   ipv4_address: ipv4_address || null,
                   ipv4_gateway: ipv4_gateway || null,
                   ipv4_netmask: ipv4_netmask || '255.255.255.0',
+                  dns_servers: dns_servers || `${dns_primary || '8.8.8.8'},${dns_secondary || '8.8.4.4'}`,
                   dns_primary: dns_primary || '8.8.8.8',
                   dns_secondary: dns_secondary || '8.8.4.4',
                   ipv6_address: ipv6_address || null,
-                  ipv6_gateway: ipv6_gateway || null
+                  ipv6_gateway: ipv6_gateway || null,
+                  bridge_device: bridge_device || 'vmbr0'
                 };
                 await createCloudInitSeed(vm_id, vmData);
                 
@@ -3032,6 +3189,8 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
                   disk_size: diskSizeVal,
                   network_type: netType,
                   mac_address: macAddr,
+                  http_port: effectiveHttpPort,
+                  is_proxmox: isProxmoxVm,
                   ipv4: ipv4_address,
                   gateway: ipv4_gateway
                 }
@@ -4032,14 +4191,421 @@ function validateStaticIPv4Config(vm) {
   return { valid: true, error: null };
 }
 
+function generateProxmoxCloudInitConfig(vm) {
+  const tplKey = String(vm.os_template || vm.template_type || 'proxmox_ve_8').trim();
+  const builtIn = OS_TEMPLATES[tplKey] || null;
+  const isPve9 = Boolean(
+    (builtIn && builtIn.proxmox_codename === 'trixie') ||
+    tplKey.toLowerCase().includes('9') ||
+    String(vm.os_type || '').toLowerCase().includes('9')
+  );
+  const codename = isPve9 ? 'trixie' : 'bookworm';
+  const gpgUrl = (builtIn && builtIn.proxmox_gpg_url)
+    ? builtIn.proxmox_gpg_url
+    : `https://enterprise.proxmox.com/debian/proxmox-release-${codename}.gpg`;
+  const pveReleaseLabel = isPve9 ? 'Proxmox VE 9 (Debian 13 Trixie)' : 'Proxmox VE 8 (Debian 12 Bookworm)';
+
+  const rawHost = String(vm.hostname || 'pve').trim().toLowerCase();
+  const safeHost = rawHost.replace(/[^a-z0-9.-]/g, '-').replace(/^-+|-+$/g, '') || 'pve';
+  const shortHost = safeHost.split('.')[0] || 'pve';
+  const fqdn = safeHost.includes('.') ? safeHost : `${shortHost}.proxmox.local`;
+
+  const rawUser = String(vm.username || 'root').trim();
+  const safeUser = /^[a-z_][a-z0-9_-]{0,31}$/i.test(rawUser) ? rawUser : 'root';
+  const cleanPass = String(vm.password || 'proxmox').replace(/[\r\n]/g, '');
+
+  const isStatic = vm.network_type === 'static_public';
+  let cidrNum = 24;
+  if (isStatic) {
+    const rawMask = String(vm.netmask || vm.ipv4_netmask || '24');
+    if (rawMask.includes('.')) {
+      cidrNum = rawMask.split('.').reduce((sum, octet) => {
+        const n = parseInt(octet, 10) || 0;
+        return sum + n.toString(2).replace(/0/g, '').length;
+      }, 0);
+    } else {
+      cidrNum = parseInt(rawMask, 10) || 24;
+    }
+  }
+  const staticIp = String(vm.ipv4_address || '');
+  const staticGateway = String(vm.gateway || vm.ipv4_gateway || '');
+  const dnsList = String(vm.dns_servers || `${vm.dns_primary || '8.8.8.8'},${vm.dns_secondary || '1.1.1.1'}`)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(' ');
+
+  const extraUserYaml = safeUser !== 'root'
+    ? [
+        'users:',
+        '  - default',
+        `  - name: ${safeUser}`,
+        '    groups: sudo',
+        '    shell: /bin/bash',
+        '    lock_passwd: false',
+        '    sudo: ALL=(ALL) NOPASSWD:ALL',
+      ].join('\n')
+    : [
+        'users:',
+        '  - default',
+      ].join('\n');
+
+  const chpasswdLines = [`    root:${cleanPass}`];
+  if (safeUser !== 'root') {
+    chpasswdLines.push(`    ${safeUser}:${cleanPass}`);
+  }
+
+  const installerScriptLines = [
+    '#!/bin/bash',
+    'set -euo pipefail',
+    'MARKER_FILE="/var/lib/tgvpanel-proxmox-installed"',
+    'LOG_FILE="/var/log/proxmox-install.log"',
+    'if [ -f "$MARKER_FILE" ]; then',
+    '  echo "[TGVPANEL-PVE] Proxmox VE already installed, skipping."',
+    '  exit 0',
+    'fi',
+    'exec > >(tee -a "$LOG_FILE" /dev/console) 2>&1',
+    `echo "=== [TGVPANEL] Starting Unattended ${pveReleaseLabel} Bootstrap ==="`,
+    'export DEBIAN_FRONTEND=noninteractive',
+    `SHORT_HOST="${shortHost}"`,
+    `FQDN_HOST="${fqdn}"`,
+    `CODENAME="${codename}"`,
+    `GPG_URL="${gpgUrl}"`,
+    `NET_MODE="${isStatic ? 'static_public' : 'nat'}"`,
+    `STATIC_IP="${staticIp}"`,
+    `STATIC_CIDR="${cidrNum}"`,
+    `STATIC_GW="${staticGateway}"`,
+    `DNS_SERVERS="${dnsList || '8.8.8.8 1.1.1.1'}"`,
+    'PRIMARY_IFACE=$(ip -o -4 route show to default | awk \'{print $5}\' | head -n1 || true)',
+    'if [ -z "$PRIMARY_IFACE" ]; then',
+    '  PRIMARY_IFACE=$(ls /sys/class/net | grep -vE "^(lo|vmbr|tap|veth|fwbr|fwpr|fwln)" | head -n1 || echo "eth0")',
+    'fi',
+    'if [ "$NET_MODE" = "static_public" ] && [ -n "$STATIC_IP" ]; then',
+    '  HOST_IP="$STATIC_IP"',
+    'else',
+    '  HOST_IP=$(ip -4 -o addr show dev "$PRIMARY_IFACE" scope global | awk \'{print $4}\' | cut -d/ -f1 | head -n1 || true)',
+    '  if [ -z "$HOST_IP" ]; then',
+    '    HOST_IP="10.0.2.15"',
+    '  fi',
+    'fi',
+    'hostnamectl set-hostname "$SHORT_HOST" || echo "$SHORT_HOST" > /etc/hostname',
+    'cat > /etc/hosts <<EOF',
+    '127.0.0.1 localhost',
+    '${HOST_IP} ${FQDN_HOST} ${SHORT_HOST}',
+    '::1 localhost ip6-localhost ip6-loopback',
+    'ff02::1 ip6-allnodes',
+    'ff02::2 ip6-allrouters',
+    'EOF',
+    'echo "[TGVPANEL-PVE] Configured /etc/hosts with ${HOST_IP} -> ${FQDN_HOST} (${SHORT_HOST})"',
+    'apt-get update -y',
+    'apt-get install -y curl wget gnupg ca-certificates debconf-utils iproute2 iptables',
+    'mkdir -p /usr/share/keyrings /etc/apt/trusted.gpg.d',
+    'curl -fsSL "$GPG_URL" -o /usr/share/keyrings/proxmox-archive-keyring.gpg',
+    'cp /usr/share/keyrings/proxmox-archive-keyring.gpg "/etc/apt/trusted.gpg.d/proxmox-release-${CODENAME}.gpg"',
+    'chmod 0644 /usr/share/keyrings/proxmox-archive-keyring.gpg "/etc/apt/trusted.gpg.d/proxmox-release-${CODENAME}.gpg"',
+    'cat > /etc/apt/sources.list.d/pve-no-subscription.list <<EOF',
+    'deb [signed-by=/usr/share/keyrings/proxmox-archive-keyring.gpg] http://download.proxmox.com/debian/pve ${CODENAME} pve-no-subscription',
+    'EOF',
+    'echo "postfix postfix/main_mailer_type select Local only" | debconf-set-selections',
+    'echo "postfix postfix/mailname string ${FQDN_HOST}" | debconf-set-selections',
+    'apt-get update -y',
+    'apt-get full-upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"',
+    'apt-get install -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" proxmox-default-kernel proxmox-ve postfix open-iscsi chrony ifupdown2',
+    'rm -f /etc/apt/sources.list.d/pve-enterprise.list /etc/apt/sources.list.d/pve-enterprise.sources /etc/apt/sources.list.d/ceph.list /etc/apt/sources.list.d/ceph.sources || true',
+    'apt-get remove -y os-prober || true',
+    'if [ -f /etc/default/grub ]; then',
+    '  sed -i \'s/^GRUB_CMDLINE_LINUX=.*/GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8"/\' /etc/default/grub',
+    '  update-grub || true',
+    'fi',
+    'if [ "$NET_MODE" = "static_public" ] && [ -n "$STATIC_IP" ] && [ -n "$STATIC_GW" ]; then',
+    '  cat > /etc/network/interfaces <<EOF',
+    'auto lo',
+    'iface lo inet loopback',
+    '',
+    'iface ${PRIMARY_IFACE} inet manual',
+    '',
+    'auto vmbr0',
+    'iface vmbr0 inet static',
+    '    address ${STATIC_IP}/${STATIC_CIDR}',
+    '    gateway ${STATIC_GW}',
+    '    bridge-ports ${PRIMARY_IFACE}',
+    '    bridge-stp off',
+    '    bridge-fd 0',
+    '    dns-nameservers ${DNS_SERVERS}',
+    'EOF',
+    'else',
+    '  cat > /etc/network/interfaces <<EOF',
+    'auto lo',
+    'iface lo inet loopback',
+    '',
+    'auto ${PRIMARY_IFACE}',
+    'iface ${PRIMARY_IFACE} inet dhcp',
+    '',
+    'auto vmbr0',
+    'iface vmbr0 inet static',
+    '    address 10.10.10.1/24',
+    '    bridge-ports none',
+    '    bridge-stp off',
+    '    bridge-fd 0',
+    '    post-up echo 1 > /proc/sys/net/ipv4/ip_forward',
+    '    post-up iptables -t nat -A POSTROUTING -s 10.10.10.0/24 -o ${PRIMARY_IFACE} -j MASQUERADE',
+    '    post-down iptables -t nat -D POSTROUTING -s 10.10.10.0/24 -o ${PRIMARY_IFACE} -j MASQUERADE',
+    'EOF',
+    'fi',
+    'rm -f /etc/netplan/*.yaml || true',
+    'mkdir -p /var/lib',
+    'date -u +"%Y-%m-%dT%H:%M:%SZ" > "$MARKER_FILE"',
+    'echo "=== [TGVPANEL] Proxmox VE installation complete! Rebooting into PVE kernel (Web UI: https://${HOST_IP}:8006) ==="',
+    'systemctl reboot',
+  ];
+
+  // Ensure every script line inside YAML block scalar uses 2-space-multiple indentation
+  const formattedScriptBlock = installerScriptLines
+    .map((line) => {
+      if (!line) return '';
+      const leading = line.match(/^ */)[0].length;
+      const evenLeading = leading % 2 === 0 ? leading : leading + 1;
+      return ' '.repeat(6 + evenLeading) + line.trimStart();
+    })
+    .join('\n');
+
+  const config = `#cloud-config
+hostname: ${shortHost}
+fqdn: ${fqdn}
+manage_etc_hosts: false
+ssh_pwauth: true
+disable_root: false
+
+${extraUserYaml}
+
+chpasswd:
+  expire: false
+  list: |
+${chpasswdLines.join('\n')}
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/50-cloud-init.conf
+    permissions: '0600'
+    content: |
+      PasswordAuthentication yes
+      PermitRootLogin yes
+  - path: /usr/local/sbin/tgvpanel-install-proxmox.sh
+    permissions: '0755'
+    content: |
+${formattedScriptBlock}
+  - path: /etc/systemd/system/tgvpanel-proxmox-setup.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=TGVPANEL Unattended Proxmox VE Bootstrap
+      After=network-online.target ssh.service
+      Wants=network-online.target
+      ConditionPathExists=!/var/lib/tgvpanel-proxmox-installed
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/tgvpanel-install-proxmox.sh
+      RemainAfterExit=yes
+      StandardOutput=journal+console
+      StandardError=journal+console
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - systemctl restart ssh || systemctl restart sshd || true
+  - systemctl daemon-reload
+  - systemctl enable tgvpanel-proxmox-setup.service
+  - systemctl start --no-block tgvpanel-proxmox-setup.service
+
+final_message: |
+  TGVPANEL Proxmox VE Cloud-Init seed applied (${pveReleaseLabel})
+  Hostname: ${fqdn}
+  Web UI: https://<host-or-vm-ip>:8006 (login: root@pam)
+`;
+
+  return config;
+}
+
 /**
- * Create Cloud-Init seed ISO with proper netplan v2 configuration
- * Includes meta-data, user-data, and network-config in correct format
+ * Pure Node.js ECMA-119 ISO-9660 + Rock Ridge ('cidata') generator fallback
+ * Used when external genisoimage / mkisofs / xorriso / cloud-localds binaries are absent.
+ */
+function writeNoCloudIso9660(outputPath, filesMap) {
+  const SECTOR = 2048;
+  const entries = Object.entries(filesMap).map(([name, content], idx) => {
+    const data = Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8');
+    const sectors = Math.max(1, Math.ceil(data.length / SECTOR));
+    const upperBase = name.replace(/[^A-Za-z0-9]/g, '_').toUpperCase().slice(0, 8) || `FILE${idx}`;
+    const isoId = `${upperBase}.;1`;
+    return { name, isoId, data, size: data.length, sectors, extent: 0 };
+  });
+
+  const writeBoth32 = (buf, offset, val) => {
+    buf.writeUInt32LE(val >>> 0, offset);
+    buf.writeUInt32BE(val >>> 0, offset + 4);
+  };
+  const writeBoth16 = (buf, offset, val) => {
+    buf.writeUInt16LE(val & 0xffff, offset);
+    buf.writeUInt16BE(val & 0xffff, offset + 2);
+  };
+  const writeDirTime = (buf, offset, d) => {
+    buf[offset] = d.getUTCFullYear() - 1900;
+    buf[offset + 1] = d.getUTCMonth() + 1;
+    buf[offset + 2] = d.getUTCDate();
+    buf[offset + 3] = d.getUTCHours();
+    buf[offset + 4] = d.getUTCMinutes();
+    buf[offset + 5] = d.getUTCSeconds();
+    buf[offset + 6] = 0;
+  };
+  const makeDirRecord = (idBuf, extent, dataLen, isDir, suBuf, now) => {
+    const idLen = idBuf.length;
+    const baseLen = 33 + idLen + (idLen % 2 === 0 ? 1 : 0);
+    const suLen = suBuf ? suBuf.length : 0;
+    const totalLen = baseLen + suLen + ((baseLen + suLen) % 2 === 1 ? 1 : 0);
+    const rec = Buffer.alloc(totalLen, 0);
+    rec[0] = totalLen;
+    rec[1] = 0;
+    writeBoth32(rec, 2, extent);
+    writeBoth32(rec, 10, dataLen);
+    writeDirTime(rec, 18, now);
+    rec[25] = isDir ? 0x02 : 0x00;
+    rec[26] = 0;
+    rec[27] = 0;
+    writeBoth16(rec, 28, 1);
+    rec[32] = idLen;
+    idBuf.copy(rec, 33);
+    if (suBuf && suLen > 0) {
+      suBuf.copy(rec, baseLen);
+    }
+    return rec;
+  };
+
+  const rootExtent = 20;
+  let nextExtent = 21;
+  for (const entry of entries) {
+    entry.extent = nextExtent;
+    nextExtent += entry.sectors;
+  }
+  const totalSectors = nextExtent;
+  const isoBuf = Buffer.alloc(totalSectors * SECTOR, 0);
+  const now = new Date();
+
+  // Root directory sector (sector 20) with SUSP SP + Rock Ridge NM entries
+  const rootSector = Buffer.alloc(SECTOR, 0);
+  let dirOffset = 0;
+  const spSu = Buffer.from([0x53, 0x50, 0x07, 0x01, 0xbe, 0xef, 0x00]);
+  const dotRec = makeDirRecord(Buffer.from([0x00]), rootExtent, SECTOR, true, spSu, now);
+  dotRec.copy(rootSector, dirOffset);
+  dirOffset += dotRec.length;
+
+  const dotDotRec = makeDirRecord(Buffer.from([0x01]), rootExtent, SECTOR, true, null, now);
+  dotDotRec.copy(rootSector, dirOffset);
+  dirOffset += dotDotRec.length;
+
+  for (const entry of entries) {
+    const nmBytes = Buffer.from(entry.name, 'utf8');
+    const nmSu = Buffer.alloc(5 + nmBytes.length);
+    nmSu[0] = 0x4e; // 'N'
+    nmSu[1] = 0x4d; // 'M'
+    nmSu[2] = nmSu.length;
+    nmSu[3] = 0x01;
+    nmSu[4] = 0x00;
+    nmBytes.copy(nmSu, 5);
+    const fileRec = makeDirRecord(Buffer.from(entry.isoId, 'ascii'), entry.extent, entry.size, false, nmSu, now);
+    fileRec.copy(rootSector, dirOffset);
+    dirOffset += fileRec.length;
+  }
+  rootSector.copy(isoBuf, rootExtent * SECTOR);
+
+  // Path tables (sector 18 L-table, sector 19 M-table)
+  const pathTableSize = 10;
+  const lPath = isoBuf.subarray(18 * SECTOR, 18 * SECTOR + pathTableSize);
+  lPath[0] = 1;
+  lPath[1] = 0;
+  lPath.writeUInt32LE(rootExtent, 2);
+  lPath.writeUInt16LE(1, 6);
+  lPath[8] = 0;
+  lPath[9] = 0;
+
+  const mPath = isoBuf.subarray(19 * SECTOR, 19 * SECTOR + pathTableSize);
+  mPath[0] = 1;
+  mPath[1] = 0;
+  mPath.writeUInt32BE(rootExtent, 2);
+  mPath.writeUInt16BE(1, 6);
+  mPath[8] = 0;
+  mPath[9] = 0;
+
+  // Primary Volume Descriptor (sector 16)
+  const pvd = isoBuf.subarray(16 * SECTOR, 17 * SECTOR);
+  pvd[0] = 1;
+  pvd.write('CD001', 1, 5, 'ascii');
+  pvd[6] = 1;
+  pvd.write('LINUX'.padEnd(32, ' '), 8, 32, 'ascii');
+  pvd.write('cidata'.padEnd(32, ' '), 40, 32, 'ascii');
+  writeBoth32(pvd, 80, totalSectors);
+  writeBoth16(pvd, 120, 1);
+  writeBoth16(pvd, 124, 1);
+  writeBoth16(pvd, 128, SECTOR);
+  writeBoth32(pvd, 132, pathTableSize);
+  pvd.writeUInt32LE(18, 140);
+  pvd.writeUInt32BE(19, 148);
+  const pvdRootRec = makeDirRecord(Buffer.from([0x00]), rootExtent, SECTOR, true, null, now);
+  pvdRootRec.copy(pvd, 156, 0, 34);
+  pvd.write(' '.repeat(128), 190, 128, 'ascii');
+  pvd.write('TGVPANEL CLOUD-INIT'.padEnd(128, ' '), 318, 128, 'ascii');
+  pvd.write('TGVPANEL'.padEnd(128, ' '), 446, 128, 'ascii');
+  pvd.write('TGVPANEL NOCLOUD ISO'.padEnd(128, ' '), 574, 128, 'ascii');
+  const decNow = (
+    String(now.getUTCFullYear()).padStart(4, '0') +
+    String(now.getUTCMonth() + 1).padStart(2, '0') +
+    String(now.getUTCDate()).padStart(2, '0') +
+    String(now.getUTCHours()).padStart(2, '0') +
+    String(now.getUTCMinutes()).padStart(2, '0') +
+    String(now.getUTCSeconds()).padStart(2, '0') +
+    '00'
+  );
+  for (const dtOffset of [813, 830]) {
+    pvd.write(decNow, dtOffset, 16, 'ascii');
+    pvd[dtOffset + 16] = 0;
+  }
+  for (const zeroOffset of [847, 864]) {
+    pvd.write('0000000000000000', zeroOffset, 16, 'ascii');
+    pvd[zeroOffset + 16] = 0;
+  }
+  pvd[881] = 1;
+
+  // Volume Descriptor Set Terminator (sector 17)
+  const term = isoBuf.subarray(17 * SECTOR, 18 * SECTOR);
+  term[0] = 255;
+  term.write('CD001', 1, 5, 'ascii');
+  term[6] = 1;
+
+  // File data sectors
+  for (const entry of entries) {
+    if (entry.size > 0) {
+      entry.data.copy(isoBuf, entry.extent * SECTOR);
+    }
+  }
+
+  fs.writeFileSync(outputPath, isoBuf);
+}
+
+/**
+ * Create Cloud-Init seed ISO with proper netplan v2 / Proxmox VE configuration
+ * Includes meta-data and user-data in correct format
  * Validates YAML syntax before creating ISO
  */
-async function createCloudInitSeed(vm_id, vm) {
+async function createCloudInitSeed(vm_id, rawVm) {
   return new Promise((resolve, reject) => {
     try {
+      const vm = Object.assign({}, rawVm);
+      if (vm.password && isEncryptedSecret(vm.password)) {
+        try {
+          vm.password = decryptSecret(vm.password);
+        } catch (_e) {}
+      }
+
       // Validate static IPv4 configuration if applicable
       if (vm.network_type === 'static_public') {
         const validation = validateStaticIPv4Config(vm);
@@ -4054,7 +4620,6 @@ async function createCloudInitSeed(vm_id, vm) {
       const seedIso = path.join(VM_DIR, `vm-${vm_id}-seed.iso`);
       const metaDataFile = path.join(seedDir, 'meta-data');
       const userDataFile = path.join(seedDir, 'user-data');
-      const networkConfigFile = path.join(seedDir, 'network-config');
 
       // Clean up and create seed directory
       if (fs.existsSync(seedDir)) {
@@ -4067,13 +4632,12 @@ async function createCloudInitSeed(vm_id, vm) {
 local-hostname: ${vm.hostname}
 `;
 
-      // Network-config is NO LONGER NEEDED - it's now embedded in user-data via runcmd
-      // This avoids the interface naming race condition (eth0 vs ens3)
-      const networkConfig = '';
-
-      // User-data (cloud-init configuration) - Choose based on network type
+      // User-data (cloud-init configuration) - Choose Proxmox hypervisor bootstrap or standard Linux config
       let userData;
-      if (vm.network_type === 'nat') {
+      if (isProxmoxTemplate(vm)) {
+        console.log(`[CLOUDINIT-${vm_id}] Using Proxmox VE Unattended Hypervisor Bootstrap (${vm.network_type || 'nat'})`);
+        userData = generateProxmoxCloudInitConfig(vm);
+      } else if (vm.network_type === 'nat') {
         console.log(`[CLOUDINIT-${vm_id}] Using NAT (User Mode) configuration`);
         userData = generateNATCloudInitConfig(vm);
       } else {
@@ -4119,42 +4683,42 @@ local-hostname: ${vm.hostname}
         console.log(`[CLOUDINIT-${vm_id}] ✓ Cloud-init configuration is valid`);
       }
 
-      // Write configuration files - only meta-data and user-data (no network-config)
+      // Write configuration files - only meta-data and user-data (no separate network-config)
       fs.writeFileSync(metaDataFile, metaData, 'utf8');
       fs.writeFileSync(userDataFile, userData, 'utf8');
-      // networkConfigFile is no longer written
 
       console.log(`[CLOUDINIT-${vm_id}] ✓ Configuration files written`);
       console.log(`[CLOUDINIT-${vm_id}] - meta-data: ${(metaData.length / 1024).toFixed(2)}KB`);
       console.log(`[CLOUDINIT-${vm_id}] - user-data: ${(userData.length / 1024).toFixed(2)}KB`);
-      console.log(`[CLOUDINIT-${vm_id}] ✓ Using embedded netplan config (no separate network-config file)`);
 
       // Create ISO from seed files
-      // Use platform-appropriate tool
       let isoCommand;
       try {
         if (isWindows) {
-          // On Windows, try mkisofs first
           try {
             isoCommand = `mkisofs -output "${seedIso}" -volid cidata -joliet -rock "${seedDir}"`;
             execSync(isoCommand, { stdio: 'pipe', shell: 'cmd' });
           } catch (e) {
-            console.error(`[CLOUDINIT-${vm_id}] mkisofs not found on Windows`);
-            throw new Error('ISO creation tool not available - install mkisofs');
+            writeNoCloudIso9660(seedIso, { 'meta-data': metaData, 'user-data': userData });
           }
         } else {
-          // On Linux, prefer genisoimage or mkisofs
-          try {
-            isoCommand = `genisoimage -output "${seedIso}" -volid cidata -joliet -rock "${seedDir}"`;
-            execSync(isoCommand, { stdio: 'pipe', shell: '/bin/bash' });
-          } catch (e) {
+          // On Linux, try genisoimage -> mkisofs -> xorriso -> cloud-localds -> pure-JS ISO9660 fallback
+          let createdByCli = false;
+          for (const candidateCmd of [
+            `genisoimage -output "${seedIso}" -volid cidata -joliet -rock "${seedDir}"`,
+            `mkisofs -output "${seedIso}" -volid cidata -joliet -rock "${seedDir}"`,
+            `xorriso -as mkisofs -output "${seedIso}" -volid cidata -joliet -rock "${seedDir}"`,
+            `cloud-localds "${seedIso}" "${userDataFile}" "${metaDataFile}"`,
+          ]) {
             try {
-              isoCommand = `mkisofs -output "${seedIso}" -volid cidata -joliet -rock "${seedDir}"`;
-              execSync(isoCommand, { stdio: 'pipe', shell: '/bin/bash' });
-            } catch (e2) {
-              console.error(`[CLOUDINIT-${vm_id}] Neither genisoimage nor mkisofs available`);
-              throw new Error('ISO creation tool not available - install genisoimage or mkisofs');
-            }
+              execSync(candidateCmd, { stdio: 'pipe', shell: '/bin/bash' });
+              createdByCli = true;
+              break;
+            } catch (_cliErr) {}
+          }
+          if (!createdByCli) {
+            console.log(`[CLOUDINIT-${vm_id}] System ISO CLI not found; generating ISO-9660 + Rock Ridge cidata image natively`);
+            writeNoCloudIso9660(seedIso, { 'meta-data': metaData, 'user-data': userData });
           }
         }
         
@@ -4189,6 +4753,23 @@ local-hostname: ${vm.hostname}
       reject(error);
     }
   });
+}
+
+function buildQemuNatNetdevSpec(vm, netdevId = 'n0') {
+  const sshPort = vm.ssh_port || vm.ssh_port_static || 2222;
+  const hostfwds = [`hostfwd=tcp::${sshPort}-:22`];
+  let pveWebPort = null;
+  if (isProxmoxTemplate(vm)) {
+    pveWebPort = getProxmoxWebUiPort(vm);
+    if (pveWebPort !== Number(sshPort)) {
+      hostfwds.push(`hostfwd=tcp::${pveWebPort}-:8006`);
+    }
+  }
+  return {
+    sshPort,
+    pveWebPort,
+    netdevArg: `user,id=${netdevId},${hostfwds.join(',')}`,
+  };
 }
 
 async function startQemuVM(vm) {
@@ -4307,20 +4888,23 @@ async function startQemuVM(vm) {
       const macAddress = vm.mac_address || generateMACAddress();
       
       if (vm.network_type === 'nat') {
-        // NAT (User Mode) Network with SSH port forwarding only
-        const sshPort = vm.ssh_port || vm.ssh_port_static || 2222;
+        // NAT (User Mode) Network with SSH port forwarding (+ HTTPS :8006 for Proxmox VE)
+        const { sshPort, pveWebPort, netdevArg } = buildQemuNatNetdevSpec(vm, netdevId);
         
         // Add virtio network device
         args.push(`-device`, `virtio-net-pci,netdev=${netdevId},mac=${macAddress}`);
         
-        // Add user-mode network with SSH port forwarding only (no HTTP)
-        args.push(`-netdev`, `user,id=${netdevId},hostfwd=tcp::${sshPort}-:22`);
+        // Add user-mode network with SSH (and Proxmox Web UI :8006 if applicable) port forwarding
+        args.push(`-netdev`, netdevArg);
         
-        console.log(`[VM-${vm.vm_id}] Network: NAT (User Mode) with SSH Port Forwarding`);
+        console.log(`[VM-${vm.vm_id}] Network: NAT (User Mode) with Port Forwarding`);
         console.log(`[VM-${vm.vm_id}] QEMU Command:`);
         console.log(`[VM-${vm.vm_id}]   -device virtio-net-pci,netdev=${netdevId},mac=${macAddress}`);
-        console.log(`[VM-${vm.vm_id}]   -netdev user,id=${netdevId},hostfwd=tcp::${sshPort}-:22`);
-        console.log(`[VM-${vm.vm_id}] SSH Port Forwarding: localhost:${sshPort} → VM:22`);
+        console.log(`[VM-${vm.vm_id}]   -netdev ${netdevArg}`);
+        console.log(`[VM-${vm.vm_id}] SSH Port Forwarding: 0.0.0.0:${sshPort} → VM:22`);
+        if (pveWebPort) {
+          console.log(`[VM-${vm.vm_id}] Proxmox Web UI Forwarding: https://0.0.0.0:${pveWebPort} → VM:8006`);
+        }
         console.log(`[VM-${vm.vm_id}] MAC Address: ${macAddress}`);
       } else {
         // Static Public IPv4 - Bridge Mode
@@ -5287,5 +5871,15 @@ const hkvmReadyPromise = bootstrapHkvmV3()
 app.server = server;
 app.getHkvmV3Context = () => hkvmV3Context;
 app.hkvmReadyPromise = hkvmReadyPromise;
+app.proxmoxHelpers = {
+  OS_TEMPLATES,
+  isProxmoxTemplate,
+  getProxmoxWebUiPort,
+  enrichVmTemplateMetadata,
+  generateProxmoxCloudInitConfig,
+  buildQemuNatNetdevSpec,
+  createCloudInitSeed,
+  writeNoCloudIso9660,
+};
 
 module.exports = app;

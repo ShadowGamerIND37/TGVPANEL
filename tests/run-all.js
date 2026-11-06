@@ -3229,6 +3229,267 @@ exec "$@"
         }
       }
     });
+
+    // 24. Proxmox VE 8 & 9 OS Templates on QEMU/KVM Virtual Machine Creation
+    await runStep('T24: Proxmox VE 8 & 9 QEMU/KVM OS templates, Cloud-Init ISO bootstrap, NAT :8006 forwarding, reinstall & UI', async () => {
+      const { isEncryptedSecret } = require('../lib/security/crypto-vault');
+      const vmDir = path.join(os.homedir(), 'vms');
+      const templatesDir = path.join(vmDir, 'templates');
+      const cloudVmDir = path.join(os.homedir(), 'cloudvm');
+      fs.mkdirSync(templatesDir, { recursive: true });
+      fs.mkdirSync(cloudVmDir, { recursive: true });
+
+      // 24a. Verify /api/os-templates, /api/admin/templates, /images/os/proxmox.svg & builtin viewer
+      const osTplRes = await adminClient.request('GET', '/api/os-templates');
+      assert.strictEqual(osTplRes.status, 200);
+      assert.ok(osTplRes.json.proxmox_ve_8, 'Expected proxmox_ve_8 in /api/os-templates');
+      assert.ok(osTplRes.json.proxmox_ve_9, 'Expected proxmox_ve_9 in /api/os-templates');
+      assert.strictEqual(osTplRes.json.proxmox_ve_8.name, 'Proxmox VE 8');
+      assert.strictEqual(osTplRes.json.proxmox_ve_8.memory, 4096);
+      assert.strictEqual(osTplRes.json.proxmox_ve_8.cpus, 4);
+      assert.strictEqual(osTplRes.json.proxmox_ve_8.disk_size, '40G');
+      assert.strictEqual(osTplRes.json.proxmox_ve_8.username, 'root');
+      assert.strictEqual(osTplRes.json.proxmox_ve_8.web_port, 8006);
+      assert.strictEqual(osTplRes.json.proxmox_ve_8.icon, '/images/os/proxmox.svg');
+      assert.strictEqual(osTplRes.json.proxmox_ve_9.name, 'Proxmox VE 9');
+      assert.strictEqual(osTplRes.json.proxmox_ve_9.proxmox_codename, 'trixie');
+      assert.strictEqual(osTplRes.json.proxmox_ve_9.icon, '/images/os/proxmox.svg');
+
+      const adminTplRes = await adminClient.request('GET', '/api/admin/templates');
+      assert.strictEqual(adminTplRes.status, 200);
+      const adminTplList = Array.isArray(adminTplRes.json) ? adminTplRes.json : (adminTplRes.json.templates || []);
+      assert.ok(
+        adminTplList.some((t) => t.template_key === 'proxmox_ve_8' && t.web_port === 8006),
+        'Expected proxmox_ve_8 in /api/admin/templates'
+      );
+      assert.ok(
+        adminTplList.some((t) => t.template_key === 'proxmox_ve_9' && t.web_port === 8006),
+        'Expected proxmox_ve_9 in /api/admin/templates'
+      );
+
+      const svgRes = await adminClient.request('GET', '/images/os/proxmox.svg');
+      assert.strictEqual(svgRes.status, 200);
+      assert.ok(svgRes.text.includes('<svg') && svgRes.text.includes('#E57000'), 'Expected valid Proxmox SVG icon');
+
+      const builtinView8 = await adminClient.request('GET', '/admin/templates/builtin/proxmox_ve_8/edit');
+      assert.strictEqual(builtinView8.status, 200);
+      assert.ok(builtinView8.text.includes('Proxmox VE 8'));
+
+      const vmCreateHtml = await adminClient.request('GET', '/admin/vm-create');
+      assert.strictEqual(vmCreateHtml.status, 200);
+      assert.ok(vmCreateHtml.text.includes('proxmoxWebPortGroup'), 'Expected Proxmox Web UI Port field in /admin/vm-create');
+      assert.ok(vmCreateHtml.text.includes('isProxmoxTemplateKey'), 'Expected Proxmox template detection in /admin/vm-create');
+
+      // 24b. Prepare cached cloud images & temporary qemu-img shim if host lacks qemu-img binary
+      const origPath = process.env.PATH || '';
+      const createdTemplateFiles = [];
+      const createdVmIds = [];
+      const deb12Cache = path.join(templatesDir, 'debian_12_cloud-template.qcow2');
+      const pve9Cache = path.join(templatesDir, 'proxmox_ve_9-template.qcow2');
+      const ubu22Cache = path.join(templatesDir, 'ubuntu_22_cloud-template.qcow2');
+      for (const f of [deb12Cache, pve9Cache, ubu22Cache]) {
+        if (!fs.existsSync(f)) {
+          fs.writeFileSync(f, Buffer.from('QFI\xfb\x00\x00\x00\x03test-qcow2-template'));
+          createdTemplateFiles.push(f);
+        }
+      }
+
+      let hasRealQemuImg = false;
+      try {
+        require('child_process').execSync('command -v qemu-img', { stdio: 'pipe' });
+        hasRealQemuImg = true;
+      } catch (_) {}
+
+      if (!hasRealQemuImg) {
+        const fakeBinDir = path.join(tmpRoot, 'qemu-test-bin');
+        fs.mkdirSync(fakeBinDir, { recursive: true });
+        const fakeQemuImg = path.join(fakeBinDir, 'qemu-img');
+        fs.writeFileSync(
+          fakeQemuImg,
+          `#!/bin/bash
+set -e
+CMD="$1"
+shift
+if [ "$CMD" = "convert" ]; then
+  while [ "$#" -gt 2 ]; do shift; done
+  cp "$1" "$2"
+elif [ "$CMD" = "resize" ]; then
+  exit 0
+elif [ "$CMD" = "create" ]; then
+  while [ "$#" -gt 2 ]; do shift; done
+  printf 'QFI\\xfb' > "$1"
+fi
+`,
+          { mode: 0o755 }
+        );
+        process.env.PATH = `${fakeBinDir}:${origPath}`;
+      }
+
+      try {
+        // 24c. Create Proxmox VE 8 VM in NAT mode (verifies shared debian_12_cloud cache reuse, defaults & seed ISO)
+        const createPve8 = await adminClient.request('POST', '/api/vms', {
+          vm_name: 'pve8-hypervisor-01',
+          os_template: 'proxmox_ve_8',
+          hostname: 'pve8-node1',
+          network_type: 'nat',
+          ssh_port: 22806,
+          custom_password: 'Pve8Root!Secret',
+        });
+        assert.strictEqual(createPve8.status, 200, `Proxmox VE 8 create failed: ${createPve8.text}`);
+        assert.strictEqual(createPve8.json.success, true);
+        assert.strictEqual(createPve8.json.config.memory, 4096);
+        assert.strictEqual(createPve8.json.config.cpus, 4);
+        assert.strictEqual(createPve8.json.config.disk_size, '40G');
+        assert.strictEqual(createPve8.json.config.http_port, 8006);
+        assert.strictEqual(createPve8.json.config.is_proxmox, true);
+        const pve8VmId = createPve8.json.vm_id;
+        createdVmIds.push(pve8VmId);
+
+        // Verify password encrypted at rest in SQLite
+        const rawPve8Row = await ctx.db.get(`SELECT * FROM vms WHERE vm_id = ?`, [pve8VmId]);
+        assert.ok(rawPve8Row, 'Expected pve8 VM row in vms table');
+        assert.strictEqual(isEncryptedSecret(rawPve8Row.password), true, 'Proxmox VM password must be encrypted at rest');
+        assert.strictEqual(rawPve8Row.username, 'root');
+        assert.strictEqual(rawPve8Row.http_port, 8006);
+
+        // Verify binary seed ISO exists, has CD001 + cidata PVD, and embeds valid 2-space Cloud-Init user-data
+        assert.strictEqual(fs.existsSync(rawPve8Row.seed_file), true, 'Expected Proxmox seed ISO file on disk');
+        const isoBytes = fs.readFileSync(rawPve8Row.seed_file);
+        assert.strictEqual(isoBytes.subarray(16 * 2048 + 1, 16 * 2048 + 6).toString('ascii'), 'CD001');
+        assert.strictEqual(isoBytes.subarray(16 * 2048 + 40, 16 * 2048 + 46).toString('ascii'), 'cidata');
+        const isoText = isoBytes.toString('utf8');
+        assert.ok(isoText.includes('#cloud-config'), 'Seed ISO must embed #cloud-config');
+        assert.ok(isoText.includes('hostname: pve8-node1'), 'Seed ISO must configure short hostname');
+        assert.ok(isoText.includes('fqdn: pve8-node1.proxmox.local'), 'Seed ISO must configure FQDN for pve-cluster');
+        assert.ok(isoText.includes('root:Pve8Root!Secret'), 'Seed ISO must configure root@pam password');
+        assert.ok(isoText.includes('CODENAME="bookworm"'), 'PVE 8 seed ISO must target bookworm repository');
+        assert.ok(isoText.includes('pve-no-subscription'), 'Seed ISO must configure pve-no-subscription APT repo');
+        assert.ok(isoText.includes('proxmox-default-kernel proxmox-ve'), 'Seed ISO must install proxmox-ve packages');
+        assert.ok(isoText.includes('address 10.10.10.1/24'), 'NAT Proxmox seed ISO must configure internal vmbr0 bridge');
+        assert.ok(isoText.includes('console=tty0 console=ttyS0,115200n8'), 'Seed ISO must preserve serial console in GRUB');
+
+        // Verify generator produces 0 YAML indentation/tab warnings
+        const generatedCfg8 = app.proxmoxHelpers.generateProxmoxCloudInitConfig({
+          os_template: 'proxmox_ve_8',
+          hostname: 'pve8-node1',
+          username: 'root',
+          password: 'Pve8Root!Secret',
+          network_type: 'nat',
+        });
+        for (const [idx, line] of generatedCfg8.split('\n').entries()) {
+          assert.strictEqual(line.includes('\t'), false, `Line ${idx + 1} must not contain tabs`);
+          const indent = line.match(/^ */)[0].length;
+          assert.strictEqual(indent % 2, 0, `Line ${idx + 1} indentation (${indent}) must be a multiple of 2`);
+        }
+
+        // Verify QEMU NAT netdev forwards BOTH SSH and Proxmox HTTPS :8006
+        const natSpec8 = app.proxmoxHelpers.buildQemuNatNetdevSpec(rawPve8Row, 'n0');
+        assert.strictEqual(
+          natSpec8.netdevArg,
+          'user,id=n0,hostfwd=tcp::22806-:22,hostfwd=tcp::8006-:8006'
+        );
+
+        // 24d. Second NAT Proxmox VE 9 VM auto-avoids port 8006 collision (-> 8007)
+        const createPve9Nat = await adminClient.request('POST', '/api/vms', {
+          vm_name: 'pve9-hypervisor-02',
+          os_template: 'proxmox_ve_9',
+          hostname: 'pve9-node2.lab.internal',
+          network_type: 'nat',
+          ssh_port: 22807,
+          custom_password: 'Pve9Root!Secret',
+        });
+        assert.strictEqual(createPve9Nat.status, 200, `Proxmox VE 9 NAT create failed: ${createPve9Nat.text}`);
+        assert.strictEqual(createPve9Nat.json.config.http_port, 8007, 'Second NAT Proxmox VM must auto-increment Web UI port to 8007');
+        createdVmIds.push(createPve9Nat.json.vm_id);
+        const rawPve9NatRow = await ctx.db.get(`SELECT * FROM vms WHERE vm_id = ?`, [createPve9Nat.json.vm_id]);
+        const natSpec9 = app.proxmoxHelpers.buildQemuNatNetdevSpec(rawPve9NatRow, 'n0');
+        assert.strictEqual(
+          natSpec9.netdevArg,
+          'user,id=n0,hostfwd=tcp::22807-:22,hostfwd=tcp::8007-:8006'
+        );
+
+        // 24e. Static Public IPv4 Proxmox VE 9 VM configures bridged vmbr0 + trixie repository
+        const createPve9Static = await adminClient.request('POST', '/api/vms', {
+          vm_name: 'pve9-bridged-03',
+          os_template: 'proxmox_ve_9',
+          hostname: 'pve9-static',
+          network_type: 'static_public',
+          bridge_device: 'vmbr0',
+          ipv4_address: '203.0.113.50',
+          ipv4_gateway: '203.0.113.1',
+          ipv4_netmask: '24',
+          dns_servers: '1.1.1.1,8.8.8.8',
+          custom_password: 'Pve9Static!Pass',
+        });
+        assert.strictEqual(createPve9Static.status, 200, `Proxmox VE 9 static create failed: ${createPve9Static.text}`);
+        assert.strictEqual(createPve9Static.json.config.http_port, 8006);
+        createdVmIds.push(createPve9Static.json.vm_id);
+        const staticSeedText = fs.readFileSync(path.join(vmDir, `vm-${createPve9Static.json.vm_id}-seed.iso`), 'utf8');
+        assert.ok(staticSeedText.includes('CODENAME="trixie"'), 'PVE 9 seed ISO must target trixie repository');
+        assert.ok(staticSeedText.includes('STATIC_IP="203.0.113.50"'), 'Static PVE seed ISO must embed static IPv4');
+        assert.ok(staticSeedText.includes('bridge-ports ${PRIMARY_IFACE}'), 'Static PVE seed ISO must bridge primary NIC into vmbr0');
+
+        // 24f. Verify enriched icon & metadata in /api/vms, /api/admin/vms, /api/vms/:id & detail views
+        const detailPve8 = await adminClient.request('GET', `/api/vms/${pve8VmId}`);
+        assert.strictEqual(detailPve8.status, 200);
+        assert.strictEqual(detailPve8.json.template_icon, '/images/os/proxmox.svg');
+        assert.strictEqual(detailPve8.json.template_name, 'Proxmox VE 8');
+        assert.strictEqual(detailPve8.json.is_proxmox, true);
+        assert.strictEqual(detailPve8.json.web_ui_port, 8006);
+        assert.strictEqual(detailPve8.json.password, 'Pve8Root!Secret');
+
+        const adminVmList = await adminClient.request('GET', '/api/admin/vms');
+        const listedPve8 = adminVmList.json.find((v) => v.vm_id === pve8VmId);
+        assert.ok(listedPve8, 'Expected Proxmox VM in /api/admin/vms');
+        assert.strictEqual(listedPve8.template_icon, '/images/os/proxmox.svg');
+        assert.strictEqual(listedPve8.is_proxmox, true);
+
+        const adminDetailPage = await adminClient.request('GET', `/admin/vm/${pve8VmId}`);
+        assert.strictEqual(adminDetailPage.status, 200);
+        assert.ok(adminDetailPage.text.includes('Proxmox VE Web Console'), 'Expected Proxmox Web Console card in /admin/vm/:id');
+
+        const userDetailPage = await adminClient.request('GET', `/vm/${pve8VmId}`);
+        assert.strictEqual(userDetailPage.status, 200);
+        assert.ok(userDetailPage.text.includes('Proxmox VE Web Console'), 'Expected Proxmox Web Console card in /vm/:id');
+
+        // 24g. Verify reinstalling a standard Linux VM into Proxmox VE encrypts password & upgrades Web UI port
+        const createUbu = await adminClient.request('POST', '/api/vms', {
+          vm_name: 'reinstall-to-pve',
+          os_template: 'ubuntu_22_cloud',
+          hostname: 'reinstall-pve',
+          network_type: 'nat',
+          ssh_port: 22809,
+          custom_password: 'InitialUbuntuPass!1',
+        });
+        assert.strictEqual(createUbu.status, 200, `Ubuntu VM create failed: ${createUbu.text}`);
+        const reinstallVmId = createUbu.json.vm_id;
+        createdVmIds.push(reinstallVmId);
+        assert.strictEqual(createUbu.json.config.http_port, 80);
+
+        const reinstallRes = await adminClient.request('POST', `/api/vms/${reinstallVmId}/reinstall`, {
+          new_os_template: 'proxmox_ve_8',
+          new_username: 'root',
+          new_password: 'ReinstallPvePass!99',
+          confirm: true,
+        });
+        assert.strictEqual(reinstallRes.status, 200, `Reinstall into Proxmox failed: ${reinstallRes.text}`);
+        const afterReinstallRow = await ctx.db.get(`SELECT * FROM vms WHERE vm_id = ?`, [reinstallVmId]);
+        assert.strictEqual(afterReinstallRow.template_type, 'proxmox_ve_8');
+        assert.strictEqual(isEncryptedSecret(afterReinstallRow.password), true, 'Reinstall must encrypt password at rest');
+        assert.ok(afterReinstallRow.http_port >= 8006, `Expected Proxmox Web UI port >= 8006 after reinstall, got ${afterReinstallRow.http_port}`);
+        const reinstallIsoText = fs.readFileSync(afterReinstallRow.seed_file, 'utf8');
+        assert.ok(reinstallIsoText.includes('root:ReinstallPvePass!99'), 'Reinstalled Proxmox seed ISO must embed decrypted root password');
+        assert.ok(reinstallIsoText.includes('proxmox-default-kernel proxmox-ve'), 'Reinstalled Proxmox seed ISO must include Proxmox bootstrap');
+      } finally {
+        process.env.PATH = origPath;
+        for (const id of createdVmIds) {
+          await adminClient.request('DELETE', `/api/vms/${id}`).catch(() => {});
+        }
+        for (const f of createdTemplateFiles) {
+          try { fs.unlinkSync(f); } catch (_) {}
+        }
+      }
+    });
   } finally {
     const { execFileSync } = require('child_process');
     for (const storeDir of [

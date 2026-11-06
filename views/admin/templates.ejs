@@ -341,8 +341,8 @@
                 <div class="template-card">
                     <div class="card-header">
                         <div class="template-icon">
-                            ${t.icon && (t.icon.startsWith('http://') || t.icon.startsWith('https://')) 
-                                ? `<img src="${t.icon}" alt="Template icon" style="width: 36px; height: 36px; object-fit: cover; border-radius: 4px;" onerror="this.src='📦'; this.style.fontSize='36px'; this.style.width='auto'; this.style.height='auto';">` 
+                            ${t.icon && (t.icon.startsWith('http://') || t.icon.startsWith('https://') || t.icon.startsWith('/') || t.icon.startsWith('data:image/')) 
+                                ? `<img src="${t.icon}" alt="Template icon" style="width: 36px; height: 36px; object-fit: contain; border-radius: 4px;" onerror="this.src='https://i.imgur.com/wu0Ob6B.png';">` 
                                 : (t.icon || '📦')}
                         </div>
                         <div class="template-title">${t.template_name || 'Unknown'}</div>
