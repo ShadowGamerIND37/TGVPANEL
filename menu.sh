@@ -178,6 +178,50 @@ detect_primary_ip() {
   printf "%s" "${ip:-127.0.0.1}"
 }
 
+is_ip_literal() {
+  local val="${1:-}"
+  [[ "$val" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ || "$val" == *:* ]]
+}
+
+build_openssl_san_ext() {
+  local primary_ip="${1:-}"
+  local host_fqdn="${2:-}"
+  local adv_url="${3:-}"
+  local san="IP:127.0.0.1"
+  if [[ -n "$primary_ip" && "$primary_ip" != "127.0.0.1" ]]; then
+    if is_ip_literal "$primary_ip"; then
+      san="${san},IP:${primary_ip}"
+    else
+      san="${san},DNS:${primary_ip}"
+    fi
+  fi
+  if [[ -n "$host_fqdn" ]]; then
+    if is_ip_literal "$host_fqdn"; then
+      [[ "$san" != *"IP:${host_fqdn}"* ]] && san="${san},IP:${host_fqdn}"
+    else
+      [[ "$san" != *"DNS:${host_fqdn}"* ]] && san="${san},DNS:${host_fqdn}"
+    fi
+  fi
+  if [[ -n "$adv_url" ]]; then
+    local adv_host="${adv_url#*://}"
+    adv_host="${adv_host%%/*}"
+    adv_host="${adv_host#[}"
+    if [[ "$adv_host" == *"]"* ]]; then
+      adv_host="${adv_host%%]*}"
+    else
+      adv_host="${adv_host%%:*}"
+    fi
+    if [[ -n "$adv_host" ]]; then
+      if is_ip_literal "$adv_host"; then
+        [[ "$san" != *"IP:${adv_host}"* ]] && san="${san},IP:${adv_host}"
+      else
+        [[ "$san" != *"DNS:${adv_host}"* ]] && san="${san},DNS:${adv_host}"
+      fi
+    fi
+  fi
+  printf "%s" "$san"
+}
+
 read_env_val() {
   local key="$1"
   local env_file="$2"
@@ -680,12 +724,12 @@ option_configure_node() {
   local detected_ip
   detected_ip="$(detect_primary_ip)"
   local node_ip
-  node_ip="$(prompt_default "This Node's IPv4 address (reachable by Panel)" "$detected_ip")"
+  node_ip="$(prompt_default "This Node's IPv4 / Mesh IP (or LAN IP if behind Cloudflare Tunnel)" "$detected_ip")"
 
   local default_hostname
   default_hostname="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "node-02")"
   local node_hostname
-  node_hostname="$(prompt_default "This Node's Hostname / FQDN" "$default_hostname")"
+  node_hostname="$(prompt_default "This Node's Hostname / Cloudflare Tunnel FQDN" "$default_hostname")"
 
   local existing_agent_port
   existing_agent_port="$(read_env_val "TGVPANEL_AGENT_PORT" "$target_dir/.env")"
@@ -734,6 +778,8 @@ option_configure_node() {
   if [[ "$tls_choice" == "2" && "$node_hostname" == *.* ]]; then
     advertised_url="${scheme}://${node_hostname}:${agent_port}"
   fi
+  advertised_url="$(prompt_default "Public Agent Endpoint URL (or Cloudflare Tunnel URL e.g. https://node1.example.com)" "${TGVPANEL_ADVERTISE_URL:-$advertised_url}")"
+  advertised_url="${advertised_url%/}"
 
   echo ""
   echo "How would you like to connect this Node to your Main TGVPANEL Controller?"
@@ -830,10 +876,8 @@ option_configure_node() {
   if [[ "$tls_choice" == "1" ]]; then
     info "Generating 4096-bit self-signed TLS certificate at /etc/tgvpanel/ssl/..."
     run_priv mkdir -p /etc/tgvpanel/ssl
-    local san_ext="IP:${node_ip},IP:127.0.0.1"
-    if [[ -n "$node_hostname" ]]; then
-      san_ext="${san_ext},DNS:${node_hostname}"
-    fi
+    local san_ext
+    san_ext="$(build_openssl_san_ext "$node_ip" "$node_hostname" "$advertised_url")"
     run_priv openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
       -keyout "$tls_key" \
       -out "$tls_cert" \
@@ -1089,12 +1133,13 @@ headless_join_node() {
   node_hostname="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "remote-node")"
   tls_cert="${TGVPANEL_AGENT_TLS_CERT:-/etc/tgvpanel/ssl/agent.crt}"
   tls_key="${TGVPANEL_AGENT_TLS_KEY:-/etc/tgvpanel/ssl/agent.key}"
-  advertised_url="https://${node_ip}:${agent_port}"
+  advertised_url="${4:-${TGVPANEL_ADVERTISE_URL:-https://${node_ip}:${agent_port}}}"
+  advertised_url="${advertised_url%/}"
+  info "Advertised URL : $advertised_url"
 
   info "Generating 4096-bit SAN TLS certificate ($tls_cert)..."
   run_priv mkdir -p "$(dirname "$tls_cert")"
-  san_ext="IP:${node_ip},IP:127.0.0.1"
-  [[ -n "$node_hostname" ]] && san_ext="${san_ext},DNS:${node_hostname}"
+  san_ext="$(build_openssl_san_ext "$node_ip" "$node_hostname" "$advertised_url")"
   run_priv openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
     -keyout "$tls_key" \
     -out "$tls_cert" \
