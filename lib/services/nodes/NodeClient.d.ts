@@ -76,6 +76,7 @@ export interface EndpointProbeResult {
     } | null;
     message: string;
 }
+export declare function isDomainHostname(host: string): boolean;
 export declare function normalizeNodeEndpointUrl(rawUrl: string): string;
 export declare function buildAgentTargetUrl(baseNodeUrl: string, apiPathWithQuery: string): URL;
 /**
@@ -100,8 +101,8 @@ export declare class NodeManager {
     getDefaultNodeForEngine(engine: 'kvm' | 'lxc'): Promise<NodeRecord>;
     createNode(input: {
         name: string;
-        hostname: string;
-        ipAddress: string;
+        hostname?: string;
+        ipAddress?: string;
         location?: string;
         url: string;
         verifySsl?: boolean;

@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
+import net from 'net';
 import tls from 'tls';
 import WebSocket from 'ws';
 import { UnifiedDatabase } from '../../db/database';
@@ -120,18 +121,35 @@ function extractPemSha256Fingerprints(pemText: string): Set<string> {
   return set;
 }
 
+function stripIpv6Brackets(host: string): string {
+  return String(host || '').trim().replace(/^\[|\]$/g, '');
+}
+
+export function isDomainHostname(host: string): boolean {
+  const clean = stripIpv6Brackets(host).toLowerCase();
+  if (!clean || clean === 'localhost') return false;
+  return net.isIP(clean) === 0;
+}
+
 export function normalizeNodeEndpointUrl(rawUrl: string): string {
   let clean = String(rawUrl || '').trim();
   if (!clean) throw new Error('Agent endpoint URL is required.');
   if (!/^https?:\/\//i.test(clean)) {
-    const defaultHttps = /:8443(\/|$)|:443(\/|$)/i.test(clean);
+    const hostPortPart = clean.split('/')[0] || '';
+    const hasExplicitHttpPort = /:5055$|:80$|:8080$/i.test(hostPortPart);
+    const hasExplicitHttpsPort = /:8443$|:443$/i.test(hostPortPart);
+    const bareHost = hostPortPart.replace(/:\d+$/, '');
+    const defaultHttps =
+      hasExplicitHttpsPort || (!hasExplicitHttpPort && isDomainHostname(bareHost));
     clean = `${defaultHttps ? 'https' : 'http'}://${clean}`;
   }
   let parsed: URL;
   try {
     parsed = new URL(clean);
   } catch {
-    throw new Error('Invalid URL format. Expected https://host:8443 or http://host:5055');
+    throw new Error(
+      'Invalid URL format. Expected https://node.example.com, https://host:8443, or http://host:5055'
+    );
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('Only http:// and https:// agent endpoints are supported.');
@@ -350,8 +368,8 @@ export class NodeManager {
 
   public async createNode(input: {
     name: string;
-    hostname: string;
-    ipAddress: string;
+    hostname?: string;
+    ipAddress?: string;
     location?: string;
     url: string;
     verifySsl?: boolean;
@@ -366,7 +384,15 @@ export class NodeManager {
     node: NodeRecord;
     bootstrapCredentials: { apiKey: string; hmacSecret: string };
   }> {
+    const cleanName = String(input.name || '').trim();
+    if (!cleanName) {
+      throw new Error('Node name is required.');
+    }
     const cleanUrl = normalizeNodeEndpointUrl(input.url);
+    const endpointHost = stripIpv6Brackets(new URL(cleanUrl).hostname);
+    const cleanHostname = String(input.hostname || '').trim() || endpointHost;
+    // Allow Cloudflare Tunnel / Reverse Proxy / IPv6-only nodes with no public IPv4 IP
+    const cleanIpAddress = String(input.ipAddress || '').trim() || endpointHost;
     const keyPair = generateApiKeyPair('tgv_node');
     const hmacSecret = crypto.randomBytes(32).toString('hex');
     const tagsJson = this.normalizeTagsJson(input.tags);
@@ -379,9 +405,9 @@ export class NodeManager {
          (name, hostname, ip_address, location, url, is_local, verify_ssl, mtls_enabled, status, max_instances, tags, notes)
          VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'provisioning', ?, ?, ?)`,
         [
-          input.name.trim(),
-          input.hostname.trim(),
-          input.ipAddress.trim(),
+          cleanName,
+          cleanHostname,
+          cleanIpAddress,
           input.location?.trim() || 'Remote Datacenter',
           cleanUrl,
           input.verifySsl !== false ? 1 : 0,
@@ -669,8 +695,18 @@ export class NodeManager {
     );
 
     const safeCtrl = cleanControllerUrl.replace(/"/g, '');
-    const curlJoinCommand = `curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && chmod +x menu.sh && sudo bash menu.sh --join "${safeCtrl}" "${rawToken}"`;
-    const localJoinCommand = `sudo bash menu.sh --join "${safeCtrl}" "${rawToken}"`;
+    let advertisePrefix = '';
+    try {
+      const nodeUrlHost = stripIpv6Brackets(new URL(node.url).hostname);
+      if (isDomainHostname(nodeUrlHost)) {
+        const safeNodeUrl = node.url.replace(/"/g, '');
+        advertisePrefix = `TGVPANEL_ADVERTISE_URL="${safeNodeUrl}" `;
+      }
+    } catch {
+      // Ignore malformed legacy URL
+    }
+    const curlJoinCommand = `curl -fsSL https://raw.githubusercontent.com/ShadowGamerIND37/TGVPANEL/main/menu.sh -o menu.sh && chmod +x menu.sh && sudo ${advertisePrefix}bash menu.sh --join "${safeCtrl}" "${rawToken}"`;
+    const localJoinCommand = `sudo ${advertisePrefix}bash menu.sh --join "${safeCtrl}" "${rawToken}"`;
 
     return {
       nodeId: node.id,
@@ -765,13 +801,40 @@ export class NodeManager {
         ? params.tlsCertPem.trim()
         : null;
 
+    const existingUrlHost = (() => {
+      try {
+        return stripIpv6Brackets(new URL(node.url).hostname);
+      } catch {
+        return '';
+      }
+    })();
+    const existingUsesDomain = isDomainHostname(existingUrlHost);
+
     let effectiveUrl = node.url;
     if (params.endpointUrl) {
-      effectiveUrl = normalizeNodeEndpointUrl(params.endpointUrl);
-    } else if (detectedIp && params.agentPort) {
+      const candidateUrl = normalizeNodeEndpointUrl(params.endpointUrl);
+      const candidateHost = (() => {
+        try {
+          return stripIpv6Brackets(new URL(candidateUrl).hostname);
+        } catch {
+          return '';
+        }
+      })();
+      // Preserve a configured Cloudflare Tunnel / domain endpoint if the joining host
+      // reported an auto-detected raw LAN/NAT IP instead of a domain URL.
+      if (!existingUsesDomain || isDomainHostname(candidateHost)) {
+        effectiveUrl = candidateUrl;
+      }
+    } else if (!existingUsesDomain && detectedIp && params.agentPort) {
       const proto = cleanCertPem || params.verifySsl ? 'https' : 'http';
       effectiveUrl = `${proto}://${detectedIp}:${Number(params.agentPort)}`;
     }
+
+    const effectiveHostname = existingUsesDomain
+      ? node.hostname || existingUrlHost
+      : detectedHostname || null;
+    const effectiveIp =
+      detectedIp || node.ip_address || existingUrlHost || null;
 
     // If the node supplied its X.509 PEM certificate, pin it AND keep verify_ssl = 1;
     // otherwise respect explicit verifySsl or default to 0 for unpinned self-signed IP endpoints.
@@ -802,8 +865,8 @@ export class NodeManager {
            updated_at = datetime('now')
          WHERE id = ?`,
         [
-          detectedHostname || null,
-          detectedIp || null,
+          effectiveHostname,
+          effectiveIp,
           effectiveUrl,
           nextVerifySsl,
           node.id,
@@ -1586,14 +1649,14 @@ export class NodeManager {
     }
   ): {
     rejectUnauthorized: boolean;
-    ca?: string;
+    ca?: string | readonly string[];
     cert?: string;
     key?: string;
     checkServerIdentity?: typeof tls.checkServerIdentity;
   } {
     const out: {
       rejectUnauthorized: boolean;
-      ca?: string;
+      ca?: string | readonly string[];
       cert?: string;
       key?: string;
       checkServerIdentity?: typeof tls.checkServerIdentity;
@@ -1602,7 +1665,9 @@ export class NodeManager {
     };
 
     if (creds.tls_ca_pem) {
-      out.ca = creds.tls_ca_pem;
+      // Combine Mozilla/system Root CAs with the node's pinned X.509 cert/CA so BOTH
+      // direct self-signed Node Agent TLS AND public Edge CAs (Cloudflare Tunnel / Let's Encrypt) validate.
+      out.ca = [...tls.rootCertificates, creds.tls_ca_pem];
       const pinnedPrints = extractPemSha256Fingerprints(creds.tls_ca_pem);
       if (pinnedPrints.size > 0) {
         out.checkServerIdentity = (hostname: string, cert: tls.PeerCertificate) => {

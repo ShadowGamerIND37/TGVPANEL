@@ -3537,6 +3537,117 @@ fi
         }
       }
     });
+
+    // 26. Cloudflare Tunnel / Domain-Only Node Registration (No Public IPv4 IP)
+    await runStep('T25: Cloudflare Tunnel / domain-only node registration without IPv4 IP & --join domain preservation', async () => {
+      const tls = require('tls');
+      const {
+        normalizeNodeEndpointUrl,
+        isDomainHostname,
+      } = require('../lib/services/nodes/NodeClient');
+
+      // Bare domain defaults to https:// (Cloudflare Tunnel port 443)
+      assert.strictEqual(isDomainHostname('cf-node01.example.com'), true);
+      assert.strictEqual(isDomainHostname('203.0.113.10'), false);
+      assert.strictEqual(isDomainHostname('localhost'), false);
+      assert.strictEqual(
+        normalizeNodeEndpointUrl('cf-node01.example.com'),
+        'https://cf-node01.example.com'
+      );
+      assert.strictEqual(
+        normalizeNodeEndpointUrl('https://cf-node01.example.com/api/v1/health'),
+        'https://cf-node01.example.com'
+      );
+
+      // Admin UI renders #nIp as optional (no HTML5 required attribute blocking empty IPv4)
+      const nodesPage = await adminClient.request('GET', '/admin/nodes');
+      assert.strictEqual(nodesPage.status, 200);
+      assert.ok(
+        !/id="nIp"[^>]*\brequired\b/i.test(nodesPage.text),
+        '#nIp must be optional so Cloudflare Tunnel / IPv6-only nodes without IPv4 can submit'
+      );
+
+      // Create node with blank ipAddress & blank hostname (Cloudflare Tunnel URL only)
+      const createCfNode = await adminClient.request('POST', '/api/v1/nodes', {
+        name: 'cf-tunnel-mumbai',
+        hostname: '',
+        ipAddress: '',
+        url: 'cf-node01.example.com',
+        location: 'Mumbai (Cloudflare Tunnel)',
+        verifySsl: true,
+      });
+      assert.strictEqual(
+        createCfNode.status,
+        201,
+        `Domain-only node create failed: ${createCfNode.text}`
+      );
+      const cfNodeId = createCfNode.json.node.id;
+      try {
+        assert.strictEqual(createCfNode.json.node.url, 'https://cf-node01.example.com');
+        assert.strictEqual(createCfNode.json.node.hostname, 'cf-node01.example.com');
+        assert.strictEqual(createCfNode.json.node.ip_address, 'cf-node01.example.com');
+        assert.strictEqual(createCfNode.json.node.verify_ssl, 1);
+
+        // Generated 1-command join script preserves TGVPANEL_ADVERTISE_URL for Tunnel domain
+        const joinTokRes = await adminClient.request(
+          'POST',
+          `/api/v1/nodes/${cfNodeId}/join-token`,
+          {
+            controllerUrl: 'https://panel.example.com',
+            ttlMinutes: 15,
+          }
+        );
+        assert.strictEqual(joinTokRes.status, 201, `Join token create failed: ${joinTokRes.text}`);
+        assert.ok(
+          joinTokRes.json.curlJoinCommand.includes(
+            'TGVPANEL_ADVERTISE_URL="https://cf-node01.example.com"'
+          ),
+          'Join command must embed TGVPANEL_ADVERTISE_URL when node uses a Tunnel/domain URL'
+        );
+
+        // Even if a CGNAT host runs --join without TGVPANEL_ADVERTISE_URL and posts its private LAN IP,
+        // redeemJoinToken MUST NOT clobber the configured Cloudflare Tunnel domain!
+        const dummySelfSignedPem =
+          '-----BEGIN CERTIFICATE-----\nMIIB+TCCAWICAQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDEwMTAwMDAw\nMFoXDTM2MDEwMTAwMDAwMFowFDESMBAGA1UEAwwJbG9jYWxob3N0MFkwEwYHKoZI\nzj0CAQYIKoZIzj0DAQcDQgAE1111111111111111111111111111111111111111\n111111111111111111111111111111111111111111111TAAMAoGCCqGSM49BAMC\nA0cAMEQCIB111111111111111111111111111111111111111111AiB222222222\n222222222222222222222222222222222w==\n-----END CERTIFICATE-----';
+        const bareNodeClient = new SessionClient(baseUrl);
+        const redeemRes = await bareNodeClient.request(
+          'POST',
+          `/api/v1/nodes/join/${encodeURIComponent(joinTokRes.json.token)}`,
+          {
+            endpointUrl: 'https://192.168.88.50:8443',
+            ipAddress: '192.168.88.50',
+            hostname: 'cgnat-box.lan',
+            agentPort: 8443,
+            tlsCertPem: dummySelfSignedPem,
+            verifySsl: true,
+          }
+        );
+        assert.strictEqual(redeemRes.status, 200, `Join redeem failed: ${redeemRes.text}`);
+        assert.strictEqual(
+          redeemRes.json.url,
+          'https://cf-node01.example.com',
+          'Configured Cloudflare Tunnel domain must not be overwritten by private LAN IP during --join'
+        );
+
+        const afterNode = await ctx.nodeManager.getNodeById(cfNodeId);
+        assert.strictEqual(afterNode.url, 'https://cf-node01.example.com');
+        assert.strictEqual(afterNode.hostname, 'cf-node01.example.com');
+
+        // Verify buildTlsOptionsForNode merges Mozilla rootCertificates + pinned PEM so Cloudflare Edge CA validates
+        const tlsOpts = ctx.nodeManager.buildTlsOptionsForNode(afterNode, {
+          tls_ca_pem: dummySelfSignedPem,
+        });
+        assert.strictEqual(tlsOpts.rejectUnauthorized, true);
+        assert.ok(
+          Array.isArray(tlsOpts.ca) &&
+            tlsOpts.ca.length > tls.rootCertificates.length &&
+            tlsOpts.ca.includes(dummySelfSignedPem),
+          'TLS CA bundle must include both system root CAs (for Cloudflare Edge) and pinned node cert'
+        );
+      } finally {
+        await adminClient.request('DELETE', `/api/v1/nodes/${cfNodeId}`).catch(() => {});
+      }
+    });
   } finally {
     const { execFileSync } = require('child_process');
     for (const storeDir of [

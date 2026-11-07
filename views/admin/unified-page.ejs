@@ -1416,15 +1416,15 @@
               </div>
               <div class="v3-field">
                 <label>Hostname / FQDN</label>
-                <input id="nHost" required placeholder="fra02.example.com">
+                <input id="nHost" placeholder="node1.example.com" oninput="autoFillAgentUrl()">
               </div>
               <div class="v3-field">
-                <label>IPv4 / Mesh Address</label>
-                <input id="nIp" required placeholder="203.0.113.10" oninput="autoFillAgentUrl()">
+                <label>IPv4 / Mesh IP <span style="font-weight:400;color:var(--text-muted);">(optional for Tunnel)</span></label>
+                <input id="nIp" placeholder="203.0.113.10 or blank for Tunnel" oninput="autoFillAgentUrl()">
               </div>
               <div class="v3-field">
-                <label>Agent Endpoint URL</label>
-                <input id="nUrl" required placeholder="https://203.0.113.10:8443">
+                <label>Agent Endpoint URL <span style="font-weight:400;color:var(--text-muted);">(Tunnel or IP:Port)</span></label>
+                <input id="nUrl" required placeholder="https://node1.example.com or https://203.0.113.10:8443" oninput="autoFillFromAgentUrl()">
               </div>
               <div class="v3-field">
                 <label>Datacenter / Location</label>
@@ -3247,17 +3247,54 @@ let __activePairNodeId = null;
 
 function autoFillAgentUrl() {
   const ip = (document.getElementById('nIp')?.value || '').trim();
+  const hostVal = (document.getElementById('nHost')?.value || '').trim();
   const urlEl = document.getElementById('nUrl');
   const hostEl = document.getElementById('nHost');
   const sslEl = document.getElementById('nVerifySsl');
+  const isIpv4 = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip);
+  const isDomain = hostVal && hostVal.includes('.') && !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostVal) && !hostVal.includes(':');
   if (ip && hostEl && !hostEl.dataset.touched) {
     hostEl.value = ip;
   }
   if (ip && urlEl && !urlEl.dataset.touched) {
-    urlEl.value = 'https://' + ip + ':8443';
-    if (sslEl && !sslEl.dataset.touched && !__pendingPinnedTlsPem && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
-      sslEl.checked = false;
+    if (ip.includes('.') && !isIpv4 && !ip.includes(':')) {
+      // User pasted a Cloudflare Tunnel / domain into IP box
+      urlEl.value = 'https://' + ip.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+      if (sslEl && !sslEl.dataset.touched) sslEl.checked = true;
+    } else {
+      const bracketIp = ip.includes(':') && !ip.startsWith('[') ? '[' + ip + ']' : ip;
+      urlEl.value = 'https://' + bracketIp + ':8443';
+      if (sslEl && !sslEl.dataset.touched && !__pendingPinnedTlsPem && (isIpv4 || ip.includes(':'))) {
+        sslEl.checked = false;
+      }
     }
+  } else if (!ip && isDomain && urlEl && !urlEl.dataset.touched) {
+    // Domain-only / Cloudflare Tunnel node with no IPv4 IP
+    urlEl.value = 'https://' + hostVal.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    if (sslEl && !sslEl.dataset.touched) {
+      sslEl.checked = true;
+    }
+  }
+}
+
+function autoFillFromAgentUrl() {
+  const rawUrl = (document.getElementById('nUrl')?.value || '').trim();
+  const hostEl = document.getElementById('nHost');
+  const sslEl = document.getElementById('nVerifySsl');
+  if (!rawUrl) return;
+  try {
+    const withProto = /^https?:\/\//i.test(rawUrl) ? rawUrl : 'https://' + rawUrl;
+    const parsed = new URL(withProto);
+    const cleanHost = (parsed.hostname || '').replace(/^\[|\]$/g, '');
+    if (cleanHost && hostEl && !hostEl.dataset.touched) {
+      hostEl.value = cleanHost;
+    }
+    const isDomain = cleanHost.includes('.') && !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(cleanHost) && !cleanHost.includes(':');
+    if (isDomain && parsed.protocol === 'https:' && !parsed.port && sslEl && !sslEl.dataset.touched) {
+      sslEl.checked = true;
+    }
+  } catch (_err) {
+    // Ignore partial URL while user is still typing
   }
 }
 
