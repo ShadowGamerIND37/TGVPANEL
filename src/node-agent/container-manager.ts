@@ -4240,6 +4240,11 @@ export class LxcContainerManager {
    * Offline-injects a first-boot Proxmox VE bootstrap into a freshly created Debian
    * LXC rootfs (mirrors the KVM Cloud-Init PVE bootstrap, adapted for containers:
    * no ISO/seed, systemd service + offline enable symlink instead of cloud-init).
+   *
+   * NOTE: The base rootfs is Debian (LinuxContainers.org `debian:12`/`debian:13`).
+   * Proxmox VE is installed ON TOP of Debian on first boot, so `neofetch` / `/etc/os-release`
+   * will always report Debian — even on bare-metal PVE hosts. Verify PVE with
+   * `pveversion`, `dpkg -l | grep proxmox`, `systemctl status pveproxy`, and `https://<ip>:8006`.
    */
   public async injectProxmoxLxcBootstrap(
     containerName: string,
@@ -4250,6 +4255,7 @@ export class LxcContainerManager {
     const cleanCodename = codename === 'trixie' ? 'trixie' : 'bookworm';
     const isPve9 = cleanCodename === 'trixie';
     const pveLabel = isPve9 ? 'Proxmox VE 9 (Debian 13 Trixie)' : 'Proxmox VE 8 (Debian 12 Bookworm)';
+    const pveShort = isPve9 ? 'Proxmox VE 9' : 'Proxmox VE 8';
     const resolvedGpgUrl =
       gpgUrl && /^https:\/\/enterprise\.proxmox\.com\//.test(gpgUrl)
         ? gpgUrl
@@ -4272,16 +4278,22 @@ export class LxcContainerManager {
       'MARKER_FILE="/var/lib/tgvpanel-proxmox-installed"',
       'STEP_FILE="/run/tgvpanel-proxmox-step"',
       'LOG_FILE="/var/log/proxmox-install.log"',
-      'exec >>"$LOG_FILE" 2>&1',
-      'set -x',
+      'mkdir -p /var/log /run',
+      'touch "$LOG_FILE"',
       'if [ -f "$MARKER_FILE" ]; then echo "[TGVPANEL-PVE] Proxmox VE already installed, skipping."; exit 0; fi',
+      'exec > >(tee -a "$LOG_FILE") 2>&1',
+      'set -x',
+      `echo "=== [TGVPANEL] Starting Unattended ${pveLabel} Bootstrap (LXC, Debian base) ==="`,
       'export DEBIAN_FRONTEND=noninteractive',
-      'export APT_OPTS=(-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold")',
-      'download_file() { curl -fsSL --retry 3 --connect-timeout 15 "$1" -o "$2"; }',
+      'APT_OPTS=(-y -o DPkg::Lock::Timeout=300 -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold")',
+      'echo "[0/6] Stopping background apt-daily timers to prevent APT lock contention" > "$STEP_FILE"',
+      'systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service unattended-upgrades.service 2>/dev/null || true',
+      'systemctl mask apt-daily.service apt-daily-upgrade.service 2>/dev/null || true',
+      'download_file() { if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 --connect-timeout 15 "$1" -o "$2"; else wget -q --tries=3 --timeout=15 "$1" -O "$2"; fi; }',
       'echo "[1/6] Updating package lists" > "$STEP_FILE"',
       'apt-get update',
-      'echo "[2/6] Configuring hostname and Proxmox APT repository" > "$STEP_FILE"',
-      'apt-get install "${APT_OPTS[@]}" -y curl wget gnupg ca-certificates',
+      'echo "[2/6] Configuring Proxmox APT repository" > "$STEP_FILE"',
+      'apt-get install "${APT_OPTS[@]}" curl wget gnupg ca-certificates',
       'if ! download_file "$GPG_URL" /usr/share/keyrings/proxmox-archive-keyring.gpg || [ ! -s /usr/share/keyrings/proxmox-archive-keyring.gpg ]; then',
       '  download_file "$FALLBACK_GPG_URL" /usr/share/keyrings/proxmox-archive-keyring.gpg',
       'fi',
@@ -4296,10 +4308,10 @@ export class LxcContainerManager {
       'Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg',
       'EOF',
       'apt-get update',
-      'echo "[3/6] Installing Proxmox VE kernel (best-effort inside LXC)" > "$STEP_FILE"',
-      'apt-get install "${APT_OPTS[@]}" -y proxmox-default-kernel || echo "[TGVPANEL-PVE] PVE kernel install skipped (expected inside LXC, host kernel is used)."',
+      'echo "[3/6] Installing Proxmox VE kernel (best-effort inside LXC, host kernel is used)" > "$STEP_FILE"',
+      'apt-get install "${APT_OPTS[@]}" proxmox-default-kernel || echo "[TGVPANEL-PVE] PVE kernel install skipped (expected inside LXC, host kernel is used)."',
       'echo "[4/6] Installing Proxmox VE hypervisor, LXC, QEMU & Web UI (:8006)" > "$STEP_FILE"',
-      'apt-get install "${APT_OPTS[@]}" -y proxmox-ve postfix open-iscsi chrony ifupdown2 iptables',
+      'apt-get install "${APT_OPTS[@]}" proxmox-ve postfix open-iscsi chrony ifupdown2 iptables',
       'echo "[5/6] Enabling Proxmox VE services" > "$STEP_FILE"',
       'systemctl enable pve-cluster pvedaemon pveproxy qemu-server lxc 2>/dev/null || true',
       'echo "[6/6] Finalizing Proxmox VE installation" > "$STEP_FILE"',
@@ -4329,36 +4341,80 @@ export class LxcContainerManager {
 
     const bannerContent = [
       '#!/bin/sh',
+      'case "$-" in *i*) ;; *) return 0 2>/dev/null || exit 0 ;; esac',
       'if [ -f /var/lib/tgvpanel-proxmox-installed ]; then',
-      '  echo " [TGVPANEL] Proxmox VE is installed. Web UI: https://$(hostname -I 2>/dev/null | awk \'{print $1}\'):8006"',
+      '  PVE_IP=$(hostname -I 2>/dev/null | awk \'{print $1}\')',
+      '  echo "=================================================================="',
+      `  echo " [TGVPANEL] ${pveLabel} is READY"`,
+      '  echo " Web Console: https://${PVE_IP:-127.0.0.1}:8006  (login: root / PAM)"',
+      '  echo " Verify: pveversion | dpkg -l | grep proxmox"',
+      '  echo "=================================================================="',
       'elif systemctl is-active --quiet tgvpanel-proxmox-setup.service 2>/dev/null; then',
-      '  echo " [TGVPANEL] Proxmox VE is installing... (log: /var/log/proxmox-install.log)"',
+      '  CUR_STEP=$(cat /run/tgvpanel-proxmox-step 2>/dev/null || echo "Installing Proxmox VE packages...")',
+      '  echo "=================================================================="',
+      `  echo " [TGVPANEL] ${pveLabel} Bootstrap IN PROGRESS"`,
+      '  echo " Status: ${CUR_STEP}"',
+      '  echo " Note: APT/dpkg is temporarily locked while installing proxmox-ve (5-15 min)."',
+      '  echo " Live log: tail -f /var/log/proxmox-install.log"',
+      '  echo " Note: neofetch shows Debian (PVE is Debian-based) — check pveversion for PVE."',
+      '  echo "=================================================================="',
+      'elif systemctl is-failed --quiet tgvpanel-proxmox-setup.service 2>/dev/null; then',
+      '  echo "=================================================================="',
+      '  echo " [TGVPANEL] Proxmox VE bootstrap encountered an issue."',
+      '  echo " Check log: cat /var/log/proxmox-install.log"',
+      '  echo " Retry:     systemctl restart tgvpanel-proxmox-setup.service"',
+      '  echo "=================================================================="',
       'fi',
+      '',
+    ].join('\n');
+
+    // Branding so `cat /etc/motd`, `login`, and `hostnamectl` context show Proxmox (os-release stays Debian by design)
+    const motdContent = [
+      ` ${pveShort} (TGVPANEL LXC) — Debian base + Proxmox VE hypervisor`,
+      ` Web Console: https://<container-ip>:8006 (login: root)`,
+      ` Verify PVE: pveversion`,
+      '',
+    ].join('\n');
+    const issueContent = `${pveShort} (TGVPANEL LXC) \\n \\l\n`;
+    const infoContent = [
+      `TGVPANEL Proxmox LXC Image`,
+      `Label: ${pveLabel}`,
+      `Codename: ${cleanCodename}`,
+      `Base: Debian ${cleanCodename} (LinuxContainers.org rootfs)`,
+      `Bootstrap: /usr/local/sbin/tgvpanel-install-proxmox.sh (systemd: tgvpanel-proxmox-setup.service)`,
+      `Log: /var/log/proxmox-install.log`,
+      `Marker: /var/lib/tgvpanel-proxmox-installed`,
+      `Web UI: https://<container-ip>:8006`,
+      `Note: neofetch reports Debian because Proxmox VE is Debian-based. Use 'pveversion' to verify PVE.`,
       '',
     ].join('\n');
 
     const scriptPath = this.resolveConfinedRootfsPath(safeName, '/usr/local/sbin/tgvpanel-install-proxmox.sh');
     const servicePath = this.resolveConfinedRootfsPath(safeName, '/etc/systemd/system/tgvpanel-proxmox-setup.service');
     const bannerPath = this.resolveConfinedRootfsPath(safeName, '/etc/profile.d/tgvpanel-proxmox-status.sh');
+    const motdPath = this.resolveConfinedRootfsPath(safeName, '/etc/motd');
+    const issuePath = this.resolveConfinedRootfsPath(safeName, '/etc/issue');
+    const issueNetPath = this.resolveConfinedRootfsPath(safeName, '/etc/issue.net');
+    const infoPath = this.resolveConfinedRootfsPath(safeName, '/etc/tgvpanel-proxmox-info');
     privilegedFs.mkdirpSync(path.dirname(scriptPath), 0o755);
     privilegedFs.mkdirpSync(path.dirname(servicePath), 0o755);
     privilegedFs.mkdirpSync(path.dirname(bannerPath), 0o755);
     privilegedFs.writeFileSync(scriptPath, scriptContent, 0o755);
     privilegedFs.writeFileSync(servicePath, serviceContent, 0o644);
     privilegedFs.writeFileSync(bannerPath, bannerContent, 0o644);
-    // Offline enable: symlink into multi-user.target.wants (no systemctl call needed pre-boot)
+    privilegedFs.writeFileSync(motdPath, motdContent, 0o644);
+    privilegedFs.writeFileSync(issuePath, issueContent, 0o644);
+    privilegedFs.writeFileSync(issueNetPath, issueContent, 0o644);
+    privilegedFs.writeFileSync(infoPath, infoContent, 0o644);
+    // Offline enable: symlink into multi-user.target.wants (no systemctl call needed pre-boot).
+    // Uses privilegedFs.symlinkSync so root-owned /var/lib/lxc works from non-root panel processes.
     const wantsDir = this.resolveConfinedRootfsPath(safeName, '/etc/systemd/system/multi-user.target.wants');
     privilegedFs.mkdirpSync(wantsDir, 0o755);
     const linkPath = path.join(wantsDir, 'tgvpanel-proxmox-setup.service');
-    try {
-      if (privilegedFs.existsSync(linkPath)) {
-        privilegedFs.rmRecursiveSync(linkPath);
-      }
-      // privilegedFs has no symlink helper; use fs directly (rootfs is host-writable here)
-      fs.symlinkSync('/etc/systemd/system/tgvpanel-proxmox-setup.service', linkPath);
-    } catch {
-      // Best-effort: service still runs via `systemctl start` fallback banner; ignore symlink errors
+    if (privilegedFs.existsSync(linkPath)) {
+      privilegedFs.rmRecursiveSync(linkPath);
     }
+    privilegedFs.symlinkSync(linkPath, '/etc/systemd/system/tgvpanel-proxmox-setup.service');
   }
 
   public async getContainerProcesses(

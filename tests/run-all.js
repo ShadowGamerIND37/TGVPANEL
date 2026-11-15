@@ -3772,6 +3772,63 @@ fi
         await adminClient.request('DELETE', `/api/v1/instances/lxc/${pveRefId}`).catch(() => {});
       }
     });
+
+    // 28. Proxmox LXC Bootstrap Robustness (Debian base + PVE on top; neofetch shows Debian by design)
+    await runStep('T27: Proxmox LXC bootstrap robustness (apt-daily lock fix, reliable enable symlink, branding)', async () => {
+      const { LxcContainerManager } = require('../lib/node-agent/container-manager');
+      const { privilegedFs } = require('../lib/node-agent/command-runner');
+
+      // privilegedFs.symlinkSync must exist (fixes silent enable failure on root-owned /var/lib/lxc)
+      assert.strictEqual(typeof privilegedFs.symlinkSync, 'function', 'privilegedFs.symlinkSync must exist');
+
+      // Offline-inject bootstrap into a fake rootfs and verify all files + symlink
+      const fakeCtName = 'ct-pve-bootstrap-check';
+      const fakeRootfs = path.join(tmpRoot, 'local-lxc', fakeCtName, 'rootfs');
+      fs.mkdirSync(path.join(fakeRootfs, 'etc', 'systemd', 'system'), { recursive: true });
+      fs.mkdirSync(path.join(fakeRootfs, 'etc'), { recursive: true });
+      const cm = new LxcContainerManager(path.join(tmpRoot, 'local-lxc'));
+      await cm.injectProxmoxLxcBootstrap(fakeCtName, 'bookworm', null);
+
+      const scriptPath = path.join(fakeRootfs, 'usr', 'local', 'sbin', 'tgvpanel-install-proxmox.sh');
+      const servicePath = path.join(fakeRootfs, 'etc', 'systemd', 'system', 'tgvpanel-proxmox-setup.service');
+      const bannerPath = path.join(fakeRootfs, 'etc', 'profile.d', 'tgvpanel-proxmox-status.sh');
+      const motdPath = path.join(fakeRootfs, 'etc', 'motd');
+      const infoPath = path.join(fakeRootfs, 'etc', 'tgvpanel-proxmox-info');
+      const linkPath = path.join(fakeRootfs, 'etc', 'systemd', 'system', 'multi-user.target.wants', 'tgvpanel-proxmox-setup.service');
+      for (const p of [scriptPath, servicePath, bannerPath, motdPath, infoPath]) {
+        assert.ok(fs.existsSync(p), `Expected bootstrap file at ${p}`);
+      }
+      assert.ok(fs.lstatSync(linkPath).isSymbolicLink(), 'Offline enable symlink must exist (systemd multi-user.target.wants)');
+      assert.strictEqual(
+        fs.readlinkSync(linkPath),
+        '/etc/systemd/system/tgvpanel-proxmox-setup.service'
+      );
+
+      const script = fs.readFileSync(scriptPath, 'utf8');
+      assert.ok(script.includes('apt-daily'), 'Bootstrap must stop apt-daily timers (APT lock fix)');
+      assert.ok(script.includes('DPkg::Lock::Timeout=300'), 'Bootstrap must set APT lock timeout');
+      assert.ok(script.includes('tee -a'), 'Bootstrap must tee output to log + journal');
+      assert.ok(script.includes('proxmox-ve'), 'Bootstrap must install proxmox-ve');
+      assert.ok(script.includes('pve-no-subscription'), 'Bootstrap must use pve-no-subscription repo');
+      assert.ok(script.includes('proxmox-archive-keyring'), 'Bootstrap must install Proxmox GPG keyring');
+      assert.ok(script.includes('bookworm'), 'Bootstrap must target bookworm for VE 8');
+
+      const banner = fs.readFileSync(bannerPath, 'utf8');
+      assert.ok(banner.includes('pveversion'), 'Banner must tell user to verify with pveversion');
+      assert.ok(banner.includes('neofetch shows Debian'), 'Banner must explain neofetch shows Debian by design');
+      assert.ok(banner.includes('/var/log/proxmox-install.log'), 'Banner must point to install log');
+
+      const motd = fs.readFileSync(motdPath, 'utf8');
+      assert.ok(motd.includes('Proxmox VE 8'), 'MOTD must brand the container as Proxmox VE 8');
+      const info = fs.readFileSync(infoPath, 'utf8');
+      assert.ok(info.includes('neofetch reports Debian'), 'Info file must explain Debian base');
+
+      // Catalog descriptions must clarify Debian base (prevents "why Debian?" confusion)
+      const tplRes = await adminClient.request('GET', '/api/v1/lxc/templates?all=1');
+      const pve8 = tplRes.json.templates.find((t) => t.slug === 'proxmox-ve-8');
+      assert.ok(pve8.description.includes('Debian 12 Bookworm base'), 'PVE 8 description must mention Debian base');
+      assert.ok(pve8.description.includes('neofetch shows Debian'), 'PVE 8 description must explain neofetch behavior');
+    });
   } finally {
     const { execFileSync } = require('child_process');
     for (const storeDir of [
