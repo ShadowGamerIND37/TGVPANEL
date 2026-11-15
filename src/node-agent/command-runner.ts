@@ -652,6 +652,19 @@ export const privilegedFs = {
       }
     }
   },
+
+  symlinkSync(targetPath: string, linkTarget: string): void {
+    const resolved = assertSafeFsPath(targetPath);
+    if (!linkTarget || typeof linkTarget !== 'string' || linkTarget.includes('\0')) {
+      throw new Error('Invalid symlink target.');
+    }
+    try {
+      fs.symlinkSync(linkTarget, resolved);
+    } catch (err) {
+      if (!isPermissionError(err) || !canPasswordlessSudo()) throw err;
+      runSudoHelperSync('ln', ['-s', '--', linkTarget, resolved]);
+    }
+  },
 };
 
 export interface HostCapabilities {

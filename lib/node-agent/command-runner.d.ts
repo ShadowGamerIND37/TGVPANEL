@@ -67,6 +67,7 @@ export declare const privilegedFs: {
     readdirNamesSync(targetPath: string): string[];
     rmRecursiveSync(targetPath: string): void;
     chownToCurrentUserSync(targetPath: string): void;
+    symlinkSync(targetPath: string, linkTarget: string): void;
 };
 export interface HostCapabilities {
     kvmDevicePresent: boolean;

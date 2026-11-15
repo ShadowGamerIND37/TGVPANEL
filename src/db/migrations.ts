@@ -274,7 +274,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     minDiskGb: 40,
     minRamMb: 4096,
     description:
-      'Proxmox Virtual Environment 8 hypervisor container on Debian 12 Bookworm (KVM + LXC, HTTPS Web UI on :8006, first-boot bootstrap).',
+      'Proxmox Virtual Environment 8 hypervisor container (Debian 12 Bookworm base + first-boot PVE install, HTTPS Web UI on :8006; neofetch shows Debian by design).',
   },
   {
     key: 'proxmox-ve-9',
@@ -288,7 +288,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     minDiskGb: 40,
     minRamMb: 4096,
     description:
-      'Proxmox Virtual Environment 9 hypervisor container on Debian 13 Trixie (KVM + LXC, HTTPS Web UI on :8006, first-boot bootstrap).',
+      'Proxmox Virtual Environment 9 hypervisor container (Debian 13 Trixie base + first-boot PVE install, HTTPS Web UI on :8006; neofetch shows Debian by design).',
   },
 ];
 
@@ -1522,7 +1522,7 @@ export const MIGRATIONS: MigrationDefinition[] = [
           minDiskGb: 40,
           minRamMb: 4096,
           description:
-            'Proxmox Virtual Environment 8 hypervisor container on Debian 12 Bookworm (KVM + LXC, HTTPS Web UI on :8006, first-boot bootstrap).',
+            'Proxmox Virtual Environment 8 hypervisor container (Debian 12 Bookworm base + first-boot PVE install, HTTPS Web UI on :8006; neofetch shows Debian by design).',
           distro: 'debian',
           release: '12',
           codename: 'bookworm',
@@ -1539,7 +1539,7 @@ export const MIGRATIONS: MigrationDefinition[] = [
           minDiskGb: 40,
           minRamMb: 4096,
           description:
-            'Proxmox Virtual Environment 9 hypervisor container on Debian 13 Trixie (KVM + LXC, HTTPS Web UI on :8006, first-boot bootstrap).',
+            'Proxmox Virtual Environment 9 hypervisor container (Debian 13 Trixie base + first-boot PVE install, HTTPS Web UI on :8006; neofetch shows Debian by design).',
           distro: 'debian',
           release: '13',
           codename: 'trixie',
@@ -1596,6 +1596,22 @@ export const MIGRATIONS: MigrationDefinition[] = [
           [osName, iconPath]
         );
       }
+    },
+  },
+  {
+    version: 13,
+    name: 'v013_clarify_proxmox_lxc_debian_base_descriptions',
+    up: async (db) => {
+      await db.run(
+        `UPDATE lxc_templates
+         SET description = 'Proxmox Virtual Environment 8 hypervisor container (Debian 12 Bookworm base + first-boot PVE install, HTTPS Web UI on :8006; neofetch shows Debian by design).'
+         WHERE template_key = 'proxmox-ve-8'`
+      );
+      await db.run(
+        `UPDATE lxc_templates
+         SET description = 'Proxmox Virtual Environment 9 hypervisor container (Debian 13 Trixie base + first-boot PVE install, HTTPS Web UI on :8006; neofetch shows Debian by design).'
+         WHERE template_key = 'proxmox-ve-9'`
+      );
     },
   },
 ];

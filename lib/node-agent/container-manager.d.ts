@@ -416,6 +416,11 @@ export declare class LxcContainerManager {
      * Offline-injects a first-boot Proxmox VE bootstrap into a freshly created Debian
      * LXC rootfs (mirrors the KVM Cloud-Init PVE bootstrap, adapted for containers:
      * no ISO/seed, systemd service + offline enable symlink instead of cloud-init).
+     *
+     * NOTE: The base rootfs is Debian (LinuxContainers.org `debian:12`/`debian:13`).
+     * Proxmox VE is installed ON TOP of Debian on first boot, so `neofetch` / `/etc/os-release`
+     * will always report Debian — even on bare-metal PVE hosts. Verify PVE with
+     * `pveversion`, `dpkg -l | grep proxmox`, `systemctl status pveproxy`, and `https://<ip>:8006`.
      */
     injectProxmoxLxcBootstrap(containerName: string, codename: string, gpgUrl?: string | null): Promise<void>;
     getContainerProcesses(containerName: string): Promise<Array<{
