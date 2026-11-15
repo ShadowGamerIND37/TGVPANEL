@@ -122,9 +122,12 @@
     }
     .lxc-os-top { display: flex; align-items: center; gap: 10px; }
     .lxc-os-icon {
-      width: 34px; height: 34px; border-radius: 9px; display: inline-flex; align-items: center;
-      justify-content: center; flex-shrink: 0; font-weight: 800; font-size: 13px;
+      width: 38px; height: 38px; border-radius: 10px; display: inline-flex; align-items: center;
+      justify-content: center; flex-shrink: 0; font-weight: 800; font-size: 13px; overflow: hidden;
+      background: #141821; padding: 3px;
     }
+    .lxc-os-icon img { width: 100%; height: 100%; object-fit: contain; border-radius: 7px; display: block; }
+    .lxc-list-os-icon { width: 30px; height: 30px; border-radius: 8px; object-fit: contain; background: #141821; padding: 2px; vertical-align: middle; margin-right: 7px; }
     .lxc-os-name { font-size: 13px; font-weight: 700; color: var(--text-primary); line-height: 1.25; }
     .lxc-os-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
     .lxc-os-check {
@@ -934,7 +937,7 @@
                   <span class="lxc-step-badge">2</span>
                   <div>
                     <h3 class="lxc-step-title">Operating System Template</h3>
-                    <p class="lxc-step-sub">Official LinuxContainers rootfs images &amp; custom uploaded templates.</p>
+                    <p class="lxc-step-sub">Official LinuxContainers rootfs images, Proxmox VE hypervisor images &amp; custom uploaded templates.</p>
                   </div>
                 </div>
                 <input id="lxcTplSearch" type="search" placeholder="Search distro or release..." oninput="renderLxcOsGrid()"
@@ -953,6 +956,7 @@
                 <button type="button" class="lxc-cat-pill" data-cat="debian" onclick="setLxcCat('debian', this)">Debian</button>
                 <button type="button" class="lxc-cat-pill" data-cat="rhel" onclick="setLxcCat('rhel', this)">Alma / Rocky / CentOS</button>
                 <button type="button" class="lxc-cat-pill" data-cat="fedora" onclick="setLxcCat('fedora', this)">Fedora</button>
+                <button type="button" class="lxc-cat-pill" data-cat="proxmox" onclick="setLxcCat('proxmox', this)">Proxmox VE</button>
                 <button type="button" class="lxc-cat-pill" data-cat="security" onclick="setLxcCat('security', this)">Kali &amp; Other</button>
                 <button type="button" class="lxc-cat-pill" data-cat="custom" onclick="setLxcCat('custom', this)">Custom</button>
               </div>
@@ -2651,7 +2655,7 @@ async function loadLxcList() {
   tbody.innerHTML = data.instances.map(i => `<tr>
     <td>#${i.refId}</td>
     <td><strong>${hkvmEsc(i.name)}</strong></td>
-    <td>${hkvmEsc(i.osLabel)}</td>
+    <td><img class="lxc-list-os-icon" src="${hkvmEsc(resolveLxcIconUrl({ slug: i.osLabel, distro: i.osLabel, name: i.osLabel }))}" alt="OS logo" onerror="this.onerror=null;this.src='/images/os/linux.svg';">${hkvmEsc(i.osLabel)}</td>
     <td>${hkvmEsc(i.ownerUsername || '#' + i.ownerId)}</td>
     <td>${hkvmEsc(i.nodeName || '#' + i.nodeId)}</td>
     <td>${i.cpuCores}c / ${i.ramMb}MB / ${i.diskGb}GB</td>
@@ -2704,17 +2708,36 @@ function parseEmbeddedJson(id) {
   try { return JSON.parse(el.textContent || '[]'); } catch { return []; }
 }
 
+function resolveLxcIconUrl(t) {
+  const raw = String((t && (t.icon_path || t.icon)) || '').trim();
+  if (raw && raw.startsWith('/images/os/') && raw.endsWith('.svg')) return raw;
+  if (raw && (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:image/'))) return raw;
+  const hint = `${(t && t.slug) || ''} ${(t && t.distro) || ''} ${(t && t.category) || ''} ${(t && t.name) || ''} ${(t && t.label) || ''} ${raw}`.toLowerCase();
+  if (hint.includes('proxmox') || hint.includes('pve')) return '/images/os/proxmox.svg';
+  if (hint.includes('ubuntu')) return '/images/os/ubuntu.svg';
+  if (hint.includes('debian')) return '/images/os/debian.svg';
+  if (hint.includes('fedora')) return '/images/os/fedora.svg';
+  if (hint.includes('centos')) return '/images/os/centos.svg';
+  if (hint.includes('alma')) return '/images/os/almalinux.svg';
+  if (hint.includes('rocky')) return '/images/os/rocky.svg';
+  if (hint.includes('kali')) return '/images/os/kali.svg';
+  if (hint.includes('alpine')) return '/images/os/alpine.svg';
+  return '/images/os/linux.svg';
+}
+
 function getDistroBrand(t) {
-  const d = String(t.distro || t.slug || '').toLowerCase();
-  if (d.includes('ubuntu')) return { bg: 'rgba(233,84,32,0.16)', fg: '#fb923c', short: 'UB', cat: 'ubuntu' };
-  if (d.includes('debian')) return { bg: 'rgba(215,10,83,0.16)', fg: '#f43f5e', short: 'DB', cat: 'debian' };
-  if (d.includes('alma')) return { bg: 'rgba(16,185,129,0.16)', fg: '#34d399', short: 'AL', cat: 'rhel' };
-  if (d.includes('rocky')) return { bg: 'rgba(6,182,212,0.16)', fg: '#22d3ee', short: 'RK', cat: 'rhel' };
-  if (d.includes('centos')) return { bg: 'rgba(139,92,246,0.16)', fg: '#a78bfa', short: 'CS', cat: 'rhel' };
-  if (d.includes('fedora')) return { bg: 'rgba(59,130,246,0.18)', fg: '#60a5fa', short: 'FD', cat: 'fedora' };
-  if (d.includes('kali')) return { bg: 'rgba(168,85,247,0.18)', fg: '#c084fc', short: 'KL', cat: 'security' };
-  if (d.includes('alpine')) return { bg: 'rgba(14,165,233,0.16)', fg: '#38bdf8', short: 'AP', cat: 'security' };
-  return { bg: 'rgba(148,163,184,0.16)', fg: '#cbd5e1', short: 'LX', cat: 'security' };
+  const d = `${(t && t.slug) || ''} ${(t && t.distro) || ''} ${(t && t.category) || ''}`.toLowerCase();
+  const iconUrl = resolveLxcIconUrl(t);
+  if (d.includes('proxmox') || d.includes('pve')) return { bg: 'rgba(229,112,0,0.16)', fg: '#f59e0b', short: 'PX', cat: 'proxmox', iconUrl };
+  if (d.includes('ubuntu')) return { bg: 'rgba(233,84,32,0.16)', fg: '#fb923c', short: 'UB', cat: 'ubuntu', iconUrl };
+  if (d.includes('debian')) return { bg: 'rgba(215,10,83,0.16)', fg: '#f43f5e', short: 'DB', cat: 'debian', iconUrl };
+  if (d.includes('alma')) return { bg: 'rgba(16,185,129,0.16)', fg: '#34d399', short: 'AL', cat: 'rhel', iconUrl };
+  if (d.includes('rocky')) return { bg: 'rgba(6,182,212,0.16)', fg: '#22d3ee', short: 'RK', cat: 'rhel', iconUrl };
+  if (d.includes('centos')) return { bg: 'rgba(139,92,246,0.16)', fg: '#a78bfa', short: 'CS', cat: 'rhel', iconUrl };
+  if (d.includes('fedora')) return { bg: 'rgba(59,130,246,0.18)', fg: '#60a5fa', short: 'FD', cat: 'fedora', iconUrl };
+  if (d.includes('kali')) return { bg: 'rgba(168,85,247,0.18)', fg: '#c084fc', short: 'KL', cat: 'security', iconUrl };
+  if (d.includes('alpine')) return { bg: 'rgba(14,165,233,0.16)', fg: '#38bdf8', short: 'AP', cat: 'security', iconUrl };
+  return { bg: 'rgba(148,163,184,0.16)', fg: '#cbd5e1', short: 'LX', cat: 'security', iconUrl };
 }
 
 function initLxcCreateStudio() {
@@ -2761,10 +2784,11 @@ function renderLxcOsGrid() {
     const isSel = t.slug === activeSlug;
     const minRam = t.min_ram_mb || 256;
     const minDisk = t.min_disk_gb || 5;
+    const isProxmox = b.cat === 'proxmox';
     return `<div class="lxc-os-card ${isSel ? 'selected' : ''}" onclick="selectLxcTemplate('${hkvmEsc(t.slug)}')">
       <span class="lxc-os-check">&#10003;</span>
       <div class="lxc-os-top">
-        <span class="lxc-os-icon" style="background:${b.bg};color:${b.fg};border:1px solid ${b.fg}33;">${b.short}</span>
+        <span class="lxc-os-icon" style="border:1px solid ${b.fg}33;"><img src="${hkvmEsc(b.iconUrl)}" alt="${hkvmEsc(t.name || t.slug)} logo" onerror="this.onerror=null;this.src='/images/os/linux.svg';"></span>
         <div>
           <div class="lxc-os-name">${hkvmEsc(t.name || t.label || t.slug)}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:1px;"><code>${hkvmEsc(t.distro || 'linux')}:${hkvmEsc(t.release || '')}</code> &bull; ${hkvmEsc(t.arch || 'amd64')}</div>
@@ -2774,6 +2798,7 @@ function renderLxcOsGrid() {
         <span>&ge;${minRam}MB RAM</span>
         <span>&bull;</span>
         <span>&ge;${minDisk}GB Disk</span>
+        ${isProxmox ? '<span class="v3-pill kvm" style="font-size:10px;padding:1px 6px;background:rgba(229,112,0,0.18);color:#f59e0b;">Proxmox VE :8006</span>' : ''}
         ${t.is_custom ? '<span class="v3-pill kvm" style="font-size:10px;padding:1px 6px;">Custom</span>' : ''}
       </div>
     </div>`;
@@ -2807,9 +2832,10 @@ function updateSelectedOsBanner() {
   const tpl = __lxcCatalog.find(t => t.slug === sel.value) || __lxcCatalog[0];
   if (!tpl) { banner.style.display = 'none'; return; }
   banner.style.display = 'flex';
+  const bannerIcon = resolveLxcIconUrl(tpl);
   banner.innerHTML =
-    '<div><strong style="color:var(--text-primary);">Selected Image:</strong> ' + hkvmEsc(tpl.name || tpl.slug) +
-    (tpl.description ? ' &mdash; <span style="color:var(--text-muted);">' + hkvmEsc(tpl.description) + '</span>' : '') + '</div>' +
+    '<div style="display:flex;align-items:center;gap:9px;"><img src="' + hkvmEsc(bannerIcon) + '" alt="OS logo" style="width:28px;height:28px;border-radius:7px;object-fit:contain;background:#141821;padding:2px;" onerror="this.onerror=null;this.src=\'/images/os/linux.svg\';"><span><strong style="color:var(--text-primary);">Selected Image:</strong> ' + hkvmEsc(tpl.name || tpl.slug) +
+    (tpl.description ? ' &mdash; <span style="color:var(--text-muted);">' + hkvmEsc(tpl.description) + '</span>' : '') + '</span></div>' +
     '<div><code>' + hkvmEsc(tpl.slug) + '</code></div>';
 }
 
@@ -4482,8 +4508,8 @@ async function delIso(name) {
 async function loadLxcTemplates() {
   const data = await hkvmApi('/api/v1/lxc/templates?all=1');
   document.getElementById('lxcTplBody').innerHTML = data.templates.map(t => `<tr>
-    <td><code>${hkvmEsc(t.slug)}</code></td>
-    <td><strong>${hkvmEsc(t.name)}</strong></td>
+    <td><img class="lxc-list-os-icon" src="${hkvmEsc(resolveLxcIconUrl(t))}" alt="OS logo" onerror="this.onerror=null;this.src='/images/os/linux.svg';"><code>${hkvmEsc(t.slug)}</code></td>
+    <td><strong>${hkvmEsc(t.name)}</strong>${t.proxmox_codename ? ' <span class="v3-pill kvm" style="font-size:10px;padding:1px 6px;background:rgba(229,112,0,0.18);color:#f59e0b;">Proxmox VE :8006</span>' : ''}</td>
     <td>${hkvmEsc(t.distro)} / ${hkvmEsc(t.release)}</td>
     <td>${hkvmEsc(t.arch)}</td>
     <td>${t.min_ram_mb} MB / ${t.min_disk_gb} GB</td>

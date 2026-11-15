@@ -23,7 +23,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'debian',
     category: 'Ubuntu',
     version: '20.04',
-    icon: 'ubuntu',
+    icon: '/images/os/ubuntu.svg',
     minDiskGb: 5,
     minRamMb: 256,
     description: 'Long-Term Support release, supported until 2030.',
@@ -36,7 +36,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'debian',
     category: 'Ubuntu',
     version: '22.04',
-    icon: 'ubuntu',
+    icon: '/images/os/ubuntu.svg',
     minDiskGb: 5,
     minRamMb: 256,
     description: 'Long-Term Support release, supported until 2032.',
@@ -49,7 +49,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'debian',
     category: 'Ubuntu',
     version: '24.04',
-    icon: 'ubuntu',
+    icon: '/images/os/ubuntu.svg',
     minDiskGb: 5,
     minRamMb: 256,
     description: 'Latest Long-Term Support release, supported until 2034.',
@@ -62,7 +62,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'debian',
     category: 'Debian',
     version: '11',
-    icon: 'debian',
+    icon: '/images/os/debian.svg',
     minDiskGb: 3,
     minRamMb: 256,
     description: 'Stable, conservative defaults. LTS support.',
@@ -75,7 +75,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'debian',
     category: 'Debian',
     version: '12',
-    icon: 'debian',
+    icon: '/images/os/debian.svg',
     minDiskGb: 3,
     minRamMb: 256,
     description: 'Current Debian stable. Recommended for most workloads.',
@@ -88,7 +88,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'debian',
     category: 'Debian',
     version: '13',
-    icon: 'debian',
+    icon: '/images/os/debian.svg',
     minDiskGb: 3,
     minRamMb: 256,
     description: 'Latest Debian release.',
@@ -101,7 +101,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'CentOS Stream',
     version: '9-Stream',
-    icon: 'centos',
+    icon: '/images/os/centos.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Rolling upstream of RHEL 9.',
@@ -114,7 +114,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'CentOS Stream',
     version: '10-Stream',
-    icon: 'centos',
+    icon: '/images/os/centos.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Rolling upstream of RHEL 10.',
@@ -127,7 +127,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'AlmaLinux',
     version: '8',
-    icon: 'alma',
+    icon: '/images/os/almalinux.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Community-driven RHEL 8 rebuild.',
@@ -140,7 +140,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'AlmaLinux',
     version: '9',
-    icon: 'alma',
+    icon: '/images/os/almalinux.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Community-driven RHEL 9 rebuild.',
@@ -153,7 +153,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'AlmaLinux',
     version: '10',
-    icon: 'alma',
+    icon: '/images/os/almalinux.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Community-driven RHEL 10 rebuild.',
@@ -166,7 +166,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'Rocky Linux',
     version: '8',
-    icon: 'rocky',
+    icon: '/images/os/rocky.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Enterprise-grade RHEL 8 rebuild.',
@@ -179,7 +179,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'Rocky Linux',
     version: '9',
-    icon: 'rocky',
+    icon: '/images/os/rocky.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Enterprise-grade RHEL 9 rebuild.',
@@ -192,7 +192,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'Rocky Linux',
     version: '10',
-    icon: 'rocky',
+    icon: '/images/os/rocky.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Enterprise-grade RHEL 10 rebuild.',
@@ -205,7 +205,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'Fedora',
     version: '40',
-    icon: 'fedora',
+    icon: '/images/os/fedora.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Cutting-edge Red Hat-based distribution.',
@@ -218,7 +218,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'Fedora',
     version: '41',
-    icon: 'fedora',
+    icon: '/images/os/fedora.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Cutting-edge Red Hat-based distribution.',
@@ -231,7 +231,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'Fedora',
     version: '42',
-    icon: 'fedora',
+    icon: '/images/os/fedora.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Cutting-edge Red Hat-based distribution.',
@@ -244,7 +244,7 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'rhel',
     category: 'Fedora',
     version: '43',
-    icon: 'fedora',
+    icon: '/images/os/fedora.svg',
     minDiskGb: 5,
     minRamMb: 512,
     description: 'Latest Fedora release.',
@@ -257,10 +257,38 @@ export const BUILTIN_LXC_OS_CATALOG = [
     family: 'debian',
     category: 'Kali',
     version: 'rolling',
-    icon: 'kali',
+    icon: '/images/os/kali.svg',
     minDiskGb: 8,
     minRamMb: 512,
     description: 'Debian-based security & penetration testing distribution.',
+  },
+  {
+    key: 'proxmox-ve-8',
+    label: 'Proxmox VE 8 (LXC)',
+    alias: 'debian:12',
+    fallback: 'images:debian/12',
+    family: 'debian',
+    category: 'Proxmox',
+    version: '8',
+    icon: '/images/os/proxmox.svg',
+    minDiskGb: 40,
+    minRamMb: 4096,
+    description:
+      'Proxmox Virtual Environment 8 hypervisor container on Debian 12 Bookworm (KVM + LXC, HTTPS Web UI on :8006, first-boot bootstrap).',
+  },
+  {
+    key: 'proxmox-ve-9',
+    label: 'Proxmox VE 9 (LXC)',
+    alias: 'debian:13',
+    fallback: 'images:debian/13',
+    family: 'debian',
+    category: 'Proxmox',
+    version: '9',
+    icon: '/images/os/proxmox.svg',
+    minDiskGb: 40,
+    minRamMb: 4096,
+    description:
+      'Proxmox Virtual Environment 9 hypervisor container on Debian 13 Trixie (KVM + LXC, HTTPS Web UI on :8006, first-boot bootstrap).',
   },
 ];
 
@@ -1430,6 +1458,144 @@ export const MIGRATIONS: MigrationDefinition[] = [
         );
         CREATE INDEX IF NOT EXISTS idx_node_join_tokens_node_id ON node_join_tokens(node_id);
       `);
+    },
+  },
+  {
+    version: 12,
+    name: 'v012_proxmox_lxc_images_and_os_logos',
+    up: async (db) => {
+      await ensureColumn(db, 'lxc_templates', 'proxmox_codename', 'TEXT');
+      await ensureColumn(db, 'lxc_templates', 'icon_path', 'TEXT');
+
+      // Normalize legacy bare icon names ('ubuntu', 'alma', ...) to local SVG paths
+      await db.run(
+        `UPDATE lxc_templates
+         SET icon = CASE
+           WHEN LOWER(COALESCE(icon, '')) IN ('ubuntu', 'ubuntu.svg') THEN '/images/os/ubuntu.svg'
+           WHEN LOWER(COALESCE(icon, '')) IN ('debian', 'debian.svg') THEN '/images/os/debian.svg'
+           WHEN LOWER(COALESCE(icon, '')) IN ('centos', 'centos.svg') THEN '/images/os/centos.svg'
+           WHEN LOWER(COALESCE(icon, '')) IN ('alma', 'almalinux', 'almalinux.svg') THEN '/images/os/almalinux.svg'
+           WHEN LOWER(COALESCE(icon, '')) IN ('rocky', 'rocky.svg') THEN '/images/os/rocky.svg'
+           WHEN LOWER(COALESCE(icon, '')) IN ('fedora', 'fedora.svg') THEN '/images/os/fedora.svg'
+           WHEN LOWER(COALESCE(icon, '')) IN ('kali', 'kali.svg') THEN '/images/os/kali.svg'
+           WHEN LOWER(COALESCE(icon, '')) IN ('proxmox', 'proxmox.svg', 'pve') THEN '/images/os/proxmox.svg'
+           WHEN LOWER(COALESCE(icon, '')) IN ('alpine', 'alpine.svg') THEN '/images/os/alpine.svg'
+           WHEN COALESCE(icon, '') = '' OR LOWER(COALESCE(icon, '')) = 'linux' THEN '/images/os/linux.svg'
+           ELSE icon
+         END,
+         icon_path = CASE
+           WHEN COALESCE(icon_path, '') = '' THEN icon
+           ELSE icon_path
+         END`
+      );
+      // Second pass: copy normalized icon into icon_path where still empty
+      await db.run(
+        `UPDATE lxc_templates SET icon_path = icon WHERE COALESCE(icon_path, '') = ''`
+      );
+
+      // Seed Proxmox VE 8/9 LXC hypervisor images (Debian base + first-boot PVE bootstrap)
+      const proxmoxSeed: Array<{
+        key: string;
+        label: string;
+        alias: string;
+        fallback: string;
+        family: string;
+        category: string;
+        version: string;
+        icon: string;
+        minDiskGb: number;
+        minRamMb: number;
+        description: string;
+        distro: string;
+        release: string;
+        codename: string;
+      }> = [
+        {
+          key: 'proxmox-ve-8',
+          label: 'Proxmox VE 8 (LXC)',
+          alias: 'debian:12',
+          fallback: 'images:debian/12',
+          family: 'debian',
+          category: 'Proxmox',
+          version: '8',
+          icon: '/images/os/proxmox.svg',
+          minDiskGb: 40,
+          minRamMb: 4096,
+          description:
+            'Proxmox Virtual Environment 8 hypervisor container on Debian 12 Bookworm (KVM + LXC, HTTPS Web UI on :8006, first-boot bootstrap).',
+          distro: 'debian',
+          release: '12',
+          codename: 'bookworm',
+        },
+        {
+          key: 'proxmox-ve-9',
+          label: 'Proxmox VE 9 (LXC)',
+          alias: 'debian:13',
+          fallback: 'images:debian/13',
+          family: 'debian',
+          category: 'Proxmox',
+          version: '9',
+          icon: '/images/os/proxmox.svg',
+          minDiskGb: 40,
+          minRamMb: 4096,
+          description:
+            'Proxmox Virtual Environment 9 hypervisor container on Debian 13 Trixie (KVM + LXC, HTTPS Web UI on :8006, first-boot bootstrap).',
+          distro: 'debian',
+          release: '13',
+          codename: 'trixie',
+        },
+      ];
+      for (const tpl of proxmoxSeed) {
+        await db.run(
+          `INSERT OR IGNORE INTO lxc_templates
+           (template_key, label, image_alias, fallback_alias, family, category, version, icon, icon_path, min_disk_gb, min_ram_mb, description, is_custom, is_active, slug, name, distro, release, enabled, proxmox_codename)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?, 1, ?)`,
+          [
+            tpl.key,
+            tpl.label,
+            tpl.alias,
+            tpl.fallback,
+            tpl.family,
+            tpl.category,
+            tpl.version,
+            tpl.icon,
+            tpl.icon,
+            tpl.minDiskGb,
+            tpl.minRamMb,
+            tpl.description,
+            tpl.key,
+            tpl.label,
+            tpl.distro,
+            tpl.release,
+            tpl.codename,
+          ]
+        );
+        // Backfill codename/icon for installs that already had the row from a partial seed
+        await db.run(
+          `UPDATE lxc_templates SET proxmox_codename = COALESCE(proxmox_codename, ?), icon = ?, icon_path = ? WHERE template_key = ?`,
+          [tpl.codename, tpl.icon, tpl.icon, tpl.key]
+        );
+      }
+
+      // Seed os_icons lookup table for admin icon management
+      const osIcons: Array<[string, string]> = [
+        ['ubuntu', '/images/os/ubuntu.svg'],
+        ['debian', '/images/os/debian.svg'],
+        ['centos', '/images/os/centos.svg'],
+        ['almalinux', '/images/os/almalinux.svg'],
+        ['rocky', '/images/os/rocky.svg'],
+        ['fedora', '/images/os/fedora.svg'],
+        ['kali', '/images/os/kali.svg'],
+        ['alpine', '/images/os/alpine.svg'],
+        ['proxmox', '/images/os/proxmox.svg'],
+        ['linux', '/images/os/linux.svg'],
+      ];
+      for (const [osName, iconPath] of osIcons) {
+        await db.run(
+          `INSERT OR IGNORE INTO os_icons (os_name, icon_path) VALUES (?, ?)`,
+          [osName, iconPath]
+        );
+      }
     },
   },
 ];

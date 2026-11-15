@@ -14,6 +14,8 @@ import {
   LxcContainerRuntimeInfo,
   LxcCreateSpec,
   LxcNetworkRepairResult,
+  PROXMOX_LXC_GPG_URLS,
+  resolveProxmoxLxcCodename,
 } from '../../node-agent/container-manager';
 import {
   InstanceCapabilityProfile,
@@ -220,10 +222,12 @@ export class LXCAdapter implements VirtualizationAdapter {
 
   public async getRawLxcRow(refId: number): Promise<any | undefined> {
     return this.db.get<any>(
-      `SELECT l.*, u.username AS owner_username, n.name AS node_name, n.is_local
+      `SELECT l.*, u.username AS owner_username, n.name AS node_name, n.is_local,
+              t.icon AS template_icon, t.icon_path AS template_icon_path, t.proxmox_codename AS template_proxmox_codename
        FROM lxc_instances l
        LEFT JOIN users u ON u.id = l.user_id
        LEFT JOIN nodes n ON n.id = l.node_id
+       LEFT JOIN lxc_templates t ON LOWER(t.slug) = LOWER(l.os_template)
        WHERE l.id = ?`,
       [refId]
     );
@@ -289,6 +293,9 @@ export class LXCAdapter implements VirtualizationAdapter {
       let arch = input.arch || 'amd64';
       let osTemplateLabel = input.templateSlug || `${distro}:${release}`;
       let osFamily = 'debian';
+      let proxmoxCodename: string | null = null;
+      let tplMinRamMb = 0;
+      let tplMinDiskGb = 0;
 
       if (input.templateSlug) {
         const tpl = await this.resolveCatalogTemplate(input.templateSlug);
@@ -303,8 +310,38 @@ export class LXCAdapter implements VirtualizationAdapter {
           arch = tpl.arch || 'amd64';
           osTemplateLabel = tpl.slug;
           osFamily = tpl.family || 'debian';
+          tplMinRamMb = Number(tpl.min_ram_mb || 0);
+          tplMinDiskGb = Number(tpl.min_disk_gb || 0);
+          proxmoxCodename = resolveProxmoxLxcCodename({
+            proxmoxCodename: tpl.proxmox_codename || null,
+            templateSlug: tpl.slug || input.templateSlug,
+            distro: tpl.distro,
+            release: tpl.release,
+            category: tpl.category || null,
+          });
         }
       }
+      if (!proxmoxCodename) {
+        proxmoxCodename = resolveProxmoxLxcCodename({
+          templateSlug: input.templateSlug || null,
+          distro,
+          release,
+        });
+      }
+      const isProxmoxLxc = proxmoxCodename !== null;
+      // Proxmox VE hypervisor containers need KVM/LXC nesting + privileged mode + PVE minimums
+      const effectiveRamMb = Math.max(
+        128,
+        Number(input.ramMb || 1024),
+        tplMinRamMb,
+        isProxmoxLxc ? 4096 : 0
+      );
+      const effectiveDiskGb = Math.max(
+        2,
+        Number(input.diskGb || 20),
+        tplMinDiskGb,
+        isProxmoxLxc ? 40 : 0
+      );
 
       const plainPassword = input.rootPassword?.trim() || generateStrongPassword(18);
       const encryptedPass = encryptSecret(plainPassword);
@@ -332,13 +369,15 @@ export class LXCAdapter implements VirtualizationAdapter {
         cpuShares: Number(input.cpuShares || 1024),
         cpuLimitPercent: Number(input.cpuLimitPercent || 100),
         cpuPinning: input.cpuPinning || null,
-        ramMb: Math.max(128, Number(input.ramMb || 1024)),
+        ramMb: effectiveRamMb,
         swapMb: Math.max(0, Number(input.swapMb ?? 512)),
-        diskGb: Math.max(2, Number(input.diskGb || 20)),
+        diskGb: effectiveDiskGb,
         backingStore: input.backingStore || 'dir',
-        privileged: input.privileged !== false,
-        nesting: input.nesting !== false,
-        kvmNesting: Boolean(input.kvmNesting),
+        privileged: isProxmoxLxc ? true : input.privileged !== false,
+        nesting: isProxmoxLxc ? true : input.nesting !== false,
+        kvmNesting: isProxmoxLxc ? true : Boolean(input.kvmNesting),
+        proxmoxCodename,
+        proxmoxGpgUrl: proxmoxCodename ? PROXMOX_LXC_GPG_URLS[proxmoxCodename] || null : null,
         bridge: input.bridge || 'lxcbr0',
         ipv4Address: input.ipv4Address || null,
         ipv4Gateway: input.ipv4Gateway || null,
@@ -919,6 +958,15 @@ export class LXCAdapter implements VirtualizationAdapter {
     const tpl = await this.resolveCatalogTemplate(templateSlug);
     if (!tpl) throw new Error(`Enabled LXC template "${templateSlug}" not found.`);
 
+    const reinstallProxmoxCodename = resolveProxmoxLxcCodename({
+      proxmoxCodename: tpl.proxmox_codename || null,
+      templateSlug: tpl.slug || templateSlug,
+      distro: tpl.distro,
+      release: tpl.release,
+      category: tpl.category || null,
+    });
+    const reinstallIsProxmox = reinstallProxmoxCodename !== null;
+
     const plainPassword = newRootPassword?.trim() || generateStrongPassword(18);
     const reinstallSpec: LxcCreateSpec = {
       containerName: row.container_name,
@@ -931,13 +979,17 @@ export class LXCAdapter implements VirtualizationAdapter {
       cpuCores: row.cpu_cores,
       cpuShares: row.cpu_shares,
       cpuLimitPercent: row.cpu_limit_pct,
-      ramMb: row.ram_mb,
+      ramMb: Math.max(Number(row.ram_mb || 1024), Number(tpl.min_ram_mb || 0), reinstallIsProxmox ? 4096 : 0),
       swapMb: row.swap_mb,
-      diskGb: row.disk_gb,
+      diskGb: Math.max(Number(row.disk_gb || 20), Number(tpl.min_disk_gb || 0), reinstallIsProxmox ? 40 : 0),
       backingStore: row.rootfs_storage_type || 'dir',
-      privileged: Boolean(row.privileged),
-      nesting: Boolean(row.nesting),
-      kvmNesting: Boolean(row.kvm_nesting),
+      privileged: reinstallIsProxmox ? true : Boolean(row.privileged),
+      nesting: reinstallIsProxmox ? true : Boolean(row.nesting),
+      kvmNesting: reinstallIsProxmox ? true : Boolean(row.kvm_nesting),
+      proxmoxCodename: reinstallProxmoxCodename,
+      proxmoxGpgUrl: reinstallProxmoxCodename
+        ? PROXMOX_LXC_GPG_URLS[reinstallProxmoxCodename] || null
+        : null,
       bridge: row.bridge || 'lxcbr0',
       ipv4Address: row.ip_address || null,
       ipv4Gateway: row.gateway || null,

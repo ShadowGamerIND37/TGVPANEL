@@ -53,9 +53,9 @@
       min-width: 0;
     }
     .lxc-distro-avatar {
-      width: 50px;
-      height: 50px;
-      border-radius: 13px;
+      width: 54px;
+      height: 54px;
+      border-radius: 14px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -63,7 +63,11 @@
       font-weight: 800;
       letter-spacing: 0.5px;
       flex-shrink: 0;
+      overflow: hidden;
+      background: #141821;
+      padding: 4px;
     }
+    .lxc-distro-avatar img { width: 100%; height: 100%; object-fit: contain; border-radius: 10px; display: block; }
     .lxc-title-row {
       display: flex;
       align-items: center;
@@ -533,8 +537,24 @@
 <%
   const _cfg = lxcConfig || {};
   const _osRaw = String(instance.osLabel || '').toLowerCase();
+  const _tplIconRaw = String((_cfg && (_cfg.icon_path || _cfg.icon)) || '').trim();
+  function _lxcIconFor(raw) {
+    const s = String(raw || '').toLowerCase();
+    if (s.includes('proxmox') || s.includes('pve')) return '/images/os/proxmox.svg';
+    if (s.includes('ubuntu')) return '/images/os/ubuntu.svg';
+    if (s.includes('debian')) return '/images/os/debian.svg';
+    if (s.includes('fedora')) return '/images/os/fedora.svg';
+    if (s.includes('centos')) return '/images/os/centos.svg';
+    if (s.includes('alma')) return '/images/os/almalinux.svg';
+    if (s.includes('rocky')) return '/images/os/rocky.svg';
+    if (s.includes('kali')) return '/images/os/kali.svg';
+    if (s.includes('alpine')) return '/images/os/alpine.svg';
+    return '/images/os/linux.svg';
+  }
+  const _osIconUrl = (_tplIconRaw.startsWith('/images/os/') && _tplIconRaw.endsWith('.svg')) ? _tplIconRaw : _lxcIconFor(instance.osLabel);
   let _brand = { short: 'LX', bg: 'rgba(6,182,212,0.16)', fg: '#22d3ee', border: 'rgba(6,182,212,0.35)' };
-  if (_osRaw.includes('ubuntu')) _brand = { short: 'UB', bg: 'rgba(233,84,32,0.16)', fg: '#fb923c', border: 'rgba(251,146,60,0.35)' };
+  if (_osRaw.includes('proxmox') || _osRaw.includes('pve')) _brand = { short: 'PX', bg: 'rgba(229,112,0,0.16)', fg: '#f59e0b', border: 'rgba(245,158,11,0.35)' };
+  else if (_osRaw.includes('ubuntu')) _brand = { short: 'UB', bg: 'rgba(233,84,32,0.16)', fg: '#fb923c', border: 'rgba(251,146,60,0.35)' };
   else if (_osRaw.includes('debian')) _brand = { short: 'DB', bg: 'rgba(215,10,83,0.16)', fg: '#f43f5e', border: 'rgba(244,63,94,0.35)' };
   else if (_osRaw.includes('alma')) _brand = { short: 'AL', bg: 'rgba(16,185,129,0.16)', fg: '#34d399', border: 'rgba(52,211,153,0.35)' };
   else if (_osRaw.includes('rocky')) _brand = { short: 'RK', bg: 'rgba(6,182,212,0.16)', fg: '#22d3ee', border: 'rgba(34,211,238,0.35)' };
@@ -592,8 +612,8 @@
 
           <div class="lxc-hero-top">
             <div class="lxc-identity">
-              <div class="lxc-distro-avatar" style="background:<%= _brand.bg %>;color:<%= _brand.fg %>;border:1px solid <%= _brand.border %>;">
-                <%= _brand.short %>
+              <div class="lxc-distro-avatar" style="border:1px solid <%= _brand.border %>;">
+                <img src="<%= _osIconUrl %>" alt="<%= instance.osLabel %> logo" onerror="this.onerror=null;this.src='/images/os/linux.svg';">
               </div>
               <div>
                 <div class="lxc-title-row">

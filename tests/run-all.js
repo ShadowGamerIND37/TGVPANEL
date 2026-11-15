@@ -3648,6 +3648,130 @@ fi
         await adminClient.request('DELETE', `/api/v1/nodes/${cfNodeId}`).catch(() => {});
       }
     });
+
+    // 27. Proxmox VE LXC Images + Local OS Logos on LXC Creation / Catalog / Detail
+    await runStep('T26: Proxmox VE 8/9 LXC images, local OS logos (SVG) & first-boot bootstrap wiring', async () => {
+      const {
+        resolveProxmoxLxcCodename,
+        isProxmoxLxcSpec,
+        resolveDownloadReleaseCandidates,
+        PROXMOX_LXC_GPG_URLS,
+      } = require('../lib/node-agent/container-manager');
+      const { StorageManager } = require('../lib/services/storage/StorageManager');
+
+      // Unit: codename resolution + download mapping (Proxmox -> Debian base)
+      assert.strictEqual(
+        resolveProxmoxLxcCodename({ templateSlug: 'proxmox-ve-8', distro: 'debian', release: '12' }),
+        'bookworm'
+      );
+      assert.strictEqual(
+        resolveProxmoxLxcCodename({ templateSlug: 'proxmox-ve-9', distro: 'debian', release: '13' }),
+        'trixie'
+      );
+      assert.strictEqual(
+        resolveProxmoxLxcCodename({ templateSlug: 'ubuntu-24.04', distro: 'ubuntu', release: '24.04' }),
+        null
+      );
+      assert.strictEqual(isProxmoxLxcSpec({ proxmoxCodename: 'trixie' }), true);
+      assert.strictEqual(isProxmoxLxcSpec({ distro: 'ubuntu', release: '24.04' }), false);
+      assert.strictEqual(PROXMOX_LXC_GPG_URLS.bookworm, 'https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg');
+      assert.strictEqual(PROXMOX_LXC_GPG_URLS.trixie, 'https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg');
+      const dlProxmox = resolveDownloadReleaseCandidates('proxmox', '8');
+      assert.strictEqual(dlProxmox.distro, 'debian');
+      assert.ok(dlProxmox.releases.includes('bookworm'), 'proxmox:8 must download Debian bookworm rootfs');
+
+      // Unit: icon resolution always returns a local SVG path
+      assert.strictEqual(
+        StorageManager.resolveLxcTemplateIcon({ distro: 'proxmox', slug: 'proxmox-ve-9' }),
+        '/images/os/proxmox.svg'
+      );
+      assert.strictEqual(
+        StorageManager.resolveLxcTemplateIcon({ distro: 'rocky', slug: 'rockylinux-9' }),
+        '/images/os/rocky.svg'
+      );
+      assert.strictEqual(
+        StorageManager.resolveLxcTemplateIcon({ distro: 'kali', slug: 'kali-rolling' }),
+        '/images/os/kali.svg'
+      );
+      assert.strictEqual(
+        StorageManager.resolveLxcTemplateIcon({ distro: 'ubuntu', slug: 'ubuntu-24.04' }),
+        '/images/os/ubuntu.svg'
+      );
+
+      // Local SVG files exist for every catalog distro (no external Imgur)
+      for (const svgName of ['proxmox.svg', 'ubuntu.svg', 'debian.svg', 'fedora.svg', 'centos.svg', 'almalinux.svg', 'rocky.svg', 'kali.svg', 'alpine.svg', 'linux.svg']) {
+        const svgPath = path.join(process.cwd(), 'public', 'images', 'os', svgName);
+        assert.ok(fs.existsSync(svgPath), `Expected local OS logo at ${svgPath}`);
+        const svgContent = fs.readFileSync(svgPath, 'utf8');
+        assert.ok(svgContent.includes('<svg'), `Expected valid SVG at ${svgPath}`);
+        assert.ok(!svgContent.includes('imgur.com'), `SVG must not reference Imgur: ${svgName}`);
+      }
+
+      // API: catalog contains Proxmox VE 8/9 LXC images with logos + PVE minimums
+      const tplRes = await adminClient.request('GET', '/api/v1/lxc/templates?all=1');
+      assert.strictEqual(tplRes.status, 200, `LXC templates list failed: ${tplRes.text}`);
+      const tplList = tplRes.json.templates;
+      const pve8 = tplList.find((t) => t.slug === 'proxmox-ve-8');
+      const pve9 = tplList.find((t) => t.slug === 'proxmox-ve-9');
+      assert.ok(pve8, 'Expected proxmox-ve-8 in LXC template catalog');
+      assert.ok(pve9, 'Expected proxmox-ve-9 in LXC template catalog');
+      assert.strictEqual(pve8.icon, '/images/os/proxmox.svg');
+      assert.strictEqual(pve8.icon_path, '/images/os/proxmox.svg');
+      assert.strictEqual(pve8.proxmox_codename, 'bookworm');
+      assert.strictEqual(pve8.min_ram_mb, 4096);
+      assert.strictEqual(pve8.min_disk_gb, 40);
+      assert.strictEqual(pve8.distro, 'debian');
+      assert.strictEqual(pve8.release, '12');
+      assert.strictEqual(pve9.icon, '/images/os/proxmox.svg');
+      assert.strictEqual(pve9.proxmox_codename, 'trixie');
+      assert.strictEqual(pve9.min_ram_mb, 4096);
+      assert.strictEqual(pve9.min_disk_gb, 40);
+      assert.strictEqual(pve9.distro, 'debian');
+      assert.strictEqual(pve9.release, '13');
+      for (const t of tplList) {
+        assert.ok(
+          String(t.icon || '').startsWith('/images/os/') && String(t.icon || '').endsWith('.svg'),
+          `LXC template ${t.slug} must use a local /images/os/*.svg logo, got: ${t.icon}`
+        );
+      }
+
+      // UI: LXC create studio renders Proxmox filter + logo <img> (not text badges only)
+      const createPage = await adminClient.request('GET', '/admin/instances/create?engine=lxc');
+      assert.strictEqual(createPage.status, 200);
+      assert.ok(createPage.text.includes('Proxmox VE'), 'LXC create page must mention Proxmox VE');
+      assert.ok(createPage.text.includes('data-cat="proxmox"'), 'LXC create page must have a Proxmox category filter');
+      assert.ok(createPage.text.includes('/images/os/proxmox.svg'), 'LXC create page must embed the Proxmox logo');
+      assert.ok(createPage.text.includes('resolveLxcIconUrl'), 'LXC create page must resolve OS logos via resolveLxcIconUrl');
+      assert.ok(createPage.text.includes('lxc-os-icon'), 'LXC create page must render OS logo icons');
+
+      // UI: LXC templates catalog page renders logos
+      const tplPage = await adminClient.request('GET', '/admin/lxc-templates');
+      assert.strictEqual(tplPage.status, 200);
+      assert.ok(tplPage.text.includes('LXC OS Template Catalog'), 'LXC templates page must render');
+
+      // LXC create with Proxmox template (no host provisioning) enforces PVE minimums + bootstrap flag
+      const pveCt = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 'ct-pve9-test',
+        templateSlug: 'proxmox-ve-9',
+        cpuCores: 2,
+        ramMb: 1024,
+        diskGb: 10,
+        provisionOnHost: false,
+      });
+      assert.strictEqual(pveCt.status, 201, `Proxmox LXC create (no-provision) failed: ${pveCt.text}`);
+      assert.strictEqual(pveCt.json.instance.osLabel, 'proxmox-ve-9');
+      assert.ok(pveCt.json.instance.ramMb >= 4096, `Proxmox LXC must enforce >=4096MB RAM, got ${pveCt.json.instance.ramMb}`);
+      assert.ok(pveCt.json.instance.diskGb >= 40, `Proxmox LXC must enforce >=40GB disk, got ${pveCt.json.instance.diskGb}`);
+      const pveRefId = pveCt.json.instance.refId;
+      try {
+        const rawPve = await ctx.db.get(`SELECT * FROM lxc_instances WHERE id = ?`, [pveRefId]);
+        assert.strictEqual(Number(rawPve.privileged), 1, 'Proxmox LXC must be privileged');
+        assert.strictEqual(Number(rawPve.nesting), 1, 'Proxmox LXC must enable nesting');
+        assert.strictEqual(Number(rawPve.kvm_nesting), 1, 'Proxmox LXC must enable KVM nesting (/dev/kvm)');
+      } finally {
+        await adminClient.request('DELETE', `/api/v1/instances/lxc/${pveRefId}`).catch(() => {});
+      }
+    });
   } finally {
     const { execFileSync } = require('child_process');
     for (const storeDir of [

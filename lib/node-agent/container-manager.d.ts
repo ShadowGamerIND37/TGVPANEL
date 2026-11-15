@@ -33,12 +33,34 @@ export interface LxcCreateSpec {
         readOnly?: boolean;
     }>;
     /**
+     * When set (e.g. 'bookworm' for Proxmox VE 8, 'trixie' for Proxmox VE 9), the container
+     * is provisioned from its Debian base rootfs and a first-boot systemd bootstrap that
+     * installs Proxmox VE (proxmox-ve + :8006 Web UI) is injected offline into the rootfs.
+     */
+    proxmoxCodename?: string | null;
+    proxmoxGpgUrl?: string | null;
+    /**
      * When true (set by LXCAdapter when the panel database has no record for this container),
      * any stale/orphaned `/var/lib/lxc/<name>` directory from an earlier interrupted run is
      * cleanly destroyed and replaced instead of failing with "already exists on host".
      */
     replaceOrphanOnHost?: boolean;
 }
+export declare const PROXMOX_LXC_GPG_URLS: Record<string, string>;
+export declare function resolveProxmoxLxcCodename(input: {
+    proxmoxCodename?: string | null;
+    templateSlug?: string | null;
+    distro?: string | null;
+    release?: string | null;
+    category?: string | null;
+}): string | null;
+export declare function isProxmoxLxcSpec(spec: {
+    proxmoxCodename?: string | null;
+    templateSlug?: string | null;
+    distro?: string | null;
+    release?: string | null;
+    category?: string | null;
+}): boolean;
 export interface LxcResourceUpdateSpec {
     cpuCores?: number;
     cpuShares?: number;
@@ -390,6 +412,12 @@ export declare class LxcContainerManager {
      */
     setRootPassword(containerName: string, newPassword: string): Promise<void>;
     injectSshPublicKey(containerName: string, publicKey: string): Promise<void>;
+    /**
+     * Offline-injects a first-boot Proxmox VE bootstrap into a freshly created Debian
+     * LXC rootfs (mirrors the KVM Cloud-Init PVE bootstrap, adapted for containers:
+     * no ISO/seed, systemd service + offline enable symlink instead of cloud-init).
+     */
+    injectProxmoxLxcBootstrap(containerName: string, codename: string, gpgUrl?: string | null): Promise<void>;
     getContainerProcesses(containerName: string): Promise<Array<{
         pid: string;
         user: string;

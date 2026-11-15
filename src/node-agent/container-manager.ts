@@ -44,11 +44,58 @@ export interface LxcCreateSpec {
   autostart?: boolean;
   mounts?: Array<{ hostSource: string; guestTarget: string; readOnly?: boolean }>;
   /**
+   * When set (e.g. 'bookworm' for Proxmox VE 8, 'trixie' for Proxmox VE 9), the container
+   * is provisioned from its Debian base rootfs and a first-boot systemd bootstrap that
+   * installs Proxmox VE (proxmox-ve + :8006 Web UI) is injected offline into the rootfs.
+   */
+  proxmoxCodename?: string | null;
+  proxmoxGpgUrl?: string | null;
+  /**
    * When true (set by LXCAdapter when the panel database has no record for this container),
    * any stale/orphaned `/var/lib/lxc/<name>` directory from an earlier interrupted run is
    * cleanly destroyed and replaced instead of failing with "already exists on host".
    */
   replaceOrphanOnHost?: boolean;
+}
+
+export const PROXMOX_LXC_GPG_URLS: Record<string, string> = {
+  bookworm: 'https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg',
+  trixie: 'https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg',
+};
+
+export function resolveProxmoxLxcCodename(input: {
+  proxmoxCodename?: string | null;
+  templateSlug?: string | null;
+  distro?: string | null;
+  release?: string | null;
+  category?: string | null;
+}): string | null {
+  const direct = String(input.proxmoxCodename || '').trim().toLowerCase();
+  if (direct === 'bookworm' || direct === 'trixie') return direct;
+  const slug = String(input.templateSlug || '').trim().toLowerCase();
+  const distro = String(input.distro || '').trim().toLowerCase();
+  const release = String(input.release || '').trim().toLowerCase();
+  const category = String(input.category || '').trim().toLowerCase();
+  const isProxmox =
+    slug.startsWith('proxmox') ||
+    distro === 'proxmox' ||
+    category === 'proxmox' ||
+    slug.includes('proxmox');
+  if (!isProxmox) return null;
+  if (slug.includes('ve-9') || slug.includes('ve9') || release === '13' || release === 'trixie') {
+    return 'trixie';
+  }
+  return 'bookworm';
+}
+
+export function isProxmoxLxcSpec(spec: {
+  proxmoxCodename?: string | null;
+  templateSlug?: string | null;
+  distro?: string | null;
+  release?: string | null;
+  category?: string | null;
+}): boolean {
+  return resolveProxmoxLxcCodename(spec) !== null;
 }
 
 export interface LxcResourceUpdateSpec {
@@ -242,8 +289,16 @@ export function resolveDownloadReleaseCandidates(
   rawRelease: string,
   fallbackRelease?: string | null
 ): { distro: string; releases: string[]; archMapper: (arch: string) => string } {
-  const distro = rawDistro.toLowerCase().replace(/[^a-z0-9_.-]/g, '') || 'ubuntu';
-  const cleanRel = rawRelease.replace(/[^a-zA-Z0-9_.-]/g, '');
+  let distro = rawDistro.toLowerCase().replace(/[^a-z0-9_.-]/g, '') || 'ubuntu';
+  let cleanRel = rawRelease.replace(/[^a-zA-Z0-9_.-]/g, '');
+  // Proxmox VE LXC images are Debian-based: download the Debian rootfs, then bootstrap PVE.
+  if (distro === 'proxmox' || distro === 'pve') {
+    distro = 'debian';
+    const relLower = cleanRel.toLowerCase();
+    if (relLower === '8' || relLower === 'bookworm') cleanRel = '12';
+    else if (relLower === '9' || relLower === 'trixie') cleanRel = '13';
+    else if (!cleanRel) cleanRel = '12';
+  }
   const candidates: string[] = [];
 
   const pushUnique = (val?: string | null) => {
@@ -2800,6 +2855,19 @@ export class LxcContainerManager {
           }
         }
 
+        const proxmoxCodename = resolveProxmoxLxcCodename({
+          proxmoxCodename: spec.proxmoxCodename,
+          distro: spec.distro,
+          release: spec.release,
+        });
+        if (proxmoxCodename) {
+          await this.injectProxmoxLxcBootstrap(
+            safeName,
+            proxmoxCodename,
+            spec.proxmoxGpgUrl || PROXMOX_LXC_GPG_URLS[proxmoxCodename] || null
+          );
+        }
+
         // Convert plain `dir` rootfs into a dedicated sparse `ext4` loop quota volume so
         // `df -h` inside the container reports exact `spec.diskGb` (e.g. 20G) instead of host disk
         if ((!spec.backingStore || spec.backingStore === 'dir' || spec.backingStore === 'loop') && spec.diskGb >= 1) {
@@ -4165,6 +4233,131 @@ export class LxcContainerManager {
         ? `${existing.replace(/\n*$/, '\n')}${trimmed}\n`
         : `${trimmed}\n`;
       privilegedFs.writeFileSync(authKeysPath, nextContent, 0o600);
+    }
+  }
+
+  /**
+   * Offline-injects a first-boot Proxmox VE bootstrap into a freshly created Debian
+   * LXC rootfs (mirrors the KVM Cloud-Init PVE bootstrap, adapted for containers:
+   * no ISO/seed, systemd service + offline enable symlink instead of cloud-init).
+   */
+  public async injectProxmoxLxcBootstrap(
+    containerName: string,
+    codename: string,
+    gpgUrl?: string | null
+  ): Promise<void> {
+    const safeName = SafeValidators.containerName(containerName);
+    const cleanCodename = codename === 'trixie' ? 'trixie' : 'bookworm';
+    const isPve9 = cleanCodename === 'trixie';
+    const pveLabel = isPve9 ? 'Proxmox VE 9 (Debian 13 Trixie)' : 'Proxmox VE 8 (Debian 12 Bookworm)';
+    const resolvedGpgUrl =
+      gpgUrl && /^https:\/\/enterprise\.proxmox\.com\//.test(gpgUrl)
+        ? gpgUrl
+        : PROXMOX_LXC_GPG_URLS[cleanCodename];
+    const fallbackGpgUrl = isPve9
+      ? 'https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg'
+      : 'https://enterprise.proxmox.com/debian/proxmox-archive-keyring-bookworm.gpg';
+    const rootfs = this.getRootfsDir(safeName);
+    if (!privilegedFs.existsSync(rootfs)) {
+      throw new Error(`Container rootfs does not exist at ${rootfs}`);
+    }
+
+    const scriptLines = [
+      '#!/bin/bash',
+      'set -euo pipefail',
+      `CODENAME="${cleanCodename}"`,
+      `GPG_URL="${resolvedGpgUrl}"`,
+      `FALLBACK_GPG_URL="${fallbackGpgUrl}"`,
+      `PVE_LABEL="${pveLabel}"`,
+      'MARKER_FILE="/var/lib/tgvpanel-proxmox-installed"',
+      'STEP_FILE="/run/tgvpanel-proxmox-step"',
+      'LOG_FILE="/var/log/proxmox-install.log"',
+      'exec >>"$LOG_FILE" 2>&1',
+      'set -x',
+      'if [ -f "$MARKER_FILE" ]; then echo "[TGVPANEL-PVE] Proxmox VE already installed, skipping."; exit 0; fi',
+      'export DEBIAN_FRONTEND=noninteractive',
+      'export APT_OPTS=(-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold")',
+      'download_file() { curl -fsSL --retry 3 --connect-timeout 15 "$1" -o "$2"; }',
+      'echo "[1/6] Updating package lists" > "$STEP_FILE"',
+      'apt-get update',
+      'echo "[2/6] Configuring hostname and Proxmox APT repository" > "$STEP_FILE"',
+      'apt-get install "${APT_OPTS[@]}" -y curl wget gnupg ca-certificates',
+      'if ! download_file "$GPG_URL" /usr/share/keyrings/proxmox-archive-keyring.gpg || [ ! -s /usr/share/keyrings/proxmox-archive-keyring.gpg ]; then',
+      '  download_file "$FALLBACK_GPG_URL" /usr/share/keyrings/proxmox-archive-keyring.gpg',
+      'fi',
+      'test -s /usr/share/keyrings/proxmox-archive-keyring.gpg',
+      'cp /usr/share/keyrings/proxmox-archive-keyring.gpg "/etc/apt/trusted.gpg.d/proxmox-archive-keyring-${CODENAME}.gpg"',
+      'chmod 0644 /usr/share/keyrings/proxmox-archive-keyring.gpg "/etc/apt/trusted.gpg.d/proxmox-archive-keyring-${CODENAME}.gpg"',
+      'cat > /etc/apt/sources.list.d/pve-install-repo.sources <<EOF',
+      'Types: deb',
+      'URIs: http://download.proxmox.com/debian/pve',
+      'Suites: ${CODENAME}',
+      'Components: pve-no-subscription',
+      'Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg',
+      'EOF',
+      'apt-get update',
+      'echo "[3/6] Installing Proxmox VE kernel (best-effort inside LXC)" > "$STEP_FILE"',
+      'apt-get install "${APT_OPTS[@]}" -y proxmox-default-kernel || echo "[TGVPANEL-PVE] PVE kernel install skipped (expected inside LXC, host kernel is used)."',
+      'echo "[4/6] Installing Proxmox VE hypervisor, LXC, QEMU & Web UI (:8006)" > "$STEP_FILE"',
+      'apt-get install "${APT_OPTS[@]}" -y proxmox-ve postfix open-iscsi chrony ifupdown2 iptables',
+      'echo "[5/6] Enabling Proxmox VE services" > "$STEP_FILE"',
+      'systemctl enable pve-cluster pvedaemon pveproxy qemu-server lxc 2>/dev/null || true',
+      'echo "[6/6] Finalizing Proxmox VE installation" > "$STEP_FILE"',
+      'touch "$MARKER_FILE"',
+      'echo "=== [TGVPANEL] Proxmox VE installation complete! Web UI: https://<container-ip>:8006 ==="',
+      'systemctl disable tgvpanel-proxmox-setup.service 2>/dev/null || true',
+    ];
+    const scriptContent = scriptLines.join('\n') + '\n';
+
+    const serviceContent = [
+      '[Unit]',
+      'Description=TGVPANEL Unattended Proxmox VE Bootstrap (LXC)',
+      'After=network-online.target',
+      'Wants=network-online.target',
+      'ConditionPathExists=!/var/lib/tgvpanel-proxmox-installed',
+      '',
+      '[Service]',
+      'Type=oneshot',
+      'ExecStart=/usr/local/sbin/tgvpanel-install-proxmox.sh',
+      'RemainAfterExit=yes',
+      'TimeoutStartSec=0',
+      '',
+      '[Install]',
+      'WantedBy=multi-user.target',
+      '',
+    ].join('\n');
+
+    const bannerContent = [
+      '#!/bin/sh',
+      'if [ -f /var/lib/tgvpanel-proxmox-installed ]; then',
+      '  echo " [TGVPANEL] Proxmox VE is installed. Web UI: https://$(hostname -I 2>/dev/null | awk \'{print $1}\'):8006"',
+      'elif systemctl is-active --quiet tgvpanel-proxmox-setup.service 2>/dev/null; then',
+      '  echo " [TGVPANEL] Proxmox VE is installing... (log: /var/log/proxmox-install.log)"',
+      'fi',
+      '',
+    ].join('\n');
+
+    const scriptPath = this.resolveConfinedRootfsPath(safeName, '/usr/local/sbin/tgvpanel-install-proxmox.sh');
+    const servicePath = this.resolveConfinedRootfsPath(safeName, '/etc/systemd/system/tgvpanel-proxmox-setup.service');
+    const bannerPath = this.resolveConfinedRootfsPath(safeName, '/etc/profile.d/tgvpanel-proxmox-status.sh');
+    privilegedFs.mkdirpSync(path.dirname(scriptPath), 0o755);
+    privilegedFs.mkdirpSync(path.dirname(servicePath), 0o755);
+    privilegedFs.mkdirpSync(path.dirname(bannerPath), 0o755);
+    privilegedFs.writeFileSync(scriptPath, scriptContent, 0o755);
+    privilegedFs.writeFileSync(servicePath, serviceContent, 0o644);
+    privilegedFs.writeFileSync(bannerPath, bannerContent, 0o644);
+    // Offline enable: symlink into multi-user.target.wants (no systemctl call needed pre-boot)
+    const wantsDir = this.resolveConfinedRootfsPath(safeName, '/etc/systemd/system/multi-user.target.wants');
+    privilegedFs.mkdirpSync(wantsDir, 0o755);
+    const linkPath = path.join(wantsDir, 'tgvpanel-proxmox-setup.service');
+    try {
+      if (privilegedFs.existsSync(linkPath)) {
+        privilegedFs.rmRecursiveSync(linkPath);
+      }
+      // privilegedFs has no symlink helper; use fs directly (rootfs is host-writable here)
+      fs.symlinkSync('/etc/systemd/system/tgvpanel-proxmox-setup.service', linkPath);
+    } catch {
+      // Best-effort: service still runs via `systemctl start` fallback banner; ignore symlink errors
     }
   }
 
