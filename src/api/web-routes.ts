@@ -502,6 +502,9 @@ export function createUnifiedWebRouter(
         ? {
             arch: rawRow.arch || 'amd64',
             osFamily: rawRow.os_family || 'linux',
+            osTemplate: rawRow.os_template || '',
+            icon: rawRow.template_icon || rawRow.template_icon_path || rawRow.icon || '',
+            icon_path: rawRow.template_icon_path || rawRow.template_icon || rawRow.icon_path || '',
             backingStore: rawRow.rootfs_storage_type || 'dir',
             cpuLimitPercent: Number(rawRow.cpu_limit_pct || 100),
             cpuShares: Number(rawRow.cpu_shares || 1024),

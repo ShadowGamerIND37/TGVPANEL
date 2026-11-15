@@ -26,6 +26,16 @@ export declare class StorageManager {
         ok: boolean;
         reason?: string;
     }>;
+    static resolveLxcTemplateIcon(tpl: {
+        icon?: string | null;
+        icon_path?: string | null;
+        distro?: string | null;
+        slug?: string | null;
+        template_key?: string | null;
+        category?: string | null;
+        name?: string | null;
+        label?: string | null;
+    }): string;
     listLxcTemplates(includeDisabled?: boolean): Promise<any[]>;
     upsertLxcTemplate(input: {
         slug: string;
@@ -35,6 +45,9 @@ export declare class StorageManager {
         arch?: string;
         variant?: string;
         family?: string;
+        category?: string;
+        icon?: string | null;
+        proxmoxCodename?: string | null;
         minDiskGb?: number;
         minRamMb?: number;
         isCustom?: boolean;

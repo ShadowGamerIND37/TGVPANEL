@@ -212,11 +212,43 @@ export class StorageManager {
     };
   }
 
+  public static resolveLxcTemplateIcon(tpl: {
+    icon?: string | null;
+    icon_path?: string | null;
+    distro?: string | null;
+    slug?: string | null;
+    template_key?: string | null;
+    category?: string | null;
+    name?: string | null;
+    label?: string | null;
+  }): string {
+    const raw = String(tpl.icon_path || tpl.icon || '').trim();
+    if (raw && raw.startsWith('/images/os/') && raw.endsWith('.svg')) return raw;
+    if (raw && (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:image/'))) {
+      return raw;
+    }
+    const hint = `${tpl.slug || ''} ${tpl.template_key || ''} ${tpl.distro || ''} ${tpl.category || ''} ${tpl.name || ''} ${tpl.label || ''} ${raw}`.toLowerCase();
+    if (hint.includes('proxmox') || hint.includes('pve')) return '/images/os/proxmox.svg';
+    if (hint.includes('ubuntu')) return '/images/os/ubuntu.svg';
+    if (hint.includes('debian')) return '/images/os/debian.svg';
+    if (hint.includes('fedora')) return '/images/os/fedora.svg';
+    if (hint.includes('centos')) return '/images/os/centos.svg';
+    if (hint.includes('alma')) return '/images/os/almalinux.svg';
+    if (hint.includes('rocky')) return '/images/os/rocky.svg';
+    if (hint.includes('kali')) return '/images/os/kali.svg';
+    if (hint.includes('alpine')) return '/images/os/alpine.svg';
+    return '/images/os/linux.svg';
+  }
+
   public async listLxcTemplates(includeDisabled = false): Promise<any[]> {
     const where = includeDisabled ? '' : 'WHERE COALESCE(enabled, is_active, 1) = 1';
-    return this.db.all(
+    const rows = await this.db.all<any>(
       `SELECT * FROM lxc_templates ${where} ORDER BY distro ASC, release DESC, id ASC`
     );
+    return rows.map((r) => {
+      const iconPath = StorageManager.resolveLxcTemplateIcon(r);
+      return { ...r, icon: iconPath, icon_path: iconPath };
+    });
   }
 
   public async upsertLxcTemplate(input: {
@@ -227,6 +259,9 @@ export class StorageManager {
     arch?: string;
     variant?: string;
     family?: string;
+    category?: string;
+    icon?: string | null;
+    proxmoxCodename?: string | null;
     minDiskGb?: number;
     minRamMb?: number;
     isCustom?: boolean;
@@ -245,11 +280,25 @@ export class StorageManager {
     const distro = input.distro.trim().toLowerCase();
     const release = input.release.trim();
     const alias = `${distro}:${release}`;
+    const iconPath = StorageManager.resolveLxcTemplateIcon({
+      icon: input.icon || null,
+      distro,
+      slug: cleanSlug,
+      category: input.category || null,
+      name: input.name,
+    });
+    const proxmoxCodename =
+      input.proxmoxCodename ||
+      (cleanSlug.startsWith('proxmox') || distro === 'proxmox'
+        ? release === '13' || release === 'trixie' || cleanSlug.includes('ve-9')
+          ? 'trixie'
+          : 'bookworm'
+        : null);
 
     await this.db.run(
       `INSERT INTO lxc_templates
-         (template_key, label, image_alias, slug, name, distro, release, arch, variant, family, min_disk_gb, min_ram_mb, is_custom, local_path, file_path, sha256, checksum_sha256, is_active, enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (template_key, label, image_alias, slug, name, distro, release, arch, variant, family, category, icon, icon_path, proxmox_codename, min_disk_gb, min_ram_mb, is_custom, local_path, file_path, sha256, checksum_sha256, is_active, enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(slug) DO UPDATE SET
          label = excluded.label,
          name = excluded.name,
@@ -258,6 +307,10 @@ export class StorageManager {
          arch = excluded.arch,
          variant = excluded.variant,
          family = excluded.family,
+         category = COALESCE(excluded.category, lxc_templates.category),
+         icon = excluded.icon,
+         icon_path = excluded.icon_path,
+         proxmox_codename = COALESCE(excluded.proxmox_codename, lxc_templates.proxmox_codename),
          min_disk_gb = excluded.min_disk_gb,
          min_ram_mb = excluded.min_ram_mb,
          file_path = COALESCE(excluded.file_path, lxc_templates.file_path),
@@ -275,6 +328,10 @@ export class StorageManager {
         input.arch?.trim() || 'amd64',
         input.variant?.trim() || 'default',
         input.family?.trim() || 'debian',
+        input.category?.trim() || null,
+        iconPath,
+        iconPath,
+        proxmoxCodename,
         Number(input.minDiskGb || 5),
         Number(input.minRamMb || 256),
         input.isCustom ? 1 : 0,
@@ -286,7 +343,12 @@ export class StorageManager {
         input.enabled !== false ? 1 : 0,
       ]
     );
-    return this.db.get(`SELECT * FROM lxc_templates WHERE slug = ?`, [cleanSlug]);
+    const row = await this.db.get<any>(`SELECT * FROM lxc_templates WHERE slug = ?`, [cleanSlug]);
+    if (row) {
+      const resolved = StorageManager.resolveLxcTemplateIcon(row);
+      return { ...row, icon: resolved, icon_path: resolved };
+    }
+    return row;
   }
 
   public async toggleLxcTemplate(id: number, enabled: boolean): Promise<void> {

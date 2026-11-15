@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="26" fill="#141821"/>
+  <rect x="3" y="3" width="122" height="122" rx="23" stroke="#10B981" stroke-opacity="0.4" stroke-width="2"/>
+  <!-- Rocky Linux mountain mark -->
+  <path d="M28 92L52 44L66 68L78 50L100 92H28Z" fill="#10B981"/>
+  <path d="M52 44L60 58L52 64L44 58L52 44Z" fill="#FFFFFF" opacity="0.9"/>
+  <path d="M78 50L84 60L78 65L72 60L78 50Z" fill="#FFFFFF" opacity="0.7"/>
+</svg>

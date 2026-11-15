@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <rect width="128" height="128" rx="26" fill="#141821"/>
+  <rect x="3" y="3" width="122" height="122" rx="23" stroke="#38BDF8" stroke-opacity="0.4" stroke-width="2"/>
+  <!-- Alpine mountain -->
+  <path d="M24 92L56 32L72 60L82 46L104 92H24Z" fill="#38BDF8"/>
+  <path d="M56 32L64 46L56 52L48 46L56 32Z" fill="#FFFFFF" opacity="0.9"/>
+</svg>
