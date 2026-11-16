@@ -306,6 +306,25 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
     }
   });
 
+  app.post('/api/v1/containers/:name/clone', async (req, res) => {
+    try {
+      const targetName = String(req.body?.targetName || '');
+      const container = await runtime.containerManager.cloneContainer(req.params.name, targetName, {
+        cpuCores: req.body?.cpuCores,
+        cpuShares: req.body?.cpuShares,
+        cpuLimitPercent: req.body?.cpuLimitPercent,
+        cpuPinning: req.body?.cpuPinning,
+        ramMb: req.body?.ramMb,
+        swapMb: req.body?.swapMb,
+        nesting: req.body?.nesting,
+        kvmNesting: req.body?.kvmNesting,
+      });
+      return res.status(201).json({ success: true, container, networkDetached: true });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
   app.post('/api/v1/containers/:name/reinstall', async (req, res) => {
     try {
       const info = await runtime.containerManager.reinstallContainer({

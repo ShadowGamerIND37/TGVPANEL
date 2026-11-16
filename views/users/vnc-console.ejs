@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="<%= csrfToken || '' %>">
+  <title><%= title %> — TGVPANEL</title>
+  <link rel="icon" href="/images/logo.png" type="image/png">
+  <style>
+    :root { color-scheme: dark; --bg:#080d18; --card:#111827; --line:#263248; --text:#e5e7eb; --muted:#94a3b8; --accent:#818cf8; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font:14px/1.45 Inter,system-ui,sans-serif; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 20px; background:var(--card); border-bottom:1px solid var(--line); }
+    h1 { font-size:16px; margin:0; }
+    #status { color:var(--muted); font-size:12px; margin-top:3px; }
+    button,a { color:var(--text); border:1px solid var(--line); border-radius:8px; background:#182235; padding:8px 12px; font:inherit; text-decoration:none; cursor:pointer; }
+    button:hover,a:hover { border-color:var(--accent); }
+    main { padding:14px; height:calc(100vh - 68px); }
+    #screen { width:100%; height:100%; background:#000; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+    #screen canvas { width:100%; height:100%; object-fit:contain; }
+    .notice { color:#fbbf24; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1><%= vmName %> — VNC Console</h1><div id="status" data-state="<%= vmStatus %>">Connecting to loopback-proxied VNC…</div></div>
+    <a href="/vm/<%= vmId %>">Back to VM</a>
+  </header>
+  <main><div id="screen" aria-label="Remote virtual machine display"></div></main>
+  <script type="module">
+    import RFB from '/vendor/novnc/core/rfb.js';
+    const status = document.getElementById('status');
+    const state = status.dataset.state;
+    if (state !== 'running') status.textContent = `VM is ${state}; start it, then reload this page.`;
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const rfb = new RFB(document.getElementById('screen'), `${scheme}//${location.host}/vnc/<%= vmId %>`);
+    rfb.scaleViewport = true;
+    rfb.resizeSession = false;
+    rfb.showDotCursor = true;
+    rfb.addEventListener('connect', () => { status.textContent = 'Connected — VNC is proxied over the authenticated TGVPANEL session.'; });
+    rfb.addEventListener('disconnect', (event) => {
+      status.textContent = event.detail?.clean ? 'Disconnected.' : 'VNC connection lost. Check that the VM is running and VNC is enabled.';
+    });
+    window.addEventListener('beforeunload', () => rfb.disconnect(), { once: true });
+  </script>
+</body>
+</html>

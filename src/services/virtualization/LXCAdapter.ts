@@ -115,6 +115,8 @@ export class LXCAdapter implements VirtualizationAdapter {
       status: row.suspended ? 'suspended' : row.status || 'stopped',
       suspended: Boolean(row.suspended),
       suspendedReason: row.suspended_reason || null,
+      serviceLocked: Boolean(row.service_locked),
+      serviceLockReason: row.service_lock_reason || null,
       osLabel: row.os_template || 'ubuntu:24.04',
       cpuCores: Number(row.cpu_cores || 1),
       ramMb: Number(row.ram_mb || 1024),
@@ -696,7 +698,7 @@ export class LXCAdapter implements VirtualizationAdapter {
           break;
         case 'destroy':
           await mgr.destroyContainer(containerName);
-          return null;
+          return mgr.inspectContainer(containerName);
         case 'password':
           await mgr.setRootPassword(containerName, String(extra.password || ''));
           break;
@@ -716,6 +718,52 @@ export class LXCAdapter implements VirtualizationAdapter {
     }
   }
 
+  private async inspectHostContainer(
+    nodeId: number,
+    isLocal: boolean,
+    containerName: string
+  ): Promise<LxcContainerRuntimeInfo | null> {
+    if (isLocal) {
+      return this.nodeManager.localRuntime.containerManager.inspectContainer(containerName);
+    }
+    const resp = await this.nodeManager.requestRemoteNode<LxcContainerRuntimeInfo>(
+      nodeId,
+      'GET',
+      `/api/v1/containers/${encodeURIComponent(containerName)}`
+    );
+    return resp || null;
+  }
+
+  private assertContainerRuntimeState(
+    action: string,
+    info: LxcContainerRuntimeInfo | null,
+    expected: 'running' | 'stopped' | 'frozen'
+  ): void {
+    if (!info) {
+      throw new Error(
+        `LXC ${action} did not return host container state; refusing to persist panel status.`
+      );
+    }
+    if (info.state !== expected) {
+      throw new Error(
+        `LXC ${action} did not reach expected "${expected}" state on host; host reports "${info.state}".`
+      );
+    }
+  }
+
+  private assertContainerDestroyed(action: string, info: LxcContainerRuntimeInfo | null): void {
+    if (!info) {
+      throw new Error(
+        `LXC ${action} did not return host container state after destruction; refusing to remove panel records.`
+      );
+    }
+    if (info.state !== 'missing') {
+      throw new Error(
+        `LXC ${action} did not remove the container on host; host reports "${info.state}". Refusing to remove panel records.`
+      );
+    }
+  }
+
   public async performLifecycleAction(
     refId: number,
     action: LifecycleAction,
@@ -732,14 +780,16 @@ export class LXCAdapter implements VirtualizationAdapter {
         throw new Error('This LXC VPS is suspended and cannot be started until unsuspended.');
       }
       const info = await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'start');
+      this.assertContainerRuntimeState('start', info, 'running');
       await this.db.run(
         `UPDATE lxc_instances SET status = 'running', ip_address = COALESCE(?, ip_address), updated_at = datetime('now') WHERE id = ?`,
         [info?.ips?.[0] || null, refId]
       );
     } else if (action === 'stop') {
-      await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'stop', {
+      const stopInfo = await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'stop', {
         force: options?.force,
       });
+      this.assertContainerRuntimeState('stop', stopInfo, 'stopped');
       await this.db.run(
         `UPDATE lxc_instances SET status = 'stopped', updated_at = datetime('now') WHERE id = ?`,
         [refId]
@@ -748,13 +798,15 @@ export class LXCAdapter implements VirtualizationAdapter {
       if (row.suspended) {
         throw new Error('This LXC VPS is suspended and cannot be restarted.');
       }
-      await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'restart');
+      const restartInfo = await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'restart');
+      this.assertContainerRuntimeState('restart', restartInfo, 'running');
       await this.db.run(
         `UPDATE lxc_instances SET status = 'running', updated_at = datetime('now') WHERE id = ?`,
         [refId]
       );
     } else if (action === 'freeze') {
-      await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'freeze');
+      const freezeInfo = await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'freeze');
+      this.assertContainerRuntimeState('freeze', freezeInfo, 'frozen');
       await this.db.run(
         `UPDATE lxc_instances SET status = 'frozen', updated_at = datetime('now') WHERE id = ?`,
         [refId]
@@ -763,15 +815,17 @@ export class LXCAdapter implements VirtualizationAdapter {
       if (row.suspended) {
         throw new Error('This LXC VPS is suspended and cannot be unfrozen until unsuspended.');
       }
-      await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'unfreeze');
+      const unfreezeInfo = await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'unfreeze');
+      this.assertContainerRuntimeState('unfreeze', unfreezeInfo, 'running');
       await this.db.run(
         `UPDATE lxc_instances SET status = 'running', updated_at = datetime('now') WHERE id = ?`,
         [refId]
       );
     } else if (action === 'suspend') {
-      await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'stop', { force: true }).catch(
-        () => undefined
-      );
+      // Do not persist suspension if the host could not stop the guest; that would leave
+      // a live container behind a panel state that claims it has been stopped.
+      const stopInfo = await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'stop', { force: true });
+      this.assertContainerRuntimeState('suspend', stopInfo, 'stopped');
       let history: any[] = [];
       try {
         history = JSON.parse(row.suspension_history || '[]');
@@ -809,9 +863,14 @@ export class LXCAdapter implements VirtualizationAdapter {
         [JSON.stringify(history), refId]
       );
     } else if (action === 'delete') {
-      await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'destroy').catch(
-        () => undefined
-      );
+      // Preserve the panel record and allocations if the host refuses, fails, or leaves the container behind.
+      const existing = await this.inspectHostContainer(row.node_id, isLocal, cname);
+      if (!existing || existing.state === 'missing') {
+        // Meta-only or already-missing containers have no host artifact to destroy.
+      } else {
+        const destroyInfo = await this.dispatchNodeContainerAction(row.node_id, isLocal, cname, 'destroy');
+        this.assertContainerDestroyed('delete', destroyInfo);
+      }
       await this.db
         .run(
           `UPDATE ip_allocations
@@ -855,6 +914,7 @@ export class LXCAdapter implements VirtualizationAdapter {
       ipAddress?: string | null;
       gateway?: string | null;
       ipv6Address?: string | null;
+      macAddress?: string | null;
       bandwidthQuotaGb?: number;
       notes?: string;
     },
@@ -879,6 +939,7 @@ export class LXCAdapter implements VirtualizationAdapter {
         ipv4Address: patch.ipAddress !== undefined ? patch.ipAddress : row.ip_address,
         ipv4Gateway: patch.gateway !== undefined ? patch.gateway : row.gateway,
         ipv6Address: patch.ipv6Address !== undefined ? patch.ipv6Address : row.ipv6_address,
+        macAddress: patch.macAddress !== undefined ? patch.macAddress : row.mac_address,
       };
 
       if (row.is_local) {
@@ -963,6 +1024,98 @@ export class LXCAdapter implements VirtualizationAdapter {
 
     await this.syncRegistryRow(refId);
     return (await this.getInstance(refId))!;
+  }
+
+  public async cloneStoppedLxcInstance(refId: number, newName: string): Promise<{
+    instance: UnifiedInstanceRecord;
+    sourceName: string;
+    networkDetached: true;
+    guestIdentityResetRequired: true;
+  }> {
+    const source = await this.getRawLxcRow(refId);
+    if (!source) throw Object.assign(new Error(`LXC container #${refId} not found.`), { statusCode: 404 });
+    if (source.suspended) throw Object.assign(new Error('Unsuspend the source before cloning.'), { statusCode: 409 });
+    if (String(source.status || '').toLowerCase() !== 'stopped') {
+      throw Object.assign(new Error('LXC cloning is offline-only; stop the source container first.'), { statusCode: 409 });
+    }
+    if (String(source.rootfs_storage_type || 'dir').toLowerCase() !== 'dir') {
+      throw Object.assign(new Error('LXC clone currently supports directory-backed containers only; other storage backends are not exposed.'), { statusCode: 501 });
+    }
+    const name = SafeValidators.containerName(newName);
+    if (name.toLowerCase() === String(source.container_name).toLowerCase()) throw new Error('Clone name must differ from the source name.');
+    const duplicate = await this.db.get<any>(`SELECT id FROM lxc_instances WHERE LOWER(container_name) = LOWER(?)`, [name]);
+    if (duplicate) throw Object.assign(new Error(`LXC container "${name}" already exists.`), { statusCode: 409 });
+
+    const resources = {
+      cpuCores: Number(source.cpu_cores || 1),
+      cpuShares: Number(source.cpu_shares || 1024),
+      cpuLimitPercent: Number(source.cpu_limit_pct || 100),
+      cpuPinning: source.cpu_pinning || null,
+      ramMb: Number(source.ram_mb || 1024),
+      swapMb: Number(source.swap_mb || 0),
+      nesting: Boolean(source.nesting),
+      kvmNesting: Boolean(source.kvm_nesting),
+    };
+    const nodeId = Number(source.node_id);
+    let hostCreated = false;
+    let insertedLxcId: number | null = null;
+    try {
+      if (source.is_local) {
+        await this.nodeManager.localRuntime.containerManager.cloneContainer(source.container_name, name, resources);
+      } else {
+        await this.nodeManager.requestRemoteNode(nodeId, 'POST', `/api/v1/containers/${encodeURIComponent(source.container_name)}/clone`, {
+          targetName: name,
+          ...resources,
+        }, 600_000);
+      }
+      hostCreated = true;
+
+      const macAddress = `00:16:3e:${[0, 1, 2].map(() => crypto.randomInt(0, 256).toString(16).padStart(2, '0')).join(':')}`;
+      const inserted = await this.db.run(
+        `INSERT INTO lxc_instances (
+          user_id, node_id, container_name, hostname, os_template, os_family, arch,
+          cpu_cores, cpu_shares, cpu_limit_pct, cpu_pinning, ram_mb, swap_mb, disk_gb,
+          rootfs_storage_type, privileged, nesting, kvm_nesting, autostart, root_password_enc,
+          bridge, ip_address, gateway, ipv6_address, mac_address, vlan_id,
+          status, bandwidth_quota_gb, notes, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dir', ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, ?, NULL, 'stopped', ?, ?, ?, ?, ?, datetime('now'))`,
+        [
+          source.user_id, nodeId, name, name, source.os_template, source.os_family, source.arch,
+          resources.cpuCores, resources.cpuShares, resources.cpuLimitPercent, resources.cpuPinning,
+          resources.ramMb, resources.swapMb, Number(source.disk_gb || 20), source.privileged ? 1 : 0, source.nesting ? 1 : 0,
+          source.kvm_nesting ? 1 : 0, source.root_password_enc || null, macAddress,
+          Number(source.bandwidth_quota_gb || 0), `Offline clone of ${source.container_name}; review guest identity and network before use.`,
+          source.expires_at || null, Number(source.expiration_days || 0), source.auto_suspend_enabled !== 0 ? 1 : 0,
+        ]
+      );
+      const newId = inserted.lastID;
+      insertedLxcId = newId;
+      if (source.expires_at || Number(source.expiration_days || 0) > 0) {
+        await this.db.run(
+          `INSERT OR REPLACE INTO vps_expiration (lxc_id, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at)
+           VALUES (?, ?, ?, ?, datetime('now'))`,
+          [newId, source.expires_at || null, Number(source.expiration_days || 0), source.auto_suspend_enabled !== 0 ? 1 : 0]
+        );
+      }
+      await this.syncRegistryRow(newId);
+      return {
+        instance: (await this.getInstance(newId))!,
+        sourceName: source.container_name,
+        networkDetached: true,
+        guestIdentityResetRequired: true,
+      };
+    } catch (err) {
+      if (insertedLxcId) {
+        await this.db.run(`DELETE FROM vps_expiration WHERE lxc_id = ?`, [insertedLxcId]).catch(() => undefined);
+        await this.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [insertedLxcId]).catch(() => undefined);
+        await this.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [insertedLxcId]).catch(() => undefined);
+      }
+      if (hostCreated) {
+        if (source.is_local) await this.nodeManager.localRuntime.containerManager.destroyContainer(name).catch(() => undefined);
+        else await this.nodeManager.requestRemoteNode(nodeId, 'POST', `/api/v1/containers/${encodeURIComponent(name)}/action`, { action: 'destroy' }).catch(() => undefined);
+      }
+      throw err;
+    }
   }
 
   public async reinstallLxcInstance(

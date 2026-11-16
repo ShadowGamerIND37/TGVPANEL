@@ -2512,7 +2512,7 @@
             <span class="st-tag emerald">Unlocked</span>
           </div>
           <h4 class="lic-feat-title">Hardware Virtualization</h4>
-          <p class="lic-feat-desc">Cloud-Init OS provisioning, custom bootable ISO library, VirtIO block/network drivers, Browser noVNC console, live QCOW2 snapshots, and SHA-256 verified backups.</p>
+          <p class="lic-feat-desc">Cloud-Init OS provisioning, custom bootable ISO library, VirtIO block/network drivers, browser loopback-proxied VNC/noVNC and SSH/serial consoles, live QCOW2 snapshots, and SHA-256 verified backups.</p>
         </div>
 
         <div class="lic-feat-card">
@@ -2612,6 +2612,116 @@
 <script>
 const CURRENT_SECTION = '<%= section %>';
 
+async function openKvmVnc(id) {
+  try {
+    const current = await hkvmApi(`/api/v1/instances/kvm/${id}/vnc`);
+    if (!current.vnc.enabled) {
+      if (!confirm('Enable loopback-only VNC? The VM must be stopped for this change, and VNC starts on the next VM boot.')) return;
+      await hkvmApi(`/api/v1/instances/kvm/${id}/vnc`, { method: 'POST', body: { enabled: true } });
+      hkvmToast('VNC enabled for the next VM start. Start the VM, then open VNC Console.', 'warning');
+      return;
+    }
+    window.open(`/vm/${id}/vnc`, '_blank', 'noopener');
+  } catch (e) {
+    hkvmToast(e.message, 'error');
+  }
+}
+
+async function cloneKvm(id) {
+  const accepted = confirm('This copies the primary disk only. The new VM initially duplicates the guest machine-id, SSH host keys, and installed secrets. You must regenerate these and verify networking before exposing it. Continue?');
+  if (!accepted) return;
+  const name = prompt('Enter a unique name for the stopped NAT-mode clone:');
+  if (!name) return;
+  try {
+    const result = await hkvmApi(`/api/v1/instances/kvm/${id}/clone`, {
+      method: 'POST', body: { name: name.trim(), acknowledgeGuestIdentityRisk: true }
+    });
+    hkvmToast(`Created stopped clone ${result.clone.name} (#${result.clone.vmId}) on SSH forward port ${result.clone.sshForwardPort}.`, 'warning');
+    loadUnifiedInstances();
+  } catch (e) {
+    hkvmToast(e.message, 'error');
+  }
+}
+
+async function setUnifiedServiceLock(engine, id, locked) {
+  let reason = '';
+  if (locked) {
+    reason = prompt('Optional lock reason (visible to staff):') || '';
+    if (!confirm('Lock this VPS against future start/restart operations? A currently running guest will not be stopped.')) return;
+  } else if (!confirm('Unlock this VPS so it can be started/restarted again?')) return;
+  try {
+    await hkvmApi(`/api/v1/instances/${engine}/${id}/service-lock`, {
+      method: 'POST', body: { locked, reason }
+    });
+    hkvmToast(locked ? 'VPS locked; a running guest remains running.' : 'VPS service lock cleared.', locked ? 'warning' : 'success');
+    loadUnifiedInstances();
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function manageKvmRescueIso(id) {
+  try {
+    const current = await hkvmApi(`/api/vms/${id}/iso/status`);
+    if (current.iso_attached && current.boot_from_iso) {
+      if (!confirm('Disable rescue mode? The ISO will be detached and the next start will boot from the VM disk. Stop the VM first.')) return;
+      await hkvmApi(`/api/v1/instances/kvm/${id}/rescue`, { method: 'POST', body: { enabled: false } });
+      hkvmToast('Rescue ISO detached; disk-first boot restored.', 'success');
+      return;
+    }
+    const isos = await hkvmApi('/api/iso-list');
+    if (!Array.isArray(isos) || !isos.length) return hkvmToast('No managed ISO files found. Upload a bootable rescue ISO to ~/vms/iso first.', 'warning');
+    const filename = prompt(`Choose an ISO filename from the managed list:
+${isos.join('
+')}`);
+    if (!filename || !isos.includes(filename.trim())) return;
+    if (!confirm('This configures the operator-supplied ISO for the next boot. Rescue software and bootability are not provided by TGVPANEL. Stop the VM first; start it after configuration and use its serial/VNC console.')) return;
+    await hkvmApi(`/api/v1/instances/kvm/${id}/rescue`, { method: 'POST', body: { enabled: true, isoFilename: filename.trim() } });
+    hkvmToast('Rescue ISO selected for the next start. Start the VM and connect using its console; disable rescue after stopping it.', 'warning');
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function cloneLxc(id) {
+  if (!confirm('This makes an offline directory-backed copy. It duplicates guest keys, passwords, machine identity and secrets. The clone is created STOPPED with host networking detached; review in-guest static addressing and reset identities before reconnecting it. Continue?')) return;
+  const name = prompt('Enter a unique name for the stopped LXC clone:');
+  if (!name) return;
+  try {
+    const result = await hkvmApi(`/api/v1/instances/lxc/${id}/clone`, {
+      method: 'POST', body: { name: name.trim(), acknowledgeGuestIdentityRisk: true }
+    });
+    hkvmToast(`Created disconnected LXC clone ${result.clone.instance.name} (#${result.clone.instance.refId}). Review its guest network before connecting it.`, 'warning');
+    loadUnifiedInstances();
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function manageKvmDevices(id) {
+  try {
+    const { devices } = await hkvmApi('/api/v1/instances/kvm/' + id + '/devices');
+    const diskList = devices.disks.map(d => `Disk ${d.id}: ${(Number(d.sizeBytes) / (1024 ** 3)).toFixed(2)} GiB (${d.format}, ${d.attached ? 'attached' : 'detached'})`).join('\n') || 'No extra disks';
+    const nicList = devices.nics.map(n => `NIC ${n.id}: ${n.macAddress} (${n.networkMode})`).join('\n') || 'No extra NICs';
+    const action = prompt(`Stopped VM only. Current devices:\n${diskList}\n${nicList}\n\nEnter: disk <size> | nic | remove-disk <id> | reattach-disk <id> | remove-nic <id>`);
+    if (!action) return;
+    const parts = action.trim().split(/\s+/);
+    let res;
+    if (parts[0] === 'disk' && parts[1]) {
+      res = await hkvmApi(`/api/v1/instances/kvm/${id}/devices/disks`, { method: 'POST', body: { size: parts[1] } });
+    } else if (parts[0] === 'nic' && parts.length === 1) {
+      res = await hkvmApi(`/api/v1/instances/kvm/${id}/devices/nics`, { method: 'POST', body: {} });
+    } else if (parts[0] === 'remove-disk' && parts[1]) {
+      if (!confirm('Detach this disk? The image file and all its data will be preserved.')) return;
+      res = await hkvmApi(`/api/v1/instances/kvm/${id}/devices/disks/${encodeURIComponent(parts[1])}`, { method: 'DELETE' });
+    } else if (parts[0] === 'reattach-disk' && parts[1]) {
+      res = await hkvmApi(`/api/v1/instances/kvm/${id}/devices/disks/${encodeURIComponent(parts[1])}/attach`, { method: 'POST', body: {} });
+    } else if (parts[0] === 'remove-nic' && parts[1]) {
+      res = await hkvmApi(`/api/v1/instances/kvm/${id}/devices/nics/${encodeURIComponent(parts[1])}`, { method: 'DELETE' });
+    } else {
+      return hkvmToast('Use disk <size>, nic, remove-disk <id>, reattach-disk <id>, or remove-nic <id>.', 'warning');
+    }
+    hkvmToast(res.note || 'Device configuration updated.');
+    loadUnifiedInstances();
+  } catch (e) {
+    hkvmToast(e.message, 'error');
+  }
+}
+
 async function instAction(engine, id, action) {
   let reason;
   if (action === 'suspend') {
@@ -2620,11 +2730,7 @@ async function instAction(engine, id, action) {
   }
   if (action === 'delete' && !confirm('Permanently delete ' + engine.toUpperCase() + ' #' + id + '?')) return;
   try {
-    await hkvmApi('/api/v1/instances/' + engine + '/' + id + '/action', {
-      method: 'POST',
-      body: { action, reason }
-    });
-    hkvmToast('Action "' + action + '" completed');
+    await hkvmRunInstanceAction(engine, id, action, reason);
     if (CURRENT_SECTION === 'instances') loadUnifiedInstances();
     if (CURRENT_SECTION === 'lxc') loadLxcList();
   } catch (e) {
@@ -2654,6 +2760,9 @@ async function loadUnifiedInstances() {
     const suspBtn = i.suspended
       ? `<button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'unsuspend')">Unsuspend</button>`
       : `<button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'suspend')">Suspend</button>`;
+    const serviceLockBtn = i.serviceLocked
+      ? `<button class="btn btn-outline" onclick="setUnifiedServiceLock('${i.engine}',${i.refId},false)">Unlock service</button>`
+      : `<button class="btn btn-outline" onclick="setUnifiedServiceLock('${i.engine}',${i.refId},true)">Lock service</button>`;
     return `<tr>
       <td><input type="checkbox" class="inst-chk" value="${i.uid}"></td>
       <td><span class="v3-pill ${i.engine}">${i.engine.toUpperCase()}</span></td>
@@ -2665,10 +2774,14 @@ async function loadUnifiedInstances() {
       <td><span class="v3-pill ${i.status}">${hkvmEsc(i.status)}</span></td>
       <td class="v3-btn-row">
         <a class="btn btn-primary" href="${manageHref}">Manage</a>
-        <button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'start')">Start</button>
+        <button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'start')" ${i.serviceLocked ? 'disabled title="Administrative service lock is active"' : ''}>Start</button>
         <button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'stop')">Stop</button>
+        <button class="btn btn-outline" onclick="hkvmShowInstanceTaskHistory('${i.engine}',${i.refId})">Task history</button>
+        ${i.engine === 'kvm' ? `<button class="btn btn-outline" onclick="manageKvmDevices(${i.refId})">Devices</button><button class="btn btn-outline" onclick="cloneKvm(${i.refId})">Clone</button><button class="btn btn-outline" onclick="openKvmVnc(${i.refId})">VNC Console</button>${i.status === 'stopped' ? `<button class="btn btn-outline" onclick="manageKvmRescueIso(${i.refId})">Rescue ISO</button>` : ''}` : ''}
+        ${i.engine === 'lxc' && i.status === 'stopped' && !i.suspended ? `<button class="btn btn-outline" onclick="cloneLxc(${i.refId})">Clone</button>` : ''}
         ${freezeBtn}
         ${suspBtn}
+        ${serviceLockBtn}
         <button class="btn btn-outline" style="color:#ef4444;" onclick="instAction('${i.engine}',${i.refId},'delete')">Delete</button>
       </td>
     </tr>`;
@@ -2704,6 +2817,7 @@ async function loadLxcList() {
       <a class="btn btn-primary" href="/lxc/${i.refId}">Manage</a>
       <a class="btn btn-outline" href="/lxc/${i.refId}/console">PTY Console</a>
       <button class="btn btn-outline" onclick="renewLxc(${i.refId})">+30d Renew</button>
+      <button class="btn btn-outline" onclick="hkvmShowInstanceTaskHistory('lxc',${i.refId})">Task history</button>
       <button class="btn btn-outline" style="color:#ef4444;" onclick="instAction('lxc',${i.refId},'delete')">Delete</button>
     </td>
   </tr>`).join('');
@@ -3282,7 +3396,8 @@ function fallbackCopyText(val, msg) {
 }
 
 function fmtBytesCompact(bytes) {
-  const b = Number(bytes || 0);
+  if (bytes === null || bytes === undefined || !Number.isFinite(Number(bytes))) return 'N/A';
+  const b = Number(bytes);
   if (!b || b <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   let idx = 0;

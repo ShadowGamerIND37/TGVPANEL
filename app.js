@@ -1925,6 +1925,32 @@ app.get('/vm/:id/console', checkAuth, (req, res) => {
   });
 });
 
+// Authenticated noVNC console for KVM VMs. The WebSocket bridge independently rechecks ownership.
+app.get('/vm/:id/vnc', checkAuth, async (req, res) => {
+  try {
+    const vm = await dbGetAsync(`SELECT vm_id, vm_name, owner_id, shared_with, status, vnc_port FROM vms WHERE vm_id = ?`, [req.params.id]);
+    if (!vm) return res.status(404).send('VM not found.');
+    let shared = [];
+    try { shared = JSON.parse(vm.shared_with || '[]').map(Number); } catch { shared = []; }
+    const staff = ['admin', 'subadmin', 'operator'].includes(req.session.role);
+    if (!staff && Number(vm.owner_id) !== Number(req.session.userId) && !shared.includes(Number(req.session.userId))) {
+      return res.status(403).send('Access denied.');
+    }
+    const vncPort = Number(vm.vnc_port || 0);
+    if (!Number.isInteger(vncPort) || vncPort < 5900 || vncPort >= 65000) {
+      return res.status(409).send('VNC is not configured. Enable it while the VM is stopped, then start the VM.');
+    }
+    return res.render('users/vnc-console', {
+      title: `VNC Console — ${vm.vm_name}`,
+      vmId: vm.vm_id,
+      vmName: vm.vm_name,
+      vmStatus: vm.status,
+    });
+  } catch (err) {
+    return res.status(500).send('Could not open the VNC console.');
+  }
+});
+
 // User VM SSH connection page
 app.get('/vm/:id/ssh', checkAuth, (req, res) => {
   res.render('users/vm-ssh', {
@@ -2209,7 +2235,7 @@ app.get('/api/vms/:vm_id/console', checkAuth, (req, res) => {
 });
 
 // VM CONSOLE COMMAND - Send command to VM via serial console
-app.post('/api/vms/:vm_id/console/command', checkAuth, async (req, res) => {
+app.post('/api/vms/:vm_id/console/command', checkAuth, trackLegacyKvmMutation('console_command'), async (req, res) => {
   const vm_id = req.params.vm_id;
   const { command } = req.body;
   const userId = req.session.userId;
@@ -2293,101 +2319,10 @@ app.get('/api/vms/:vm_id/edit', checkAuth, (req, res) => {
   });
 });
 
-// Resize disk qcow2 file (expand or shrink)
-async function resizeDisk(vm_id, diskFilePath, newSize) {
-  return new Promise((resolve, reject) => {
-    try {
-      if (!fs.existsSync(diskFilePath)) {
-        return reject(new Error('Disk file not found'));
-      }
-
-      // Parse size to bytes (handle G, GB, T, TB)
-      const parseSize = (sizeStr) => {
-        const match = sizeStr.match(/^(\d+(?:\.\d+)?)\s*([KMGT]?B?)$/i);
-        if (!match) return null;
-        
-        let size = parseFloat(match[1]);
-        const unit = (match[2] || '').toUpperCase();
-        
-        const multipliers = { 'K': 1024, 'M': 1024**2, 'G': 1024**3, 'T': 1024**4 };
-        if (unit.startsWith('K')) size *= multipliers['K'];
-        else if (unit.startsWith('M')) size *= multipliers['M'];
-        else if (unit.startsWith('G')) size *= multipliers['G'];
-        else if (unit.startsWith('T')) size *= multipliers['T'];
-        
-        return Math.floor(size);
-      };
-
-      const newSizeBytes = parseSize(newSize);
-      if (!newSizeBytes) {
-        return reject(new Error('Invalid size format. Use: 20G, 100GB, 1T, etc.'));
-      }
-
-      // Get current disk size from qemu-img (not file size, but virtual size)
-      let currentSize;
-      try {
-        const infoOutput = execSync(`qemu-img info "${diskFilePath}" --output=json`, { stdio: 'pipe', encoding: 'utf8' });
-        const imageInfo = JSON.parse(infoOutput);
-        currentSize = imageInfo['virtual-size'] || imageInfo['VirtualSize'] || 0;
-        console.log(`[DISK-${vm_id}] Detected via qemu-img: Virtual size = ${(currentSize / (1024**3)).toFixed(2)}GB`);
-      } catch (err) {
-        console.warn(`[DISK-${vm_id}] Could not get size from qemu-img, falling back to file size`);
-        const stats = fs.statSync(diskFilePath);
-        currentSize = stats.size;
-      }
-
-      console.log(`[DISK-${vm_id}] Current: ${(currentSize / (1024**3)).toFixed(2)}GB, Target: ${(newSizeBytes / (1024**3)).toFixed(2)}GB`);
-
-      if (newSizeBytes === currentSize) {
-        return resolve({ message: 'size unchanged' });
-      }
-
-      // Determine if we're expanding or shrinking
-      const isShrink = newSizeBytes < currentSize;
-      const operation = isShrink ? 'shrink' : 'expand';
-
-      // Use qemu-img to resize - always use +SIZE syntax for expand, =SIZE for shrink
-      let resizeCmd;
-      if (isShrink) {
-        // Shrinking requires --shrink flag and = syntax
-        resizeCmd = `qemu-img resize --shrink "${diskFilePath}" ${newSize}`;
-      } else {
-        // Expanding - use = syntax (not + syntax)
-        resizeCmd = `qemu-img resize "${diskFilePath}" ${newSize}`;
-      }
-
-      console.log(`[DISK-${vm_id}] ${operation.toUpperCase()}: Executing: ${resizeCmd}`);
-      
-      // Execute and capture both stdout and stderr
-      let output;
-      try {
-        output = execSync(resizeCmd, { stdio: 'pipe', encoding: 'utf8', shell: true });
-        console.log(`[DISK-${vm_id}] Command output: ${output}`);
-      } catch (execErr) {
-        // Check if it's just a warning
-        const stderr = execErr.stderr ? execErr.stderr.toString() : '';
-        const stdout = execErr.stdout ? execErr.stdout.toString() : '';
-        
-        // If it's a shrink warning, it might still work
-        if (isShrink && stderr.includes('Shrinking an image')) {
-          console.log(`[DISK-${vm_id}] Shrink warning (expected):`, stderr);
-        } else {
-          throw execErr;
-        }
-      }
-
-      console.log(`[DISK-${vm_id}] Disk ${operation}ed to ${newSize}`);
-      resolve({ message: `${operation}ed to ${newSize}` });
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
-
 // Regenerate cloud-init seed for a VM
 
 // UPDATE VM CONFIGURATION (PUT request)
-app.put('/api/vms/:vm_id/edit', checkAuth, (req, res) => {
+app.put('/api/vms/:vm_id/edit', checkAuth, trackLegacyKvmMutation('edit_config'), async (req, res) => {
   const vm_id = req.params.vm_id;
   const userId = req.session.userId;
   const {
@@ -2402,7 +2337,7 @@ app.put('/api/vms/:vm_id/edit', checkAuth, (req, res) => {
     owner_id
   } = req.body;
 
-  let query = `SELECT status, template_type, seed_file FROM vms WHERE vm_id = ?`;
+  let query = `SELECT * FROM vms WHERE vm_id = ?`;
   let params = [vm_id];
   
   // Normal users can only edit their own VMs
@@ -2411,7 +2346,7 @@ app.put('/api/vms/:vm_id/edit', checkAuth, (req, res) => {
     params.push(userId);
   }
 
-  db.get(query, params, (err, vm) => {
+  db.get(query, params, async (err, vm) => {
     if (err || !vm) return res.status(404).json({ error: 'VM not found or access denied' });
     
     // Only allow editing stopped VMs
@@ -2490,65 +2425,37 @@ app.put('/api/vms/:vm_id/edit', checkAuth, (req, res) => {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
+    if (disk_size && String(disk_size).trim() !== String(vm.disk_size || '').trim()) {
+      if (!hkvmV3Context) return res.status(503).json({ error: 'TGVPANEL runtime initializing' });
+      try {
+        // The image expansion is real and offline-only. The service rejects shrink, symlinks
+        // outside the VM store, backing chains, and live QEMU processes.
+        await hkvmV3Context.kvmAdapter.resizeDiskImage(Number(vm_id), String(disk_size));
+      } catch (resizeErr) {
+        return res.status(resizeErr.statusCode || 400).json({ error: resizeErr.message });
+      }
+    }
+
     values.push(vm_id);
     const query = `UPDATE vms SET ${updates.join(', ')} WHERE vm_id = ?`;
 
-    db.run(query, values, async (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-      
-      try {
-        // ALWAYS regenerate cloud-init seed when editing ANY field on a cloud-init VM
-        // Delete old seed ISO and create new one with current config
-        console.log(`[VM-${vm_id}] Template type check: '${originalVm.template_type}'`);
-        
-        // Always regenerate regardless of template_type
-        console.log(`[VM-${vm_id}] ✓ Regenerating seed with current configuration...`);
-        
-        // Always delete old seed ISO first
-        const seedIsoPath = path.join(VM_DIR, `vm-${vm_id}-seed.iso`);
-        console.log(`[VM-${vm_id}] Checking for old seed: ${seedIsoPath}`);
-        
-        if (fs.existsSync(seedIsoPath)) {
-          try {
-            fs.unlinkSync(seedIsoPath);
-            console.log(`[VM-${vm_id}] ✓ Deleted old seed ISO: ${seedIsoPath}`);
-          } catch (delErr) {
-            console.error(`[VM-${vm_id}] Failed to delete old seed: ${delErr.message}`);
-          }
-        } else {
-          console.log(`[VM-${vm_id}] Old seed not found (OK if first time)`);
-        }
-        
-        // Fetch updated VM with new config and create new seed ISO
-        db.get(`SELECT * FROM vms WHERE vm_id = ?`, [vm_id], (err, updatedVm) => {
-          if (err) {
-            console.error(`[VM-${vm_id}] Failed to fetch updated VM:`, err.message);
-            return;
-          }
-          
-          if (!updatedVm) {
-            console.error(`[VM-${vm_id}] Updated VM not found in database`);
-            return;
-          }
-          
-          console.log(`[VM-${vm_id}] Creating new seed ISO with config - network_type: ${updatedVm.network_type}, ipv4: ${updatedVm.ipv4_address}, gateway: ${updatedVm.ipv4_gateway || updatedVm.gateway}`);
-          
-          createCloudInitSeed(vm_id, updatedVm)
-            .then(() => {
-              console.log(`[VM-${vm_id}] ✓ New cloud-init seed ISO created successfully`);
-              logVMAction(vm_id, 'edit', 'success', `Cloud-init seed regenerated with updated configuration. Changes will apply on next VM boot.`);
-            })
-            .catch(seedErr => {
-              console.error(`[VM-${vm_id}] ✗ Failed to create cloud-init seed: ${seedErr.message}`);
-              logVMAction(vm_id, 'edit', 'warning', `Configuration updated but cloud-init seed creation failed: ${seedErr.message}`);
-            });
-        });
-      } catch (err) {
-        console.error(`[VM-${vm_id}] Error during seed regeneration:`, err.message);
-      }
-      
-      res.json({ success: true, message: 'VM configuration updated', vm_id });
-    });
+    try {
+      await dbRunAsync(query, values);
+      console.log(`[VM-${vm_id}] Template type check: '${originalVm.template_type}'`);
+      console.log(`[VM-${vm_id}] Regenerating cloud-init seed with updated configuration...`);
+      const seedIsoPath = path.join(VM_DIR, `vm-${vm_id}-seed.iso`);
+      if (fs.existsSync(seedIsoPath)) fs.unlinkSync(seedIsoPath);
+      const updatedVm = await dbGetAsync(`SELECT * FROM vms WHERE vm_id = ?`, [vm_id]);
+      if (!updatedVm) throw new Error('Updated VM was not found while regenerating its cloud-init seed.');
+      await createCloudInitSeed(vm_id, updatedVm);
+      if (hkvmV3Context) await hkvmV3Context.kvmAdapter.syncRegistryRow(Number(vm_id)).catch(() => undefined);
+      logVMAction(vm_id, 'edit', 'success', 'VM configuration and cloud-init seed updated. Changes apply on the next boot.');
+      return res.json({ success: true, message: 'VM configuration updated', vm_id });
+    } catch (updateErr) {
+      console.error(`[VM-${vm_id}] Configuration/seed update failed:`, updateErr.message);
+      logVMAction(vm_id, 'edit', 'failed', `Configuration or cloud-init seed update failed: ${updateErr.message}`);
+      return res.status(500).json({ error: updateErr.message || 'Failed to update VM configuration.' });
+    }
   });
 });
 
@@ -2601,7 +2508,7 @@ app.get('/api/vms/:vm_id/stats', checkAuth, async (req, res) => {
 // POST /api/vms/:vm_id/reinstall
 // Owner can reinstall their VM with a different OS template
 // Deletes disk and seed ISO but keeps logs
-app.post('/api/vms/:vm_id/reinstall', checkAuth, async (req, res) => {
+app.post('/api/vms/:vm_id/reinstall', checkAuth, trackLegacyKvmMutation('reinstall'), async (req, res) => {
   try {
     const vm_id = req.params.vm_id;
     const { new_os_template, new_username, new_password, confirm } = req.body;
@@ -3260,8 +3167,64 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
   );
 });
 
+// Serialize legacy KVM mutation routes with unified lifecycle operations. The HTTP contract stays
+// synchronous; the task row is for conflict prevention/history, not a background job response.
+function trackLegacyKvmMutation(action) {
+  return (req, res, next) => {
+    const context = hkvmV3Context;
+    const instanceRefId = Number(req.params.vm_id);
+    const actorId = Number(req.session && req.session.userId);
+    if (!context) return res.status(503).json({ error: 'TGVPANEL runtime initializing' });
+    if (!Number.isInteger(instanceRefId) || instanceRefId < 1 || !Number.isInteger(actorId) || actorId < 1) {
+      return res.status(400).json({ error: 'Invalid VPS or user identifier.' });
+    }
+
+    context.instanceManager.tasks.runSync({
+      engine: 'kvm',
+      instanceRefId,
+      actorId,
+      action: `legacy_${action}`,
+      worker: async (reportProgress) => {
+        await reportProgress(null, `Executing legacy ${action} operation`);
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            if (res.statusCode >= 400) {
+              reject(Object.assign(new Error(`Legacy VPS operation returned HTTP ${res.statusCode}.`), { statusCode: res.statusCode }));
+            } else {
+              resolve({ httpStatus: res.statusCode });
+            }
+          };
+          const closed = () => {
+            // A disconnected client does not cancel hypervisor work. Keep the task lock until
+            // the handler completes; releasing it here could permit overlapping mutations.
+            if (!settled) {
+              reportProgress(null, 'Client disconnected; awaiting operation completion').catch(() => undefined);
+            }
+          };
+          res.once('finish', finish);
+          res.once('close', closed);
+          try {
+            next();
+          } catch (err) {
+            if (!settled) {
+              settled = true;
+              reject(err);
+            }
+          }
+        });
+      },
+    }).catch((err) => {
+      // A conflict occurs before route execution, so it still has a writable response.
+      if (!res.headersSent) res.status(err.statusCode || 500).json({ error: err.message || 'VPS operation failed.' });
+    });
+  };
+}
+
 // VM START (Using VM ID)
-app.post('/api/vms/:vm_id/start', checkAuth, async (req, res) => {
+app.post('/api/vms/:vm_id/start', checkAuth, trackLegacyKvmMutation('start'), async (req, res) => {
   try {
     const userId = req.session.userId;
     let query = `SELECT * FROM vms WHERE vm_id = ?`;
@@ -3282,6 +3245,9 @@ app.post('/api/vms/:vm_id/start', checkAuth, async (req, res) => {
       if (vm.status === 'running') {
         console.log(`[API] VM ${vm.vm_id} already running`);
         return res.json({ success: true, message: `VM ${vm.vm_name} is already running` });
+      }
+      if (vm.service_locked) {
+        return res.status(423).json({ error: 'This VM has an administrative service lock; unlock it before starting.' });
       }
 
       try {
@@ -3311,7 +3277,7 @@ app.post('/api/vms/:vm_id/start', checkAuth, async (req, res) => {
 });
 
 // VM STOP (Using VM ID)
-app.post('/api/vms/:vm_id/stop', checkAuth, (req, res) => {
+app.post('/api/vms/:vm_id/stop', checkAuth, trackLegacyKvmMutation('stop'), (req, res) => {
   const userId = req.session.userId;
   let query = `SELECT * FROM vms WHERE vm_id = ?`;
   let params = [req.params.vm_id];
@@ -3372,7 +3338,7 @@ app.post('/api/vms/:vm_id/stop', checkAuth, (req, res) => {
 });
 
 // VM RESTART (Using VM ID)
-app.post('/api/vms/:vm_id/restart', checkAuth, async (req, res) => {
+app.post('/api/vms/:vm_id/restart', checkAuth, trackLegacyKvmMutation('restart'), async (req, res) => {
   try {
     const userId = req.session.userId;
     let query = `SELECT * FROM vms WHERE vm_id = ?`;
@@ -3386,6 +3352,9 @@ app.post('/api/vms/:vm_id/restart', checkAuth, async (req, res) => {
     
     db.get(query, params, async (err, vm) => {
       if (err || !vm) return res.status(404).json({ error: 'VM not found or access denied' });
+      if (vm.service_locked) {
+        return res.status(423).json({ error: 'This VM has an administrative service lock; unlock it before restarting.' });
+      }
 
       try {
         const pidFile = path.join(VM_DIR, `vm-${vm.vm_id}.pid`);
@@ -3534,7 +3503,7 @@ async function performFullVmDelete(vm, actorUserId = null) {
 }
 
 // VM DELETE (Using VM ID)
-app.delete('/api/vms/:vm_id', checkAuth, (req, res) => {
+app.delete('/api/vms/:vm_id', checkAuth, trackLegacyKvmMutation('delete'), (req, res) => {
   db.get(`SELECT * FROM vms WHERE vm_id = ?`, [req.params.vm_id], async (err, vm) => {
     if (err || !vm) return res.status(404).json({ error: 'VM not found' });
     if (req.session.role !== 'admin' && vm.owner_id !== req.session.userId) {
@@ -3597,7 +3566,7 @@ app.get('/api/vms/:vm_id/snapshots', checkAuth, (req, res) => {
 // ============= ISO ATTACH/DETACH ENDPOINTS =============
 
 // Attach ISO to VM (for ISO templates or manual ISO installation)
-app.post('/api/vms/:vm_id/iso/attach', checkAuth, async (req, res) => {
+app.post('/api/vms/:vm_id/iso/attach', checkAuth, trackLegacyKvmMutation('iso_attach'), async (req, res) => {
   try {
     const vm_id = req.params.vm_id;
     const { iso_file } = req.body;
@@ -3647,7 +3616,7 @@ app.post('/api/vms/:vm_id/iso/attach', checkAuth, async (req, res) => {
 });
 
 // Detach ISO from VM
-app.post('/api/vms/:vm_id/iso/detach', checkAuth, async (req, res) => {
+app.post('/api/vms/:vm_id/iso/detach', checkAuth, trackLegacyKvmMutation('iso_detach'), async (req, res) => {
   try {
     const vm_id = req.params.vm_id;
     const userId = req.session.userId;
@@ -3716,7 +3685,7 @@ app.get('/api/vms/:vm_id/iso/status', checkAuth, async (req, res) => {
   }
 });
 
-app.post('/api/vms/:vm_id/snapshots', checkAuth, async (req, res) => {
+app.post('/api/vms/:vm_id/snapshots', checkAuth, trackLegacyKvmMutation('snapshot'), async (req, res) => {
   const userId = req.session.userId;
   const { snapshot_name, description } = req.body;
   
@@ -4910,6 +4879,22 @@ function buildQemuNatNetdevSpec(vm, netdevId = 'n0') {
 }
 
 async function startQemuVM(vm) {
+  // Device records are data-only JSON from migration v020. Fail closed on malformed state
+  // rather than starting a VM with a silently missing disk or network interface.
+  const deviceConfig = await dbGetAsync(
+    `SELECT extra_disks_json, extra_nics_json FROM vms WHERE vm_id = ?`,
+    [vm.vm_id]
+  );
+  let extraDisks;
+  let extraNics;
+  try {
+    extraDisks = JSON.parse(deviceConfig?.extra_disks_json || '[]');
+    extraNics = JSON.parse(deviceConfig?.extra_nics_json || '[]');
+    if (!Array.isArray(extraDisks) || !Array.isArray(extraNics)) throw new Error('not arrays');
+    extraDisks = extraDisks.filter(disk => disk?.attached !== false);
+  } catch {
+    throw new Error('KVM device configuration is invalid; VM start was blocked.');
+  }
   return new Promise((resolve, reject) => {
     try {
       const pidFile = path.join(VM_DIR, `vm-${vm.vm_id}.pid`);
@@ -4946,9 +4931,17 @@ async function startQemuVM(vm) {
         `-cpu`, cpuToUse,
         `-name`, `vm-${vm.vm_id}`,
         `-machine`, `${vm.machine_type || 'pc'},accel=kvm:tcg`,
-        `-enable-kvm`,
-        `-nographic`
+        `-enable-kvm`
       ];
+      const vncPort = Number(vm.vnc_port || 0);
+      if (vncPort) {
+        if (!Number.isInteger(vncPort) || vncPort < 5900 || vncPort >= 65000) {
+          throw new Error('Configured VNC port is invalid; VM start was blocked.');
+        }
+        args.push('-vnc', `127.0.0.1:${vncPort - 5900}`);
+      } else {
+        args.push('-nographic');
+      }
       
       // SMBIOS Configuration
       const smbiosManufacturer = vm.smbios_manufacturer || vm.custom_smbios_manufacturer || 'QEMU';
@@ -5002,6 +4995,30 @@ async function startQemuVM(vm) {
         '-drive',
         `file=${diskPath},format=qcow2,if=virtio,media=disk`
       );
+
+      const devicesRoot = path.join(VM_DIR, `vm-${vm.vm_id}-devices`);
+      for (let i = 0; i < extraDisks.length; i += 1) {
+        const disk = extraDisks[i];
+        if (!disk || !/^[0-9a-f-]{36}$/i.test(String(disk.id || '')) || disk.format !== 'qcow2') {
+          throw new Error('An attached disk entry is invalid; VM start was blocked.');
+        }
+        let realDevicesRoot;
+        let realDiskPath;
+        try {
+          realDevicesRoot = fs.realpathSync(devicesRoot);
+          realDiskPath = fs.realpathSync(String(disk.path || ''));
+        } catch {
+          throw new Error('An attached disk image is missing; VM start was blocked.');
+        }
+        const relativeDirectory = path.relative(fs.realpathSync(VM_DIR), realDevicesRoot);
+        const relative = path.relative(realDevicesRoot, realDiskPath);
+        if (!relativeDirectory || relativeDirectory === '..' || relativeDirectory.startsWith(`..${path.sep}`) || path.isAbsolute(relativeDirectory) || path.basename(realDevicesRoot) !== `vm-${vm.vm_id}-devices` || !relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || path.basename(realDiskPath) !== `${disk.id}.qcow2`) {
+          throw new Error('An attached disk path is outside its managed device directory; VM start was blocked.');
+        }
+        const driveId = `extra-disk-${i}`;
+        args.push('-drive', `file=${realDiskPath},format=qcow2,if=none,id=${driveId}`);
+        args.push('-device', `virtio-blk-pci,drive=${driveId}`);
+      }
       
       // ISO media (if attached) - CD/DVD drive
       if (vm.iso_attached) {
@@ -5063,6 +5080,17 @@ async function startQemuVM(vm) {
         console.log(`[VM-${vm.vm_id}] Gateway: ${vm.gateway}`);
         console.log(`[VM-${vm.vm_id}] DNS: ${dnsServers}`);
         console.log(`[VM-${vm.vm_id}] MAC Address: ${macAddress}`);
+      }
+
+      for (let i = 0; i < extraNics.length; i += 1) {
+        const nic = extraNics[i];
+        const mac = String(nic?.macAddress || '').toLowerCase();
+        if (!/^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/.test(mac) || nic?.model !== 'virtio-net-pci' || nic?.networkMode !== 'user') {
+          throw new Error('An attached network interface entry is invalid; VM start was blocked.');
+        }
+        const netdevId = `extra-net-${i}`;
+        args.push('-netdev', `user,id=${netdevId}`);
+        args.push('-device', `virtio-net-pci,netdev=${netdevId},mac=${mac}`);
       }
       
       // Serial console with monitor support - stdin/stdout for direct terminal access
@@ -5586,6 +5614,33 @@ const sshSessions = new Map();
 wss.on('connection', (ws, req) => {
   const url = req.url;
   console.log(`[WebSocket] New connection: ${url}`);
+
+  if (url.startsWith('/vnc/')) {
+    const port = Number(ws.vncPort || 0);
+    if (!Number.isInteger(port) || port < 5900 || port >= 65000) {
+      ws.close(1008, 'VNC is not configured');
+      return;
+    }
+    const upstream = net.createConnection({ host: '127.0.0.1', port });
+    ws.vncUpstream = upstream;
+    upstream.setNoDelay(true);
+    upstream.once('error', () => {
+      if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'VNC service is unavailable');
+    });
+    upstream.on('data', (chunk) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(chunk, { binary: true });
+    });
+    ws.on('message', (data, isBinary) => {
+      if (!isBinary) return ws.close(1003, 'VNC requires binary WebSocket frames');
+      if (upstream.writable) upstream.write(Buffer.isBuffer(data) ? data : Buffer.from(data));
+    });
+    ws.on('close', () => upstream.destroy());
+    ws.on('error', () => upstream.destroy());
+    upstream.on('close', () => {
+      if (ws.readyState === WebSocket.OPEN) ws.close();
+    });
+    return;
+  }
   
   // SSH Terminal WebSocket - Path: /ssh-terminal
   if (url.startsWith('/ssh-terminal')) {
@@ -5884,6 +5939,60 @@ server.on('upgrade', (req, socket, head) => {
       wss.handleUpgrade(req, socket, head, (ws) => {
         ws.authUser = { id: req.session.userId, role: req.session.role };
         wss.emit('connection', ws, req);
+      });
+      return;
+    }
+
+    if (urlPath.startsWith('/vnc/')) {
+      // Prevent a hostile site from using a victim's authenticated browser session to
+      // attach to its VNC console. Non-browser clients may omit Origin; when supplied,
+      // it must match the externally visible Host accepted by this server/proxy.
+      const origin = req.headers.origin;
+      if (origin) {
+        try {
+          const parsedOrigin = new URL(origin);
+          if (!['http:', 'https:'].includes(parsedOrigin.protocol) || parsedOrigin.host !== req.headers.host) {
+            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+            socket.destroy();
+            return;
+          }
+        } catch {
+          socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+      }
+      const vmId = Number(urlPath.slice('/vnc/'.length));
+      if (!Number.isInteger(vmId) || vmId < 1) {
+        socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      db.get(`SELECT owner_id, shared_with, vnc_port FROM vms WHERE vm_id = ?`, [vmId], (err, vm) => {
+        if (err || !vm) {
+          socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+        let shared = [];
+        try { shared = JSON.parse(vm.shared_with || '[]').map(Number); } catch { shared = []; }
+        const staff = ['admin', 'subadmin', 'operator'].includes(req.session.role);
+        if (!staff && Number(vm.owner_id) !== Number(req.session.userId) && !shared.includes(Number(req.session.userId))) {
+          socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+        const vncPort = Number(vm.vnc_port || 0);
+        if (!Number.isInteger(vncPort) || vncPort < 5900 || vncPort >= 65000) {
+          socket.write('HTTP/1.1 409 Conflict\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          ws.authUser = { id: req.session.userId, role: req.session.role };
+          ws.vncPort = vncPort;
+          wss.emit('connection', ws, req);
+        });
       });
       return;
     }
