@@ -788,7 +788,9 @@ export class BackupSnapshotManager {
    * archives first), then structurally inspects the tar.gz (entry count + top-level
    * container dir) so an operator can see whether a restore would succeed before
    * touching the live container. For remote archives it delegates to the node agent's
-   * rehearsal endpoint. Returns a structured, human-readable verdict.
+   * rehearsal endpoint. KVM disk archives are validated for integrity/structure but
+   * are reported as not restorable because live archive restore is an LXC-only path
+   * (KVM instances revert via QCOW2 snapshots). Returns a structured verdict.
    */
   public async rehearseRestore(backupId: number): Promise<{
     restorable: boolean;
@@ -833,6 +835,15 @@ export class BackupSnapshotManager {
       sizeBytes: bkp.size_bytes ? Number(bkp.size_bytes) : null,
       reasons,
     };
+
+    // Live archive restore is implemented for LXC backups only; KVM instances revert
+    // via QCOW2 snapshots. Structural/checksum validation still runs so the operator
+    // sees an honest archive-health verdict, but such archives are never "restorable".
+    if (bkp.instance_type !== 'lxc') {
+      reasons.push(
+        'Live archive restore is supported for LXC backups only; KVM instances revert via QCOW2 snapshots.'
+      );
+    }
 
     // Remote archives: delegate structural + checksum inspection to the node agent.
     if (bkp.node_id && bkp.is_local === 0) {
@@ -916,7 +927,7 @@ export class BackupSnapshotManager {
       }
     }
 
-    base.restorable = base.checksumValid && base.archiveValid;
+    base.restorable = base.checksumValid && base.archiveValid && bkp.instance_type === 'lxc';
     if (base.restorable) {
       reasons.push('Backup is restorable.');
     }

@@ -6,6 +6,7 @@ import net from 'net';
 import { UnifiedDatabase } from '../../db/database';
 import { isBinaryAvailable, runAllowlistedCommand } from '../../node-agent/command-runner';
 import { SafeValidators } from '../../security/middleware';
+import { encryptArchive } from '../backup/backup-crypto';
 import {
   InstanceCapabilityProfile,
   InstanceTelemetry,
@@ -1035,7 +1036,15 @@ export class KVMAdapter implements VirtualizationAdapter {
   public async createDiskBackup(
     vmId: number,
     backupDir = path.resolve(process.cwd(), 'data', 'instance-backups')
-  ): Promise<{ backupId: number; filePath: string; sizeBytes: number; checksumSha256: string }> {
+  ): Promise<{
+    backupId: number;
+    backupName: string;
+    filePath: string;
+    sizeBytes: number;
+    checksumSha256: string;
+    encrypted: boolean;
+    encryptionAlg: string;
+  }> {
     const vm = await this.db.get<any>(`SELECT * FROM vms WHERE vm_id = ?`, [vmId]);
     if (!vm) throw new Error(`KVM VM #${vmId} not found.`);
     const diskPath = this.resolveVmDiskPath(vm);
@@ -1064,15 +1073,28 @@ export class KVMAdapter implements VirtualizationAdapter {
       s.on('end', () => resolve());
     });
     const checksumSha256 = hash.digest('hex');
-    const sizeBytes = fs.statSync(outFile).size;
+
+    // Encrypt the archive at rest with AES-256-GCM (same TGVENC1 format as local
+    // LXC backups). The recorded checksum remains the decrypted-content SHA-256;
+    // sizeBytes records the plaintext archive size, matching the LXC path.
+    const enc = encryptArchive(outFile);
+    const sizeBytes = enc.plaintextSizeBytes;
 
     const ins = await this.db.run(
       `INSERT INTO container_backups
-         (instance_type, instance_ref_id, node_id, backup_name, file_path, size_bytes, sha256, checksum_sha256, verified, status)
-       VALUES ('kvm', ?, COALESCE(?, 1), ?, ?, ?, ?, ?, 1, 'completed')`,
-      [vm.vm_id, vm.node_id, backupName, outFile, sizeBytes, checksumSha256, checksumSha256]
+         (instance_type, instance_ref_id, node_id, backup_name, file_path, size_bytes, sha256, checksum_sha256, encrypted, encryption_alg, verified, status)
+       VALUES ('kvm', ?, COALESCE(?, 1), ?, ?, ?, ?, ?, 1, 'aes-256-gcm', 1, 'completed')`,
+      [vm.vm_id, vm.node_id, backupName, enc.encryptedPath, sizeBytes, checksumSha256, checksumSha256]
     );
 
-    return { backupId: ins.lastID, filePath: outFile, sizeBytes, checksumSha256 };
+    return {
+      backupId: ins.lastID,
+      backupName,
+      filePath: enc.encryptedPath,
+      sizeBytes,
+      checksumSha256,
+      encrypted: true,
+      encryptionAlg: 'aes-256-gcm',
+    };
   }
 }

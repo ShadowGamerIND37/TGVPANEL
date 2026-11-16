@@ -17,6 +17,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const sqlite3 = require('sqlite3');
 const WebSocket = require('ws');
+const { isEncryptedArchive } = require('../lib/services/backup/backup-crypto');
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tgvpanel-acceptance-'));
 const testDbPath = path.join(tmpRoot, 'tgvpanel.db');
@@ -2067,6 +2068,26 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const verRes = await adminClient.request('POST', `/api/v1/backups/${bkId}/verify`, {});
       assert.strictEqual(verRes.status, 200, `Verify failed: ${verRes.text}`);
       assert.strictEqual(verRes.json.valid, true);
+
+      // Phase 18: KVM disk backups are encrypted at rest (AES-256-GCM, TGVENC1).
+      assert.strictEqual(bkRes.json.backup.encrypted, true, 'KVM backup response must report encryption');
+      assert.strictEqual(bkRes.json.backup.encryptionAlg, 'aes-256-gcm');
+      const kvmBkpRow = await ctx.db.get(
+        `SELECT encrypted, encryption_alg, file_path FROM container_backups WHERE id = ?`,
+        [bkId]
+      );
+      assert.strictEqual(Number(kvmBkpRow.encrypted), 1, 'KVM backup must be marked encrypted');
+      assert.strictEqual(kvmBkpRow.encryption_alg, 'aes-256-gcm');
+      assert.ok(
+        isEncryptedArchive(kvmBkpRow.file_path),
+        'Stored KVM backup archive must be encrypted on disk'
+      );
+      // Rehearsal validates the encrypted archive but honestly refuses KVM live restore.
+      const kvmRehearse = await adminClient.request('POST', `/api/v1/backups/${bkId}/rehearse`, {});
+      assert.strictEqual(kvmRehearse.status, 200, `KVM rehearsal failed: ${kvmRehearse.text}`);
+      assert.strictEqual(kvmRehearse.json.encrypted, true);
+      assert.strictEqual(kvmRehearse.json.checksumValid, true);
+      assert.strictEqual(kvmRehearse.json.restorable, false, 'KVM archive live restore must be refused');
 
       await ctx.monitoringService.collectCycle();
       const monRes = await adminClient.request('GET', '/api/v1/monitoring/overview');

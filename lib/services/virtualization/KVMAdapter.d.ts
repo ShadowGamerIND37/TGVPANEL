@@ -125,8 +125,11 @@ export declare class KVMAdapter implements VirtualizationAdapter {
     deleteQcow2Snapshot(vmId: number, snapshotId: number): Promise<void>;
     createDiskBackup(vmId: number, backupDir?: string): Promise<{
         backupId: number;
+        backupName: string;
         filePath: string;
         sizeBytes: number;
         checksumSha256: string;
+        encrypted: boolean;
+        encryptionAlg: string;
     }>;
 }

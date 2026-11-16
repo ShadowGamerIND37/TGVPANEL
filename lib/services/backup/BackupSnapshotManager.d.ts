@@ -76,9 +76,18 @@ export declare class BackupSnapshotManager {
         actorId?: number;
     }): Promise<{
         backupId: number;
+        backupName: string;
         filePath: string;
         sizeBytes: number;
         checksumSha256: string;
+        encrypted: boolean;
+        encryptionAlg: string;
+    } | {
+        backupName: string;
+        filePath: string;
+        sizeBytes: number;
+        checksumSha256: string;
+        backupId: number;
     }>;
     getBackupRecord(backupId: number): Promise<any | undefined>;
     verifyBackupIntegrity(backupId: number): Promise<{
@@ -92,7 +101,9 @@ export declare class BackupSnapshotManager {
      * archives first), then structurally inspects the tar.gz (entry count + top-level
      * container dir) so an operator can see whether a restore would succeed before
      * touching the live container. For remote archives it delegates to the node agent's
-     * rehearsal endpoint. Returns a structured, human-readable verdict.
+     * rehearsal endpoint. KVM disk archives are validated for integrity/structure but
+     * are reported as not restorable because live archive restore is an LXC-only path
+     * (KVM instances revert via QCOW2 snapshots). Returns a structured verdict.
      */
     rehearseRestore(backupId: number): Promise<{
         restorable: boolean;

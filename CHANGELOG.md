@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Phase 18 KVM disk backup encryption at rest (2026-10-30)
+
+- Closed the backup encryption gap documented after Phase 7: KVM disk backups were stored as plain `tar.gz` archives, while only local LXC archives were encrypted at rest. `KVMAdapter.createDiskBackup` now encrypts the created archive with the existing AES-256-GCM `TGVENC1` machinery (`backup-crypto.ts`), stores the `<file>.enc` (0600) and removes the plaintext, and records `encrypted = 1` / `encryption_alg = 'aes-256-gcm'` on the `container_backups` row. The recorded `checksum_sha256` remains the **decrypted-content** SHA-256 and `size_bytes` the plaintext archive size, matching the local LXC path exactly.
+- Backward compatible: the existing verify/rehearse/copy/download paths already decrypt only when the `encrypted` flag is set, so previously created unencrypted KVM archives remain verifiable; no migration is required (the `encrypted`/`encryption_alg` columns exist since v023). Scheduled KVM backups encrypt automatically because they run through `createBackup`.
+- Restore rehearsal honesty fix: `rehearseRestore` still validates KVM archives (checksum + tar structure, decrypting encrypted archives first) but now reports them as **not restorable** with an explicit reason — live archive restore is an LXC-only path and KVM instances revert via QCOW2 snapshots. Previously a structurally valid KVM archive would have been reported "restorable" even though `restoreBackup` refuses KVM backups.
+- T11 asserts the KVM backup response reports `encrypted: true` / `encryptionAlg: 'aes-256-gcm'`, the stored row is flagged encrypted, the on-disk file carries the `TGVENC1` magic, verification still passes, and rehearsal reports `checksumValid: true` with `restorable: false`.
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 17 instance metrics history (record-on-read) (2026-10-30)
 
 - Fixed an instance metrics history gap: the monitoring background loop recorded only **node** metrics to `metrics_history`, so `GET /instances/:engine/:id/metrics` always returned an empty history for KVM/LXC instances. Added `MonitoringService.recordInstanceMetrics(engine, targetId, sample)`, and the telemetry endpoint (`GET /instances/:engine/:id/telemetry`) now persists each real measured sample to `metrics_history` on read (best-effort; a recording failure never fails the telemetry response).

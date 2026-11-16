@@ -71,12 +71,15 @@ network exposure, and secret management.
 
 ### Backup encryption at rest
 
-- Local LXC backup archives are encrypted at rest with **AES-256-GCM**
+- Local **LXC and KVM** backup archives are encrypted at rest with **AES-256-GCM**
   (`backup-crypto.ts`, format `TGVENC1`). Encrypted archives are written as
-  `<file>.enc` (0600) and the plaintext is removed; verification/restore
-  decrypts to a confined temp file.
-- Remote-node backups are left unencrypted for compatibility; apply transport
-  security (TLS) and destination-side protection for remote copies.
+  `<file>.enc` (0600) and the plaintext is removed; verification/rehearsal/restore
+  decrypt to a confined temp file. KVM disk backups (panel-host `tar.gz` archives)
+  are encrypted the same way, with the recorded checksum remaining the
+  decrypted-content SHA-256.
+- Remote-node backups (archives created and stored by a remote node agent) are left
+  unencrypted for compatibility; apply transport security (TLS) and
+  destination-side protection for remote copies.
 - Migration **v023** records `encrypted` + `encryption_alg` per backup.
 
 ## Command execution boundary
