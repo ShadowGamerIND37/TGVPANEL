@@ -10,6 +10,9 @@ export class BackupSnapshotManager {
   private db: UnifiedDatabase;
   private nodeManager: NodeManager;
   private virt: VirtualizationManager;
+  private scheduleTimer: NodeJS.Timeout | null = null;
+  private scheduleBootTimer: NodeJS.Timeout | null = null;
+  private isRunningSchedules = false;
 
   constructor(
     db: UnifiedDatabase,
@@ -19,6 +22,254 @@ export class BackupSnapshotManager {
     this.db = db;
     this.nodeManager = nodeManager;
     this.virt = virt;
+  }
+
+  private nextRunAt(frequency: string, from = new Date()): string {
+    const next = new Date(from);
+    if (frequency === 'hourly') next.setUTCHours(next.getUTCHours() + 1);
+    else if (frequency === 'daily') next.setUTCDate(next.getUTCDate() + 1);
+    else if (frequency === 'weekly') next.setUTCDate(next.getUTCDate() + 7);
+    else throw new Error('Frequency must be hourly, daily, or weekly.');
+    return next.toISOString().slice(0, 19).replace('T', ' ');
+  }
+
+  public startScheduleLoop(intervalMs = 60_000): void {
+    if (this.scheduleTimer) return;
+    this.scheduleBootTimer = setTimeout(() => {
+      this.scheduleBootTimer = null;
+      this.runDueBackupSchedules().catch((err) => {
+        console.error('[Backup Scheduler] Initial cycle failed:', err?.message || err);
+      });
+    }, 5000);
+    this.scheduleBootTimer.unref?.();
+    this.scheduleTimer = setInterval(() => {
+      this.runDueBackupSchedules().catch((err) => {
+        console.error('[Backup Scheduler] Cycle failed:', err?.message || err);
+      });
+    }, intervalMs);
+    this.scheduleTimer.unref?.();
+  }
+
+  public stopScheduleLoop(): void {
+    if (this.scheduleTimer) clearInterval(this.scheduleTimer);
+    if (this.scheduleBootTimer) clearTimeout(this.scheduleBootTimer);
+    this.scheduleTimer = null;
+    this.scheduleBootTimer = null;
+  }
+
+  public async listBackupSchedules(filter?: { engine?: 'kvm' | 'lxc'; refId?: number }) {
+    if (filter?.engine && filter.refId !== undefined) {
+      return this.db.all<any>(
+        `SELECT s.*, COALESCE(v.vm_name, l.container_name) AS instance_name
+         FROM backup_schedules s
+         LEFT JOIN vms v ON s.instance_type = 'kvm' AND v.vm_id = s.instance_ref_id
+         LEFT JOIN lxc_instances l ON s.instance_type = 'lxc' AND l.id = s.instance_ref_id
+         WHERE s.instance_type = ? AND s.instance_ref_id = ?`,
+        [filter.engine, filter.refId]
+      );
+    }
+    return this.db.all<any>(
+      `SELECT s.*, COALESCE(v.vm_name, l.container_name) AS instance_name
+       FROM backup_schedules s
+       LEFT JOIN vms v ON s.instance_type = 'kvm' AND v.vm_id = s.instance_ref_id
+       LEFT JOIN lxc_instances l ON s.instance_type = 'lxc' AND l.id = s.instance_ref_id
+       ORDER BY s.next_run ASC, s.id ASC`
+    );
+  }
+
+  public async upsertBackupSchedule(params: {
+    engine: 'kvm' | 'lxc';
+    refId: number;
+    frequency: 'hourly' | 'daily' | 'weekly';
+    retentionCount: number;
+    actorId: number;
+    ownerUserId: number;
+  }) {
+    if (!['kvm', 'lxc'].includes(params.engine)) throw new Error('Unsupported backup schedule instance type.');
+    if (!Number.isInteger(params.refId) || params.refId < 1) throw new Error('Invalid instance ID.');
+    if (!['hourly', 'daily', 'weekly'].includes(params.frequency)) throw new Error('Frequency must be hourly, daily, or weekly.');
+    if (!Number.isInteger(params.retentionCount) || params.retentionCount < 1 || params.retentionCount > 365) {
+      throw new Error('Retention must be an integer between 1 and 365 scheduled backups.');
+    }
+    const nextRun = this.nextRunAt(params.frequency);
+    await this.db.run(
+      `INSERT INTO backup_schedules
+         (instance_type, instance_ref_id, enabled, frequency, retention_count, next_run,
+          created_by, owner_user_id, last_status, last_error, updated_at)
+       VALUES (?, ?, 1, ?, ?, ?, ?, ?, 'scheduled', NULL, datetime('now'))
+       ON CONFLICT(instance_type, instance_ref_id) DO UPDATE SET
+         enabled = 1, frequency = excluded.frequency, retention_count = excluded.retention_count,
+         next_run = excluded.next_run, created_by = excluded.created_by,
+         owner_user_id = excluded.owner_user_id, last_status = 'scheduled', last_error = NULL,
+         updated_at = datetime('now')`,
+      [params.engine, params.refId, params.frequency, params.retentionCount, nextRun, params.actorId, params.ownerUserId]
+    );
+    const schedule = await this.db.get<any>(
+      `SELECT * FROM backup_schedules WHERE instance_type = ? AND instance_ref_id = ?`,
+      [params.engine, params.refId]
+    );
+    await this.db.logActivity({
+      userId: params.actorId,
+      action: 'backup_schedule_saved',
+      resourceType: params.engine,
+      resourceId: String(params.refId),
+      details: { frequency: params.frequency, retentionCount: params.retentionCount, nextRun },
+    });
+    return schedule;
+  }
+
+  public async deleteBackupSchedule(engine: 'kvm' | 'lxc', refId: number, actorId: number): Promise<void> {
+    await this.db.run(
+      `DELETE FROM backup_schedules WHERE instance_type = ? AND instance_ref_id = ?`,
+      [engine, refId]
+    );
+    await this.db.logActivity({
+      userId: actorId,
+      action: 'backup_schedule_deleted',
+      resourceType: engine,
+      resourceId: String(refId),
+    });
+  }
+
+  /** Execute due schedules once; each schedule is claimed transactionally to avoid duplicate runs. */
+  public async runDueBackupSchedules(): Promise<{ processed: number; succeeded: number; failed: number }> {
+    if (this.isRunningSchedules) return { processed: 0, succeeded: 0, failed: 0 };
+    this.isRunningSchedules = true;
+    let processed = 0;
+    let succeeded = 0;
+    let failed = 0;
+    try {
+      const due = await this.db.all<any>(
+        `SELECT * FROM backup_schedules
+         WHERE enabled = 1 AND (
+           next_run IS NULL OR datetime(next_run) <= datetime('now') OR
+           (last_status = 'running' AND datetime(last_run) <= datetime('now', '-2 hours'))
+         )
+         ORDER BY COALESCE(next_run, created_at), id LIMIT 10`
+      );
+      for (const candidate of due) {
+        let claimed = false;
+        await this.db.transaction(async () => {
+          const current = await this.db.get<any>(
+            `SELECT * FROM backup_schedules
+             WHERE id = ? AND enabled = 1 AND (
+               next_run IS NULL OR datetime(next_run) <= datetime('now') OR
+               (last_status = 'running' AND datetime(last_run) <= datetime('now', '-2 hours'))
+             )`,
+            [candidate.id]
+          );
+          if (!current) return;
+          const frequency = ['hourly', 'daily', 'weekly'].includes(current.frequency) ? current.frequency : 'daily';
+          const nextRun = this.nextRunAt(frequency);
+          await this.db.run(
+            `UPDATE backup_schedules
+             SET frequency = ?, last_run = datetime('now'), next_run = ?, last_status = 'running', last_error = NULL,
+                 updated_at = datetime('now') WHERE id = ?`,
+            [frequency, nextRun, current.id]
+          );
+          Object.assign(candidate, current, { frequency, next_run: nextRun });
+          claimed = true;
+        });
+        if (!claimed) continue;
+
+        processed += 1;
+        const instanceExists = candidate.instance_type === 'kvm'
+          ? await this.db.get(`SELECT vm_id FROM vms WHERE vm_id = ?`, [candidate.instance_ref_id])
+          : await this.db.get(`SELECT id FROM lxc_instances WHERE id = ?`, [candidate.instance_ref_id]);
+        if (!instanceExists) {
+          await this.db.run(
+            `UPDATE backup_schedules SET enabled = 0, last_status = 'orphaned',
+             last_error = 'Instance no longer exists; schedule disabled.', updated_at = datetime('now') WHERE id = ?`,
+            [candidate.id]
+          );
+          failed += 1;
+          continue;
+        }
+
+        try {
+          const backup = await this.createBackup({
+            engine: candidate.instance_type,
+            refId: Number(candidate.instance_ref_id),
+            label: `auto_s${candidate.id}_${Date.now()}`,
+            actorId: candidate.owner_user_id || candidate.created_by || undefined,
+          });
+          const integrity = await this.verifyBackupIntegrity(Number(backup.backupId));
+          if (
+            !/^[a-f0-9]{64}$/i.test(String(integrity.expectedSha256 || '')) ||
+            !integrity.actualSha256 ||
+            !integrity.valid
+          ) {
+            await this.deleteBackup(Number(backup.backupId)).catch(async () => {
+              await this.db.run(`UPDATE container_backups SET status = 'verification_failed' WHERE id = ?`, [backup.backupId]);
+            });
+            throw new Error('Scheduled backup is missing a valid SHA-256 checksum or failed integrity verification.');
+          }
+
+          await this.db.run(
+            `UPDATE container_backups SET is_scheduled = 1, schedule_id = ?, created_by = COALESCE(created_by, ?) WHERE id = ?`,
+            [candidate.id, candidate.owner_user_id || candidate.created_by || null, backup.backupId]
+          );
+          const requestedRetention = Number(candidate.retention_count);
+          const retentionCount = Number.isInteger(requestedRetention) && requestedRetention >= 1 && requestedRetention <= 365
+            ? requestedRetention
+            : 7;
+          const excess = await this.db.all<{ id: number }>(
+            `SELECT id FROM container_backups
+             WHERE schedule_id = ? AND is_scheduled = 1
+             ORDER BY id DESC LIMIT -1 OFFSET ?`,
+            [candidate.id, retentionCount]
+          );
+          for (const old of excess) await this.deleteBackup(old.id);
+
+          await this.db.run(
+            `UPDATE backup_schedules SET last_status = 'success', last_error = NULL,
+             last_backup_id = ?, updated_at = datetime('now') WHERE id = ?`,
+            [backup.backupId, candidate.id]
+          );
+          await this.db.logActivity({
+            userId: candidate.created_by || candidate.owner_user_id || null,
+            action: 'scheduled_backup_completed',
+            resourceType: candidate.instance_type,
+            resourceId: String(candidate.instance_ref_id),
+            details: { scheduleId: candidate.id, backupId: backup.backupId, checksumSha256: backup.checksumSha256 },
+          }).catch(() => undefined);
+          if (candidate.owner_user_id) {
+            await this.db.run(
+              `INSERT INTO notifications (user_id, type, title, message)
+               SELECT ?, 'success', 'Scheduled backup completed', ?
+               WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)`,
+              [candidate.owner_user_id, `Verified backup #${backup.backupId} completed; retention keeps the latest ${retentionCount}.`, candidate.owner_user_id]
+            ).catch(() => undefined);
+          }
+          succeeded += 1;
+        } catch (err: any) {
+          const message = String(err?.message || err || 'Backup failed').slice(0, 1000);
+          await this.db.run(
+            `UPDATE backup_schedules SET last_status = 'failed', last_error = ?, updated_at = datetime('now') WHERE id = ?`,
+            [message, candidate.id]
+          );
+          await this.db.logActivity({
+            userId: candidate.created_by || candidate.owner_user_id || null,
+            action: 'scheduled_backup_failed',
+            resourceType: candidate.instance_type,
+            resourceId: String(candidate.instance_ref_id),
+            details: { scheduleId: candidate.id, error: message },
+          }).catch(() => undefined);
+          if (candidate.owner_user_id) {
+            await this.db.run(
+              `INSERT INTO notifications (user_id, type, title, message)
+               SELECT ?, 'error', 'Scheduled backup failed', ?
+               WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)`,
+              [candidate.owner_user_id, `Scheduled backup failed: ${message}`, candidate.owner_user_id]
+            ).catch(() => undefined);
+          }
+          failed += 1;
+        }
+      }
+      return { processed, succeeded, failed };
+    } finally {
+      this.isRunningSchedules = false;
+    }
   }
 
   // --- Unified Snapshots (KVM QCOW2 + LXC) ---
@@ -408,11 +659,9 @@ export class BackupSnapshotManager {
     const bkp = await this.getBackupRecord(backupId);
     if (!bkp) throw new Error('Backup record not found.');
     if (bkp.node_id && bkp.is_local === 0) {
-      await this.nodeManager
-        .requestRemoteNode(bkp.node_id, 'DELETE', '/api/v1/backups/file', {
-          filePath: bkp.file_path,
-        })
-        .catch(() => undefined);
+      await this.nodeManager.requestRemoteNode(bkp.node_id, 'DELETE', '/api/v1/backups/file', {
+        filePath: bkp.file_path,
+      });
     } else if (bkp.file_path && fs.existsSync(bkp.file_path)) {
       fs.unlinkSync(bkp.file_path);
     }

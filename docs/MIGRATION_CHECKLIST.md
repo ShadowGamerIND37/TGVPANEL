@@ -10,14 +10,14 @@ Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Block
 |---|---|---|---|
 | **Phase 1** | Audit codebases & host capabilities | `Tested` | Documented in `docs/PHASE1_SOURCE_AUDIT.md`; legacy KVM bugs identified and patched in `app.js`. |
 | **Phase 2** | Design unified architecture & schema | `Tested` | Unified adapter pattern (`KVMAdapter` + `LXCAdapter` + `VirtualizationManager` + `InstanceManager`) & PostgreSQL 15+ guide (`docs/POSTGRESQL_MIGRATION.md`). |
-| **Phase 3** | Back up `data/tgvpanel.db` & build migrations | `Tested` | Automatic pre-migration backups (`tgvpanel_pre_migration_*.db`), automatic legacy DB & secret-vault file migration, transactional migrations `v001`–`v009` + `importHvmDatabase` tested in **T01** & **T03**. |
+| **Phase 3** | Back up `data/tgvpanel.db` & build migrations | `Tested` | Automatic pre-migration backups (`tgvpanel_pre_migration_*.db`), automatic legacy DB & secret-vault file migration, transactional migrations `v001`–`v015` + `importHvmDatabase` tested in **T01** & **T03**. |
 | **Phase 4** | Build Node.js + TypeScript Node Agent | `Tested` | `src/node-agent/*.ts` (`agent.ts`, `authentication.ts`, `command-runner.ts`, `container-manager.ts`, `container-console.ts`, `shell-manager.ts`, `snapshot-manager.ts`, `transfer-manager.ts`); HMAC + replay defense (`409`) tested in **T07** & **T09**. |
 | **Phase 5** | Build Virtualization Manager (`KVMAdapter` + `LXCAdapter`) | `Tested` | Capability profiles, lifecycle hooks, Linux `/proc/<pid>` telemetry, sharing, expiration, and honest host binary checks tested in **T06** & **T08**. |
-| **Phase 6** | Integrate nodes, LXC templates, networking, ports, firewall, backups, migrations & monitoring | `Tested` | `NodeManager`, `StorageManager`, `NetworkManager`, `BackupSnapshotManager`, `MigrationManager`, `MonitoringService` tested in **T07**, **T10**, **T11**. |
+| **Phase 6** | Integrate nodes, LXC templates, networking, ports, firewall, backups, migrations & monitoring | `Tested` | `NodeManager`, `StorageManager`, `NetworkManager`, `BackupSnapshotManager`, `MigrationManager`, `MonitoringService`, and scheduled backup execution/retention tested in **T07**, **T10**, **T11**, **T31**. |
 | **Phase 7** | Integrate unified REST API v1, Auth, 2FA, RBAC, CSRF, API Keys, Webhooks & Impersonation | `Tested` | `src/api/v1/router.ts`, `src/api/web-routes.ts`, `src/security/*` tested in **T02**, **T04**, **T05**, **T06**, **T11**. |
 | **Phase 8** | Upgrade Admin (23 sidebar items) & User EJS Frontend | `Tested` | Preserved EJS + dark/light CSS variables, local `/vendor/xterm/`, `public/js/tgvpanel-v3.js`, all 23 Admin routes + User routes verified `200 OK` with `TGVPANEL` branding in **T12**. |
 | **Phase 9** | Build `scripts/install.sh` & `scripts/update.sh` | `Tested` | Capability detection (`/dev/kvm`, `qemu-*`, `lxc-*`, `cgroups v2`), 4 install modes, offline Node header support, `tgvpanel.service` systemd units, syntax verified via `bash -n`. |
-| **Phase 10** | Run acceptance tests, security audit & final verification | `Tested` | `npm test` -> **30/30 Acceptance Suites Passed** (`T01`–`T30`); zero plaintext secrets. |
+| **Phase 10** | Run acceptance tests, security audit & final verification | `Tested` | `npm test` -> **31/31 Acceptance Suites Passed** (`T01`–`T31`); zero plaintext secrets. |
 
 ---
 
@@ -45,13 +45,13 @@ Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Block
 |---|---|---|
 | Release/versioning | Package, panel/API/agent health version, menu, and visible license/settings labels are V4.0 / 4.0.0. | Schema migration v014 backs up before migration through the existing migration runner, upgrades only known panel-owned V3 defaults, and leaves customized settings unchanged. |
 | Account security | Working self-service password change replaces the settings-page placeholder. Requires the current password and the owner’s browser session, applies CSRF protection and IP throttling, rejects password reuse, hashes with bcrypt, and writes success/failure audit events. | Acceptance test T30 exercises incorrect/current/reused passwords, API-key denial, persistence, and audit logging. |
-| Backups & recovery | Existing SHA-256 verified backup/restore workflows remain supported. | No new restore strategy is claimed in this initial V4 slice; further work requires its own end-to-end verification. |
+| Backups & recovery | Hourly/daily/weekly scheduled backups for KVM and LXC, post-create SHA-256 verification, per-schedule retention, owner notifications, run status/error visibility, and schedule CRUD in the admin UI/API. Retention prunes only that schedule’s verified archives, never manual backups. | T31 runs three real LXC archive cycles, verifies checksums, confirms retention=1 and manual backup preservation, checks owner notifications, and removes the schedule/artifact. KVM archive creation uses the existing real QCOW2 disk tar/verify path; restore remains LXC-only. |
 | Cluster & operations | Existing multi-node health, alerting, and node-agent compatibility remain in place. | No live migration or new HA guarantee is introduced by the version bump. |
 | User workflows | Existing KVM/LXC lifecycle and UI remain in place. | No virtualization operation has been replaced with a mock. |
 
 ### V4 follow-on backlog (not implemented in this slice)
 
-- `Not started` — Activate scheduled backup jobs end-to-end (the current `backup_schedules` table has no scheduler), retention cleanup, and restore verification drills across local/remote nodes.
+- `Not started` — Add scheduled snapshot automation, configurable retry windows for failed scheduled archives, and restore-rehearsal workflows across local/remote nodes.
 - `Not started` — Add more cluster-operational workflows and actionable alert delivery, with no unsupported HA or live-migration claims.
 - `Not started` — Extend security policy administration, session management, and auditable API-key lifecycle controls beyond the V4 password-change fix.
 - `Not started` — Add high-value KVM/LXC user-workflow improvements based on deployment needs while preserving real host operations and existing EJS UI.

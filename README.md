@@ -46,6 +46,10 @@ TGVPANEL is a single platform for managing both virtual machines and containers,
 | **API** | Versioned REST API at `/api/v1/*` with scoped personal access tokens |
 | **UI** | 23-section admin panel plus user portal, dark/light themes |
 
+### Scheduled Backups (V4)
+
+Administrators can configure per-instance hourly, daily, or weekly archive jobs from **Admin → Backups** or through `GET /api/v1/backup-schedules`, `PUT /api/v1/backup-schedules/:engine/:id`, and `DELETE /api/v1/backup-schedules/:engine/:id`. Instance owners may manage schedules for their own instances through the API; shared access alone does not grant schedule ownership. Each run verifies its SHA-256 before success, retains only the requested number of that schedule’s archives (manual backups are never pruned), records run/error status, writes an audit event, and notifies the instance owner. Removing a schedule leaves its existing backup files untouched. First execution is queued one selected interval after saving.
+
 ### Security
 
 | Control | Implementation |
@@ -110,7 +114,7 @@ The installer will:
 2. Ask you to choose a mode: **Unified (KVM + LXC)**, **KVM only**, **LXC only**, or **Standalone remote node agent**.
 3. Build the TypeScript sources.
 4. Create `.tgvpanel-secret` (`0600`).
-5. Back up `data/tgvpanel.db`, then run migrations (`v001`..`v009`).
+5. Back up `data/tgvpanel.db`, then run migrations (`v001`..`v015`).
 6. Write systemd service units (`tgvpanel.service` / `tgvpanel-node-agent.service`).
 
 To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB backup included).
@@ -120,7 +124,7 @@ To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB
 ```bash
 npm install            # see note below if building offline
 npm run build          # compile src/**/*.ts -> lib/**/*.js
-npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v014
+npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v015
 npm start              # panel on 0.0.0.0:8080
 ```
 
@@ -216,7 +220,7 @@ TGVPANEL/
 ├── src/
 │   ├── context.ts          # Runtime bootstrap, authenticated WS multiplexer
 │   ├── security/           # crypto-vault (.tgvpanel-secret, AES-GCM, TOTP, CSRF), RBAC middleware
-│   ├── db/                 # SQLite wrapper, migrations v001..v014, legacy DB importer, CLIs
+│   ├── db/                 # SQLite wrapper, migrations v001..v015, legacy DB importer, CLIs
 │   ├── node-agent/         # Standalone and local agent (auth, command runner, containers,
 │   │                       #   consoles, snapshots, transfers, health and host stats)
 │   ├── services/
@@ -266,7 +270,7 @@ Runs 20 end-to-end suites from `tests/run-all.js` against an isolated temporary 
 
 | Coverage |
 |---|
-| Migrations (`v001`..`v009`) & automatic legacy DB / secret-vault file migration |
+| Migrations (`v001`..`v015`) & automatic legacy DB / secret-vault file migration |
 | AES-256-GCM tamper defense (`.tgvpanel-secret`) |
 | Legacy import and login rehash |
 | CSRF and PAT scopes |

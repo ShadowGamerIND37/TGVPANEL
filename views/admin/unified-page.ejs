@@ -1887,10 +1887,26 @@
       </div>
       <div class="v3-card">
         <div class="v3-form-grid">
-          <div class="v3-field"><label>Select Instance</label><select id="bkpInstSelect"></select></div>
+          <div class="v3-field"><label>Select Instance</label><select id="bkpInstSelect" onchange="loadSelectedBackupSchedule()"></select></div>
           <div class="v3-field"><label>Backup Label</label><input id="bkpLabel" placeholder="weekly_full"></div>
           <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" onclick="createAdminBackup()" style="width:100%;">Create Archive Backup</button></div>
         </div>
+      </div>
+      <div class="v3-card">
+        <h3 style="margin:0 0 10px;color:var(--text-primary);">Automated Backup Schedule</h3>
+        <p style="margin:0 0 14px;color:var(--text-muted);font-size:12px;">Scheduled archives are SHA-256 verified. Retention only removes older backups created by this schedule; manual backups are kept.</p>
+        <div class="v3-form-grid">
+          <div class="v3-field"><label>Frequency</label><select id="bkpScheduleFrequency"><option value="hourly">Hourly</option><option value="daily" selected>Daily</option><option value="weekly">Weekly</option></select></div>
+          <div class="v3-field"><label>Keep scheduled backups</label><input id="bkpScheduleRetention" type="number" min="1" max="365" value="7"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;gap:8px;"><button class="btn btn-primary" onclick="saveBackupSchedule()">Save Schedule</button><button class="btn btn-outline" onclick="removeBackupSchedule()">Remove</button></div>
+        </div>
+        <div id="backupScheduleStatus" style="margin-top:10px;font-size:12px;color:var(--text-muted);">Choose an instance to view or configure its schedule.</div>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>Instance</th><th>Frequency</th><th>Retention</th><th>Next run</th><th>Last run</th><th>Last result</th></tr></thead>
+          <tbody id="backupSchedulesBody"></tbody>
+        </table>
       </div>
       <div class="v3-card v3-table-wrap">
         <table class="v3-table">
@@ -2529,13 +2545,13 @@
               <h3 class="st-panel-title">Installation &amp; Runtime Footprint</h3>
               <p class="st-panel-sub">Live verified telemetry from this Controller instance.</p>
             </div>
-            <span class="st-tag cyan"><%= ls.schemaVersion || 'v014' %> Schema</span>
+            <span class="st-tag cyan"><%= ls.schemaVersion || 'v015' %> Schema</span>
           </div>
           <div class="st-panel-body">
             <div class="lic-kv-list">
               <div class="lic-kv-row"><span class="lic-kv-k">Control Plane Edition</span><span class="lic-kv-v">TGVPANEL V4 Unified</span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Cryptographic Vault</span><span class="lic-kv-v" style="color:#34d399;">AES-256-GCM Active</span></div>
-              <div class="lic-kv-row"><span class="lic-kv-k">Database Schema</span><span class="lic-kv-v">SQLite WAL • <%= ls.schemaVersion || 'v014' %></span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Database Schema</span><span class="lic-kv-v">SQLite WAL • <%= ls.schemaVersion || 'v015' %></span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Node.js Runtime</span><span class="lic-kv-v"><%= ls.nodeJsVersion || process.version %> (<%= ls.platformArch || process.platform %>)</span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Controller Uptime</span><span class="lic-kv-v"><%= uptimeHuman %></span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Configured Storage Pools</span><span class="lic-kv-v"><%= ls.poolsCount ?? 0 %> Pools</span></div>
@@ -2558,7 +2574,7 @@
               controlPlane: 'TGVPANEL V4.0',
               engines: ['qemu-kvm', 'lxc'],
               limits: { maxNodes: 'unlimited', maxInstances: 'unlimited', apiV1: true },
-              schema: ls.schemaVersion || 'v014'
+              schema: ls.schemaVersion || 'v015'
             }, null, 2) %></div>
           </div>
         </div>
@@ -4725,6 +4741,77 @@ async function loadBackups() {
     : '<tr><td colspan="8" style="color:var(--text-muted);">No archive backups yet.</td></tr>';
 }
 
+async function loadSelectedBackupSchedule() {
+  const val = document.getElementById('bkpInstSelect')?.value;
+  const status = document.getElementById('backupScheduleStatus');
+  if (!val || !status) return;
+  const [engine, id] = val.split(':');
+  try {
+    const data = await hkvmApi(`/api/v1/backup-schedules?engine=${encodeURIComponent(engine)}&refId=${encodeURIComponent(id)}`);
+    const schedule = (data.schedules || [])[0];
+    if (!schedule) {
+      document.getElementById('bkpScheduleFrequency').value = 'daily';
+      document.getElementById('bkpScheduleRetention').value = '7';
+      status.textContent = 'No schedule configured. Saving creates the next run one selected interval from now.';
+      return;
+    }
+    document.getElementById('bkpScheduleFrequency').value = schedule.frequency;
+    document.getElementById('bkpScheduleRetention').value = schedule.retention_count;
+    status.textContent = `${schedule.enabled ? 'Enabled' : 'Disabled'} · next ${schedule.next_run || 'not queued'} · last ${schedule.last_status || 'never'}${schedule.last_error ? ` · ${schedule.last_error}` : ''}`;
+  } catch (err) { status.textContent = err.message || 'Unable to load schedule.'; }
+}
+
+async function loadBackupSchedules() {
+  const body = document.getElementById('backupSchedulesBody');
+  if (!body) return;
+  try {
+    const data = await hkvmApi('/api/v1/backup-schedules');
+    body.innerHTML = (data.schedules || []).length
+      ? data.schedules.map(s => `<tr>
+          <td>${hkvmEsc((s.instance_type || '').toUpperCase())} · ${hkvmEsc(s.instance_name || '#' + s.instance_ref_id)}</td>
+          <td>${hkvmEsc(s.frequency)}</td><td>${hkvmEsc(s.retention_count)}</td>
+          <td>${hkvmEsc(s.next_run || '—')}</td><td>${hkvmEsc(s.last_run || '—')}</td>
+          <td><strong>${hkvmEsc(s.last_status || 'never')}</strong>${s.last_error ? `<div style="color:#f87171;max-width:420px;white-space:normal;">${hkvmEsc(s.last_error)}</div>` : ''}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="6" style="color:var(--text-muted);">No automated backup schedules.</td></tr>';
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="6" style="color:#f87171;">${hkvmEsc(err.message)}</td></tr>`;
+  }
+}
+
+async function saveBackupSchedule() {
+  const val = document.getElementById('bkpInstSelect')?.value;
+  const status = document.getElementById('backupScheduleStatus');
+  if (!val) return hkvmToast('Select an instance first.', 'error');
+  const [engine, id] = val.split(':');
+  const retentionCount = Number(document.getElementById('bkpScheduleRetention').value);
+  if (!Number.isInteger(retentionCount) || retentionCount < 1 || retentionCount > 365) {
+    return hkvmToast('Retention must be between 1 and 365.', 'error');
+  }
+  try {
+    const out = await hkvmApi(`/api/v1/backup-schedules/${engine}/${id}`, {
+      method: 'PUT',
+      body: { frequency: document.getElementById('bkpScheduleFrequency').value, retentionCount }
+    });
+    status.textContent = `Schedule saved · next run ${out.schedule.next_run} · retains ${out.schedule.retention_count} verified scheduled backups.`;
+    await loadBackupSchedules();
+    hkvmToast('Automated backup schedule saved');
+  } catch (err) { status.textContent = err.message; hkvmToast(err.message, 'error'); }
+}
+
+async function removeBackupSchedule() {
+  const val = document.getElementById('bkpInstSelect')?.value;
+  if (!val) return hkvmToast('Select an instance first.', 'error');
+  if (!confirm('Remove the automated schedule? Existing scheduled backups will be kept.')) return;
+  const [engine, id] = val.split(':');
+  try {
+    await hkvmApi(`/api/v1/backup-schedules/${engine}/${id}`, { method: 'DELETE' });
+    document.getElementById('backupScheduleStatus').textContent = 'Schedule removed. Existing backups are unchanged.';
+    await loadBackupSchedules();
+    hkvmToast('Backup schedule removed');
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
 async function restoreAdminBackup(id) {
   if (!confirm('Verify SHA-256 checksum and restore LXC container from backup #' + id + '?')) return;
   try {
@@ -5603,7 +5690,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (CURRENT_SECTION === 'ports') loadPorts();
   if (CURRENT_SECTION === 'firewall') loadFirewall();
   if (CURRENT_SECTION === 'snapshots') { await populateInstanceDropdown('snapInstSelect'); loadAdminSnapshots(); }
-  if (CURRENT_SECTION === 'backups') { await populateInstanceDropdown('bkpInstSelect'); loadBackups(); }
+  if (CURRENT_SECTION === 'backups') { await populateInstanceDropdown('bkpInstSelect'); loadBackups(); loadBackupSchedules(); loadSelectedBackupSchedule(); }
   if (CURRENT_SECTION === 'migrations') { await populateInstanceDropdown('migLxcSelect', 'lxc'); loadMigrations(); }
   if (CURRENT_SECTION === 'monitoring') loadMonitoring();
   if (CURRENT_SECTION === 'api-keys') loadApiKeysAndWebhooks();

@@ -415,7 +415,7 @@ export function createUnifiedWebRouter(
         ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM storage_pools`).catch(() => ({ cnt: 0 })),
         ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM api_keys`).catch(() => ({ cnt: 0 })),
         ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM webhooks WHERE is_active = 1`).catch(() => ({ cnt: 0 })),
-        ctx.db.get<{ max_v: number }>(`SELECT MAX(version) AS max_v FROM schema_migrations`).catch(() => ({ max_v: 14 })),
+        ctx.db.get<{ max_v: number }>(`SELECT MAX(version) AS max_v FROM schema_migrations`).catch(() => ({ max_v: 15 })),
       ]);
 
       const licenseStats = {
@@ -427,7 +427,7 @@ export function createUnifiedWebRouter(
         poolsCount: Number(poolRow?.cnt || 0),
         apiKeysCount: Number(keyRow?.cnt || 0),
         webhooksCount: Number(hookRow?.cnt || 0),
-        schemaVersion: `v${String(migVerRow?.max_v || 14).padStart(3, '0')}`,
+        schemaVersion: `v${String(migVerRow?.max_v || 15).padStart(3, '0')}`,
         nodeJsVersion: process.version,
         platformArch: `${process.platform} / ${process.arch}`,
         uptimeSec: Math.floor(process.uptime()),

@@ -1633,6 +1633,23 @@ export const MIGRATIONS: MigrationDefinition[] = [
       );
     },
   },
+  {
+    version: 15,
+    name: 'v015_scheduled_backup_status_and_retention_metadata',
+    up: async (db) => {
+      await ensureColumn(db, 'backup_schedules', 'created_by', 'INTEGER');
+      await ensureColumn(db, 'backup_schedules', 'owner_user_id', 'INTEGER');
+      await ensureColumn(db, 'backup_schedules', 'last_status', "TEXT DEFAULT 'never'");
+      await ensureColumn(db, 'backup_schedules', 'last_error', 'TEXT');
+      await ensureColumn(db, 'backup_schedules', 'last_backup_id', 'INTEGER');
+      await ensureColumn(db, 'container_backups', 'is_scheduled', 'INTEGER DEFAULT 0');
+      await ensureColumn(db, 'container_backups', 'schedule_id', 'INTEGER');
+      await db.run(`UPDATE backup_schedules SET frequency = 'daily' WHERE frequency NOT IN ('hourly', 'daily', 'weekly') OR frequency IS NULL`);
+      await db.run(`UPDATE backup_schedules SET retention_count = 7 WHERE retention_count IS NULL OR retention_count < 1 OR retention_count > 365`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_backup_schedules_due ON backup_schedules(enabled, next_run)`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_scheduled_backups_retention ON container_backups(schedule_id, is_scheduled, id DESC)`);
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{
