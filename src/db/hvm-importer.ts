@@ -91,6 +91,146 @@ export function verifyPasswordWithLegacySupport(
   return { valid: false, needsRehash: false };
 }
 
+export interface HvmImportDryRunReport {
+  dryRun: true;
+  sourceFile: string;
+  sourceTables: string[];
+  requiredTablesPresent: boolean;
+  counts: {
+    users: number;
+    nodes: number;
+    vps: number;
+    portAllocations: number;
+    portForwards: number;
+    snapshots: number;
+    backups: number;
+    notifications: number;
+    apiKeys: number;
+  };
+  passwordHashFormats: {
+    bcrypt: number;
+    pbkdf2: number;
+    scrypt: number;
+    unrecognized: number;
+  };
+  existingUserCollisions: number;
+  warnings: string[];
+  ready: boolean;
+}
+
+const HVM_REQUIRED_TABLES = ['users', 'nodes', 'vps'];
+const HVM_KNOWN_TABLES = [
+  'users',
+  'nodes',
+  'vps',
+  'port_allocations',
+  'port_forwards',
+  'vps_snapshots',
+  'backups',
+  'notifications',
+  'api_keys',
+];
+
+/**
+ * Dry-run / preflight for HVM database import. Opens the source database
+ * READ-ONLY and validates what an import would do WITHOUT creating a backup or
+ * writing anything: required tables present, per-table row counts, password-hash
+ * format coverage, and username/email collisions against the existing HKVM
+ * database. Returns a preflight report so an operator can confirm the source is
+ * safe to import before committing.
+ */
+export async function dryRunHvmImport(
+  hkvmDb: UnifiedDatabase,
+  hvmDbFilePath: string
+): Promise<HvmImportDryRunReport> {
+  if (!fs.existsSync(hvmDbFilePath)) {
+    throw new Error(`HVM database file not found: ${hvmDbFilePath}`);
+  }
+
+  const rawSource = new sqlite3.Database(hvmDbFilePath, sqlite3.OPEN_READONLY);
+  const srcDb = new UnifiedDatabase(rawSource, hvmDbFilePath);
+  const warnings: string[] = [];
+
+  try {
+    const srcTables = new Set(
+      (
+        await srcDb.all<{ name: string }>(`SELECT name FROM sqlite_master WHERE type='table'`)
+      ).map((t) => t.name)
+    );
+
+    const missingRequired = HVM_REQUIRED_TABLES.filter((t) => !srcTables.has(t));
+    if (missingRequired.length > 0) {
+      warnings.push(`Source database is missing required tables: ${missingRequired.join(', ')}.`);
+    }
+
+    const countFor = async (table: string): Promise<number> => {
+      if (!srcTables.has(table)) return 0;
+      const row = await srcDb.get<{ c: number }>(`SELECT COUNT(*) AS c FROM ${table}`);
+      return row ? Number(row.c) : 0;
+    };
+
+    const counts = {
+      users: await countFor('users'),
+      nodes: await countFor('nodes'),
+      vps: await countFor('vps'),
+      portAllocations: await countFor('port_allocations'),
+      portForwards: await countFor('port_forwards'),
+      snapshots: await countFor('vps_snapshots'),
+      backups: await countFor('backups'),
+      notifications: await countFor('notifications'),
+      apiKeys: await countFor('api_keys'),
+    };
+
+    // Password-hash format coverage (unrecognized hashes get a random password on import).
+    const hashFormats = { bcrypt: 0, pbkdf2: 0, scrypt: 0, unrecognized: 0 };
+    if (srcTables.has('users') && counts.users > 0) {
+      const users = await srcDb.all<{ password_hash: string | null }>(`SELECT password_hash FROM users`);
+      for (const u of users) {
+        const h = String(u.password_hash || '');
+        if (h.startsWith('$2a$') || h.startsWith('$2b$') || h.startsWith('$2y$')) hashFormats.bcrypt++;
+        else if (h.startsWith('pbkdf2:')) hashFormats.pbkdf2++;
+        else if (h.startsWith('scrypt:')) hashFormats.scrypt++;
+        else hashFormats.unrecognized++;
+      }
+      if (hashFormats.unrecognized > 0) {
+        warnings.push(
+          `${hashFormats.unrecognized} user(s) have an unrecognized password hash format; import will assign a random password (use password reset).`
+        );
+      }
+    }
+
+    // Username/email collisions against the existing HKVM database (would map, not create).
+    let existingUserCollisions = 0;
+    if (srcTables.has('users') && counts.users > 0) {
+      const hvmUsers = await srcDb.all<{ username: string; email: string | null }>(
+        `SELECT username, email FROM users`
+      );
+      for (const u of hvmUsers) {
+        const existing = await hkvmDb.get<{ id: number }>(
+          `SELECT id FROM users WHERE LOWER(username) = LOWER(?) OR (email IS NOT NULL AND email != '' AND LOWER(email) = LOWER(?)) LIMIT 1`,
+          [u.username, u.email || '']
+        );
+        if (existing) existingUserCollisions++;
+      }
+    }
+
+    const ready = missingRequired.length === 0;
+    return {
+      dryRun: true,
+      sourceFile: hvmDbFilePath,
+      sourceTables: HVM_KNOWN_TABLES.filter((t) => srcTables.has(t)),
+      requiredTablesPresent: ready,
+      counts,
+      passwordHashFormats: hashFormats,
+      existingUserCollisions,
+      warnings,
+      ready,
+    };
+  } finally {
+    rawSource.close();
+  }
+}
+
 export async function importHvmDatabase(
   hkvmDb: UnifiedDatabase,
   hvmDbFilePath: string

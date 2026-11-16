@@ -67,7 +67,7 @@ const { UnifiedDatabase, resolveAndMigrateDatabasePath } = require('../lib/db/da
 const { runMigrations } = require('../lib/db/migrations');
 const { KVMAdapter } = require('../lib/services/virtualization/KVMAdapter');
 const { LXCAdapter } = require('../lib/services/virtualization/LXCAdapter');
-const { importHvmDatabase } = require('../lib/db/hvm-importer');
+const { importHvmDatabase, dryRunHvmImport } = require('../lib/db/hvm-importer');
 const { createNodeAgentServer } = require('../lib/node-agent/agent');
 const { runAllowlistedCommand, buildSafeSpawnEnv } = require('../lib/node-agent/command-runner');
 const {
@@ -351,6 +351,21 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       await execSql(`INSERT INTO vps VALUES (5, 'ct-alice-01', 'alice-web', 10, 2, 2, 2048, 25, '10.0.3.55', 'ubuntu:24.04', 'stopped', 0)`);
       await execSql(`INSERT INTO port_forwards VALUES (1, 5, 'tcp', 22055, 22)`);
       await new Promise((res) => ldb.close(() => res()));
+
+      // Phase 11: dry-run / preflight must validate the source WITHOUT importing.
+      const dryRun = await dryRunHvmImport(ctx.db, legacyDbFile);
+      assert.strictEqual(dryRun.dryRun, true);
+      assert.strictEqual(dryRun.requiredTablesPresent, true);
+      assert.strictEqual(dryRun.ready, true);
+      assert.deepStrictEqual(dryRun.sourceTables.sort(), ['nodes', 'port_forwards', 'users', 'vps']);
+      assert.strictEqual(dryRun.counts.users, 1);
+      assert.strictEqual(dryRun.counts.nodes, 1);
+      assert.strictEqual(dryRun.counts.vps, 1);
+      assert.strictEqual(dryRun.counts.portForwards, 1);
+      assert.strictEqual(dryRun.passwordHashFormats.pbkdf2, 1);
+      assert.strictEqual(dryRun.passwordHashFormats.unrecognized, 0);
+      assert.strictEqual(dryRun.existingUserCollisions, 0, 'No collisions before import');
+      assert.deepStrictEqual(dryRun.warnings, []);
 
       const report = await importHvmDatabase(ctx.db, legacyDbFile);
       assert.strictEqual(report.usersCreated, 1);

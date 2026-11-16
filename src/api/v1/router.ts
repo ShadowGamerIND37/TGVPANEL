@@ -23,7 +23,7 @@ import {
   requirePrincipal,
   requireRole,
 } from '../../security/middleware';
-import { importHvmDatabase } from '../../db/hvm-importer';
+import { importHvmDatabase, dryRunHvmImport } from '../../db/hvm-importer';
 import { LifecycleAction, VirtualizationEngine } from '../../services/virtualization/VirtualizationAdapter';
 import { RESELLER_API_SCOPES, createResellerHmacAuthMiddleware, ResellerApiScope } from '../../security/reseller-api-auth';
 
@@ -3028,6 +3028,20 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       try {
         const dbFilePath = path.resolve(String(req.body?.hvmDbPath || ''));
         const report = await importHvmDatabase(ctx.db, dbFilePath);
+        res.json({ success: true, report });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/database/import-hvm/dry-run',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const dbFilePath = path.resolve(String(req.body?.hvmDbPath || ''));
+        const report = await dryRunHvmImport(ctx.db, dbFilePath);
         res.json({ success: true, report });
       } catch (err: any) {
         res.status(400).json({ error: err.message });

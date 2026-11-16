@@ -41,7 +41,7 @@ The **only roadmap system classified FULLY IMPLEMENTED is the existing reseller 
 | 15 — DNS | NOT IMPLEMENTED as managed DNS | Local DNS relay exists; no PowerDNS zone/record manager. |
 | 16 — Monitoring/alerting | PARTIALLY IMPLEMENTED; KVM network traffic unavailable | Real selected host/process/cgroup metrics and alerts exist; KVM network counters and unknown IPs are honestly null; IOPS/latency and broad health coverage incomplete. |
 | 17 — White-label/UI | PARTIALLY IMPLEMENTED | EJS dashboards and site settings exist; localization, full branding, search/notifications and consistent responsive polish incomplete. |
-| 18 — Import/migration tools | PARTIALLY IMPLEMENTED | HVM database importer exists; general external hypervisor guest import/dry-run/rollback absent. |
+| 18 — Import/migration tools | PARTIALLY IMPLEMENTED | HVM database importer exists with **import dry-run/preflight validation (Phase 11)**; general external hypervisor guest import/rollback absent. |
 | 19 — Hardening/scalability | PARTIALLY IMPLEMENTED | TypeScript services, SQLite migrations, node HMAC/TLS and circuit breakers exist; general persistent queue/distributed locks and realistic scale tests absent. |
 | 20 — Install/update/recovery | PARTIALLY IMPLEMENTED | Install/update scripts and backed-up additive migrations exist; complete fresh/upgrade/failure rollback matrix is not verified. |
 

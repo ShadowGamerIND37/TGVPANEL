@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 11 HVM import dry-run / preflight (2026-10-30)
+
+- Added a dry-run / preflight mode for HVM database import. `dryRunHvmImport(hkvmDb, hvmDbFilePath)` opens the source database READ-ONLY and validates what an import would do WITHOUT creating a backup or writing anything: required tables present (`users`, `nodes`, `vps`), per-table row counts, password-hash format coverage (bcrypt/pbkdf2/scrypt/unrecognized), and username/email collisions against the existing HKVM database. Returns a structured preflight report (`dryRun`, `sourceTables`, `counts`, `passwordHashFormats`, `existingUserCollisions`, `warnings`, `ready`).
+- New endpoint `POST /api/v1/database/import-hvm/dry-run` (admin) lets an operator confirm a source HVM database is safe to import before committing. This addresses the audit's "General dry run" gap for area P; pre-import backups and the import report were already implemented.
+- T03 runs the dry-run on the legacy HVM V9 fixture before import, asserting required tables are present, counts match, the Werkzeug pbkdf2 hash is recognized, there are no collisions pre-import, and `ready` is true.
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 10 backup destination: cross-node copy (2026-10-30)
 
 - Added backup destination support via cross-node backup copy (replication/offload). `BackupSnapshotManager.copyBackupToNode(backupId, targetNodeId)` copies a backup archive to a destination node and integrity-verifies the copy against the source SHA-256 before recording it. The stored archive is copied as-is (encrypted archives stay encrypted); the copy is verified by decrypting encrypted archives before checksumming so the comparison matches the source's decrypted-content hash.

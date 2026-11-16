@@ -20,4 +20,39 @@ export declare function verifyPasswordWithLegacySupport(plaintext: string, store
     valid: boolean;
     needsRehash: boolean;
 };
+export interface HvmImportDryRunReport {
+    dryRun: true;
+    sourceFile: string;
+    sourceTables: string[];
+    requiredTablesPresent: boolean;
+    counts: {
+        users: number;
+        nodes: number;
+        vps: number;
+        portAllocations: number;
+        portForwards: number;
+        snapshots: number;
+        backups: number;
+        notifications: number;
+        apiKeys: number;
+    };
+    passwordHashFormats: {
+        bcrypt: number;
+        pbkdf2: number;
+        scrypt: number;
+        unrecognized: number;
+    };
+    existingUserCollisions: number;
+    warnings: string[];
+    ready: boolean;
+}
+/**
+ * Dry-run / preflight for HVM database import. Opens the source database
+ * READ-ONLY and validates what an import would do WITHOUT creating a backup or
+ * writing anything: required tables present, per-table row counts, password-hash
+ * format coverage, and username/email collisions against the existing HKVM
+ * database. Returns a preflight report so an operator can confirm the source is
+ * safe to import before committing.
+ */
+export declare function dryRunHvmImport(hkvmDb: UnifiedDatabase, hvmDbFilePath: string): Promise<HvmImportDryRunReport>;
 export declare function importHvmDatabase(hkvmDb: UnifiedDatabase, hvmDbFilePath: string): Promise<HvmImportReport>;
