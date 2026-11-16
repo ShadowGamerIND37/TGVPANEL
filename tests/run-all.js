@@ -3908,10 +3908,70 @@ fi
         assert.ok(detailPage.text.includes('/var/log/proxmox-install.log'), 'LXC detail must point to install log');
         assert.ok(detailPage.text.includes('pve-status'), 'LXC detail must point to pve-status helper');
         assert.ok(detailPage.text.includes('/images/os/proxmox.svg'), 'LXC detail must show Proxmox logo');
+        assert.ok(detailPage.text.includes('Cloudflare Quick Tunnel'), 'Proxmox LXC detail must expose the Cloudflare option');
+        assert.ok(detailPage.text.includes('Install Cloudflare &amp; Start Tunnel'), 'Cloudflare button must install cloudflared and start the tunnel');
+        assert.ok(detailPage.text.includes('Anyone with the generated URL'), 'Detail page must warn that the URL exposes the public Proxmox login page');
+        await assert.rejects(
+          ctx.lxcAdapter.startProxmoxCloudflareTunnel(pveDetailRefId),
+          /rootfs is missing/i,
+          'Cloudflare tunnel must not start when no container rootfs was provisioned'
+        );
       } finally {
         await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [pveDetailRefId]).catch(() => {});
         await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [pveDetailRefId]).catch(() => {});
       }
+    });
+
+    // 30. Proxmox-only Cloudflare Quick Tunnel flow and live status/log extraction
+    await runStep('T29: Proxmox Cloudflare Quick Tunnel (safe installer, progress logs, URL extraction)', async () => {
+      const { LxcContainerManager } = require('../lib/node-agent/container-manager');
+      const fakeCtName = 'ct-pve-cloudflare-status';
+      const fakeRootfs = path.join(tmpRoot, 'local-lxc', fakeCtName, 'rootfs');
+      fs.mkdirSync(path.join(fakeRootfs, 'var', 'lib', 'tgvpanel-cloudflare'), { recursive: true });
+      fs.mkdirSync(path.join(fakeRootfs, 'var', 'log'), { recursive: true });
+      fs.mkdirSync(path.join(fakeRootfs, 'root'), { recursive: true });
+      fs.writeFileSync(
+        path.join(fakeRootfs, 'var', 'lib', 'tgvpanel-cloudflare', 'status'),
+        'state=ready\\nstep=Cloudflare Quick Tunnel is live\\nurl=https://sample-tunnel.trycloudflare.com\\n'
+      );
+      fs.writeFileSync(path.join(fakeRootfs, 'var', 'log', 'tgvpanel-cloudflare-setup.log'), '[3/7] Adding Cloudflare repository\\n');
+      fs.writeFileSync(path.join(fakeRootfs, 'root', 'cloudflared.log'), 'Your quick Tunnel has been created! Visit it at https://sample-tunnel.trycloudflare.com\\n');
+      const cm = new LxcContainerManager(path.join(tmpRoot, 'local-lxc'));
+
+      // Build the fixed installer into a fake rootfs and validate its Bash syntax without needing host LXC.
+      const scriptCtName = 'ct-pve-cloudflare-script';
+      const scriptRootfs = path.join(tmpRoot, 'local-lxc', scriptCtName, 'rootfs');
+      fs.mkdirSync(path.join(scriptRootfs, 'var', 'lib'), { recursive: true });
+      fs.writeFileSync(path.join(scriptRootfs, 'var', 'lib', 'tgvpanel-proxmox-installed'), '');
+      cm.inspectContainer = async () => ({ state: 'running' });
+      await cm.startProxmoxCloudflareTunnel(scriptCtName).catch(() => {});
+      const installerScript = path.join(scriptRootfs, 'usr', 'local', 'sbin', 'tgvpanel-cloudflare-setup.sh');
+      assert.ok(fs.existsSync(installerScript), 'Cloudflare setup must write its fixed installer script into the Proxmox rootfs');
+      require('child_process').execFileSync('bash', ['-n', installerScript]);
+
+      const status = cm.getProxmoxCloudflareTunnelStatus(fakeCtName);
+      assert.strictEqual(status.state, 'ready');
+      assert.strictEqual(status.url, 'https://sample-tunnel.trycloudflare.com');
+      assert.ok(status.setupLog.includes('Adding Cloudflare repository'), 'Status API must return live installer output');
+      assert.ok(status.tunnelLog.includes('trycloudflare.com'), 'Status API must return /root/cloudflared.log');
+
+      const managerSource = fs.readFileSync(path.resolve(__dirname, '../src/node-agent/container-manager.ts'), 'utf8');
+      for (const required of [
+        'https://pkg.cloudflare.com/cloudflare-main.gpg',
+        'https://pkg.cloudflare.com/cloudflared',
+        'apt-get install',
+        'cloudflared tunnel --url https://localhost:8006 --no-tls-verify',
+        'tgvpanel-cloudflared.service',
+        'trycloudflare\\\\.com',
+      ]) {
+        assert.ok(managerSource.includes(required), `Cloudflare flow must include ${required}`);
+      }
+      const controllerApi = fs.readFileSync(path.resolve(__dirname, '../src/api/v1/router.ts'), 'utf8');
+      const nodeApi = fs.readFileSync(path.resolve(__dirname, '../src/node-agent/agent.ts'), 'utf8');
+      assert.ok(controllerApi.includes("router.post('/lxc/:id/cloudflare-tunnel'"), 'Owner-authorized LXC Cloudflare start endpoint must exist');
+      assert.ok(controllerApi.includes("router.get('/lxc/:id/cloudflare-tunnel'"), 'Authorized LXC Cloudflare status endpoint must exist');
+      assert.ok(nodeApi.includes("app.post('/api/v1/containers/:name/cloudflare-tunnel'"), 'Remote Node Agent must support starting the tunnel');
+      assert.ok(nodeApi.includes("app.get('/api/v1/containers/:name/cloudflare-tunnel'"), 'Remote Node Agent must relay live tunnel status');
     });
   } finally {
     const { execFileSync } = require('child_process');

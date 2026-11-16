@@ -107,6 +107,9 @@ export declare class LXCAdapter implements VirtualizationAdapter {
     transferOwnership(refId: number, newUserId: number): Promise<UnifiedInstanceRecord>;
     updateSharing(refId: number, sharedUserIds: number[]): Promise<UnifiedInstanceRecord>;
     setWhitelist(refId: number, whitelisted: boolean): Promise<void>;
+    private assertProxmoxLxcRow;
+    startProxmoxCloudflareTunnel(refId: number): Promise<any>;
+    getProxmoxCloudflareTunnelStatus(refId: number): Promise<any>;
     getProcesses(refId: number): Promise<any[]>;
     getLogs(refId: number): Promise<string>;
     listFiles(refId: number, subPath?: string): Promise<any[]>;
