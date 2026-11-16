@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Phase 6 security hardening (2026-10-30)
+
+- Hardened the generic rate limiter against `X-Forwarded-For` spoofing: it no longer trusts the client-supplied header unconditionally. The header is now honored only when the immediate socket peer is a configured reverse proxy (`TRUSTED_PROXIES` env var, comma-separated exact IPs or IPv4 CIDRs); otherwise the limiter keys on the socket address, so a directly-exposed panel cannot be bypassed by header spoofing. `createRateLimiter` accepts an optional `trustedProxies` override for testing. T09 covers parsing, exact/CIDR matching, IPv6 exact match, and the spoof-bypass contract. Default behavior (no `TRUSTED_PROXIES`) keys on the socket address, which is the safe default.
+- Made legacy session cookies opt-in secure: `secure` remains `false` by default for plain-HTTP deployment compatibility, but operators behind HTTPS can set `SESSION_COOKIE_SECURE=1` to require the `Secure` attribute. `httpOnly` and `sameSite: lax` are unchanged.
+
 ## Unreleased — Phase 2 started (2026-10-30)
 
 - Phase 2 scope is TGVPANEL's own KVM/LXC control plane: improve host capability accuracy, safe lifecycle/error behavior, and KVM/LXC integration validation within the existing architecture.

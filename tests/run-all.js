@@ -310,6 +310,9 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
     });
 
     // 3. Boot full HKVM V3 Express + WebSocket Server
+    // The test harness acts as a trusted reverse proxy on localhost, so X-Forwarded-For is
+    // honored here (matching a real proxy deployment). The limiter ignores XFF by default.
+    process.env.TRUSTED_PROXIES = '127.0.0.1';
     app = require('../app');
     await app.hkvmReadyPromise;
     await new Promise((r) => setTimeout(r, 250));
@@ -1860,6 +1863,41 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         () => cm.readRootfsFile('ct-jail-test', '/../../../etc/passwd'),
         /traversal|escapes|outside|ENOENT/i
       );
+
+      // Rate-limiter proxy trust: X-Forwarded-For must only be honored from configured
+      // reverse proxies so a directly-exposed client cannot spoof the header to bypass limits.
+      const { parseTrustedProxies, isIpTrustedByProxies, createRateLimiter } = require('../lib/security/middleware');
+      assert.deepStrictEqual(parseTrustedProxies(undefined), [], 'No trusted proxies configured by default');
+      assert.deepStrictEqual(parseTrustedProxies('10.0.0.1, 10.0.0.0/8 ,'), ['10.0.0.1', '10.0.0.0/8'], 'Trusted proxies are trimmed and empty entries dropped');
+      assert.strictEqual(isIpTrustedByProxies('203.0.113.9', []), false, 'No trusted proxies means no peer is trusted');
+      assert.strictEqual(isIpTrustedByProxies('203.0.113.9', ['203.0.113.9']), true, 'Exact IP match is trusted');
+      assert.strictEqual(isIpTrustedByProxies('10.1.2.3', ['10.0.0.0/8']), true, 'IPv4 CIDR match is trusted');
+      assert.strictEqual(isIpTrustedByProxies('192.168.1.1', ['10.0.0.0/8']), false, 'Out-of-range IP is not trusted');
+      assert.strictEqual(isIpTrustedByProxies('2001:db8::1', ['2001:db8::1']), true, 'IPv6 exact match is trusted');
+      assert.strictEqual(isIpTrustedByProxies('2001:db8::1', ['2001:db8::/32']), false, 'IPv6 CIDR is not required for this guard');
+
+      const makeLimiterRequest = (remoteAddress, xff) => {
+        const headers = {};
+        if (xff) headers['x-forwarded-for'] = xff;
+        return { headers, socket: { remoteAddress } };
+      };
+      const runLimiter = async (limiter, req, max) => {
+        const seen = [];
+        let status = 200;
+        for (let i = 0; i < max + 1; i += 1) {
+          limiter(req, { setHeader: () => {}, status: (code) => { status = code; return { json: () => ({}) }; } }, () => { seen.push(i); });
+          if (status === 429) break;
+        }
+        return status;
+      };
+      // Without trusted proxies, spoofing XFF must not bypass the limit (keyed on socket IP).
+      const noProxyLimiter = createRateLimiter({ windowMs: 60_000, max: 2, keyPrefix: 'test-noproxy' });
+      const spoofedReq = makeLimiterRequest('198.51.100.10', '1.2.3.4');
+      assert.strictEqual(await runLimiter(noProxyLimiter, spoofedReq, 2), 429, 'Spoofed XFF must not bypass the limit without a trusted proxy');
+      // With a trusted proxy, the forwarded IP is honored and the limit is per forwarded client.
+      const proxyLimiter = createRateLimiter({ windowMs: 60_000, max: 2, keyPrefix: 'test-proxy', trustedProxies: ['10.0.0.5'] });
+      const proxiedReq = makeLimiterRequest('10.0.0.5', '203.0.113.77');
+      assert.strictEqual(await runLimiter(proxyLimiter, proxiedReq, 2), 429, 'Trusted proxy XFF is honored for rate limiting');
     });
 
     // 11. Storage, Templates, Networking, IPv4/IPv6 Pools, Ports & Firewall

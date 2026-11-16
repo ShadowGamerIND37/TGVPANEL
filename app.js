@@ -484,7 +484,9 @@ const sessionParser = session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: false,
+    // Secure cookies are opt-in: default false preserves plain-HTTP deployments, but operators
+    // behind HTTPS should set SESSION_COOKIE_SECURE=1 so session cookies are never sent in clear.
+    secure: String(process.env.SESSION_COOKIE_SECURE || '0') === '1',
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
