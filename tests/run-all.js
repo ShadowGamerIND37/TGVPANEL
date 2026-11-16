@@ -167,7 +167,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
-    await runStep('T01: Transactional SQLite backup & migrations v001..v009 preserve legacy data & cascade VM FKs', async () => {
+    await runStep('T01: Transactional SQLite backup & migrations v001..v014 preserve legacy data & cascade VM FKs', async () => {
       const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
       const v2Raw = new sqlite3.Database(v2ScratchPath);
       const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
@@ -184,12 +184,13 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         CREATE TABLE settings (setting_key TEXT PRIMARY KEY, setting_value TEXT, updated_at DATETIME);
         INSERT INTO settings (setting_key, setting_value, updated_at) VALUES ('site_name', 'HKVM', datetime('now'));
         INSERT INTO settings (setting_key, setting_value, updated_at) VALUES ('panel_title', 'HKVM Panel V2.0', datetime('now'));
+        INSERT INTO settings (setting_key, setting_value, updated_at) VALUES ('panel_version', 'V3.0', datetime('now'));
         CREATE TABLE discord_settings (id INTEGER PRIMARY KEY, enabled INTEGER DEFAULT 0);
         CREATE TABLE user_discord_accounts (id INTEGER PRIMARY KEY, user_id INTEGER, discord_id TEXT);
       `);
 
       const migRes = await runMigrations(v2Db);
-      assert.ok(migRes.applied.length >= 9, 'Expected v001..v009 migrations to apply');
+      assert.ok(migRes.applied.length >= 14, 'Expected v001..v014 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
 
       // Verify v009 upgraded vm_logs & vm_snapshots to ON DELETE CASCADE while preserving rows,
@@ -210,12 +211,33 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const siteNameSetting = await v2Db.get(`SELECT setting_value FROM settings WHERE setting_key = 'site_name'`);
       assert.strictEqual(siteNameSetting.setting_value, 'TGVPANEL', 'Expected legacy site_name HKVM migrated to TGVPANEL');
       const panelTitleSetting = await v2Db.get(`SELECT setting_value FROM settings WHERE setting_key = 'panel_title'`);
-      assert.strictEqual(panelTitleSetting.setting_value, 'TGVPANEL V3.0', 'Expected legacy panel_title migrated to TGVPANEL V3.0');
+      assert.strictEqual(panelTitleSetting.setting_value, 'TGVPANEL V4.0', 'Expected legacy panel_title migrated to TGVPANEL V4.0');
+      const panelVersionSetting = await v2Db.get(`SELECT setting_value FROM settings WHERE setting_key = 'panel_version'`);
+      assert.strictEqual(panelVersionSetting.setting_value, 'V4.0', 'Expected legacy V3 panel_version migrated to V4.0');
       const maintMsgSetting = await v2Db.get(`SELECT setting_value FROM settings WHERE setting_key = 'maintenance_message'`);
       assert.ok(maintMsgSetting.setting_value.startsWith('TGVPANEL'), 'Expected maintenance_message branded as TGVPANEL');
       const templates = await v2Db.all(`SELECT * FROM lxc_templates`);
       assert.ok(templates.length >= 15, 'Seeded LXC OS template catalog');
       await v2Db.close();
+
+      // A V3 database with operator-customized branding/settings must retain those values on V4 upgrade.
+      const customSettingsPath = path.join(tmpRoot, 'custom-settings.db');
+      const customSettingsRaw = new sqlite3.Database(customSettingsPath);
+      const customSettingsDb = new UnifiedDatabase(customSettingsRaw, customSettingsPath);
+      await customSettingsDb.exec(`
+        CREATE TABLE settings (setting_key TEXT PRIMARY KEY, setting_value TEXT, updated_at DATETIME);
+        INSERT INTO settings (setting_key, setting_value) VALUES ('panel_title', 'Acme Compute');
+        INSERT INTO settings (setting_key, setting_value) VALUES ('panel_version', 'Canary');
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+      `);
+      for (let version = 1; version <= 13; version += 1) {
+        await customSettingsDb.run(`INSERT INTO schema_migrations (version, name, checksum) VALUES (?, ?, ?)`, [version, `fixture_${version}`, 'fixture']);
+      }
+      const v4SettingsMigration = await runMigrations(customSettingsDb);
+      assert.ok(v4SettingsMigration.applied.includes('v014_tgvpanel_v4_release_version_defaults'));
+      assert.strictEqual((await customSettingsDb.get(`SELECT setting_value FROM settings WHERE setting_key = 'panel_title'`)).setting_value, 'Acme Compute');
+      assert.strictEqual((await customSettingsDb.get(`SELECT setting_value FROM settings WHERE setting_key = 'panel_version'`)).setting_value, 'Canary');
+      await customSettingsDb.close();
 
       // Verify automatic zero-data-loss file migration: hkvm.db (+ -wal/-shm) -> tgvpanel.db (+ -wal/-shm)
       const legacyDbDir = path.join(tmpRoot, 'legacy-db-migration-check');
@@ -351,6 +373,77 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       assert.ok(Array.isArray(apiInstances.json.instances));
     });
 
+    await runStep('T30: Password changes verify current credentials, require browser session, and audit', async () => {
+      const health = await new SessionClient(baseUrl).request('GET', '/api/v1/health');
+      assert.strictEqual(health.status, 200);
+      assert.strictEqual(health.json.version, '4.0.0', 'Health endpoint must report V4');
+      const passwordClient = new SessionClient(baseUrl);
+      const login = await passwordClient.request('POST', '/api/login', {
+        username: 'admin',
+        password: 'AdminTestPass!2026',
+      });
+      assert.strictEqual(login.status, 200, `Admin login failed: ${login.text}`);
+      const settingsPage = await passwordClient.request('GET', '/admin/settings');
+      assert.strictEqual(settingsPage.status, 200, 'Settings page should issue the browser CSRF token');
+      assert.ok(settingsPage.text.includes('Current Password'), 'Password modal must ask for the current password');
+      assert.ok(settingsPage.text.includes('/api/v1/auth/password/change'), 'Settings UI must call the authenticated V4 password endpoint');
+      const legacyWeakPassword = await passwordClient.request('PUT', '/api/user/password', {
+        current_password: 'AdminTestPass!2026',
+        new_password: 'weak123',
+      });
+      assert.strictEqual(legacyWeakPassword.status, 400, 'Legacy compatibility endpoint must enforce the V4 minimum length');
+
+      const rejected = await passwordClient.request('POST', '/api/v1/auth/password/change', {
+        currentPassword: 'not-the-current-password',
+        newPassword: 'AdminNewPassword!2027',
+      });
+      assert.strictEqual(rejected.status, 400, 'Incorrect current password must be rejected');
+
+      const samePassword = await passwordClient.request('POST', '/api/v1/auth/password/change', {
+        currentPassword: 'AdminTestPass!2026',
+        newPassword: 'AdminTestPass!2026',
+      });
+      assert.strictEqual(samePassword.status, 400, 'Reusing the current password must be rejected');
+
+      const bearerClient = new SessionClient(baseUrl);
+      const bearerAttempt = await bearerClient.request('POST', '/api/v1/auth/password/change', {
+        currentPassword: 'AdminTestPass!2026',
+        newPassword: 'AdminNewPassword!2027',
+      }, { Authorization: `Bearer ${scopedApiKeyRaw}` });
+      assert.strictEqual(bearerAttempt.status, 403, 'API keys must not change account passwords');
+
+      const changed = await passwordClient.request('POST', '/api/v1/auth/password/change', {
+        currentPassword: 'AdminTestPass!2026',
+        newPassword: 'AdminNewPassword!2027',
+      });
+      assert.strictEqual(changed.status, 200, `Password update failed: ${changed.text}`);
+      assert.strictEqual(changed.json.success, true);
+      const audit = await ctx.db.get(`SELECT action FROM activity_logs WHERE user_id = 1 AND action = 'password_changed' ORDER BY id DESC LIMIT 1`);
+      assert.ok(audit, 'Successful password change must be audited');
+
+      const oldPasswordLogin = await new SessionClient(baseUrl).request('POST', '/api/login', {
+        username: 'admin',
+        password: 'AdminTestPass!2026',
+      });
+      assert.notStrictEqual(oldPasswordLogin.status, 200, 'Old password must no longer authenticate');
+      const newPasswordLogin = await new SessionClient(baseUrl).request('POST', '/api/login', {
+        username: 'admin',
+        password: 'AdminNewPassword!2027',
+      });
+      assert.strictEqual(newPasswordLogin.status, 200, 'New password must authenticate');
+
+      // Restore the fixture credential so the remainder of the acceptance suite stays isolated.
+      const restored = await passwordClient.request('POST', '/api/v1/auth/password/change', {
+        currentPassword: 'AdminNewPassword!2027',
+        newPassword: 'AdminTestPass!2026',
+      });
+      assert.strictEqual(restored.status, 200, `Could not restore test credential: ${restored.text}`);
+      const restoredLogin = await new SessionClient(baseUrl).request('POST', '/api/login', {
+        username: 'admin',
+        password: 'AdminTestPass!2026',
+      });
+      assert.strictEqual(restoredLogin.status, 200, 'Fixture credential should be restored');
+    });
     // 6. TOTP 2FA End-to-End Flow
     await runStep('T05: RFC 6238 TOTP 2FA setup, QR provisioning & 2-step login verification', async () => {
       const userClient = new SessionClient(baseUrl);
@@ -3996,6 +4089,8 @@ fi
       assert.ok(nodeApi.includes("app.post('/api/v1/containers/:name/cloudflare-tunnel'"), 'Remote Node Agent must support starting the tunnel');
       assert.ok(nodeApi.includes("app.get('/api/v1/containers/:name/cloudflare-tunnel'"), 'Remote Node Agent must relay live tunnel status');
     });
+
+
   } finally {
     const { execFileSync } = require('child_process');
     for (const storeDir of [

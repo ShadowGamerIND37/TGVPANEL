@@ -15,7 +15,7 @@ export interface NodeHealthReport {
 }
 
 const AGENT_STARTED_AT = Date.now();
-export const AGENT_VERSION = '3.0.0';
+export const AGENT_VERSION = '4.0.0';
 
 let cachedCapabilities: { data: HostCapabilities; expiresAt: number } | null = null;
 

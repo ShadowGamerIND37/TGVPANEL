@@ -294,7 +294,7 @@
           <div class="settings-section-body">
             <div class="settings-row">
               <div class="settings-row-info"><div class="settings-row-label">Panel Title</div><div class="settings-row-desc">The name shown in browser title</div></div>
-              <div class="settings-row-control"><input type="text" class="form-control" id="setting_panel_title" data-key="panel_title" placeholder="TGVPANEL V3.0"></div>
+              <div class="settings-row-control"><input type="text" class="form-control" id="setting_panel_title" data-key="panel_title" placeholder="TGVPANEL V4.0"></div>
             </div>
             <div class="settings-row">
               <div class="settings-row-info"><div class="settings-row-label">Panel Description</div><div class="settings-row-desc">Login page subtitle</div></div>
@@ -479,7 +479,8 @@
     </div>
     <div class="modal-body">
       <div id="pwChangeAlert" style="display: none; margin-bottom: 14px;"></div>
-      <div class="form-group"><label class="form-label">New Password</label><input type="password" class="form-control" id="newPw" placeholder="Min 8 characters"></div>
+      <div class="form-group"><label class="form-label" for="currentPw">Current Password</label><input type="password" class="form-control" id="currentPw" autocomplete="current-password" required></div>
+      <div class="form-group"><label class="form-label" for="newPw">New Password</label><input type="password" class="form-control" id="newPw" autocomplete="new-password" placeholder="At least 8 characters" required></div>
       <div class="form-group" style="margin-bottom: 0;"><label class="form-label">Confirm Password</label><input type="password" class="form-control" id="confirmPw" placeholder="Repeat password"></div>
     </div>
     <div class="modal-footer">
@@ -657,40 +658,34 @@
     }
   };
 
-  // Change password - FIXED to show validation
+  // Change password with current-password verification, CSRF protection, and backend audit logging.
   window.changePassword = async function() {
-    const pw = document.getElementById('newPw')?.value;
-    const confirmPw = document.getElementById('confirmPw')?.value;
+    const currentPassword = document.getElementById('currentPw')?.value || '';
+    const pw = document.getElementById('newPw')?.value || '';
+    const confirmPw = document.getElementById('confirmPw')?.value || '';
     const alert = document.getElementById('pwChangeAlert');
-    
-    if (!pw || pw.length < 8) {
-      alert.className = 'alert alert-error'; 
-      alert.innerHTML = '<span class="alert-icon">❌</span><span>Min 8 characters required</span>'; 
-      alert.style.display = 'flex'; 
-      return;
-    }
-    if (pw !== confirmPw) {
-      alert.className = 'alert alert-error'; 
-      alert.innerHTML = '<span class="alert-icon">❌</span><span>Passwords do not match</span>'; 
-      alert.style.display = 'flex'; 
-      return;
-    }
-    
-    // Show pending state
-    alert.className = 'alert alert-info';
-    alert.innerHTML = '<span class="alert-icon">⏳</span><span>Updating password...</span>';
-    alert.style.display = 'flex';
-    
+    const showPasswordAlert = (message, type) => {
+      alert.className = `alert alert-${type}`;
+      alert.textContent = message;
+      alert.style.display = 'flex';
+    };
+
+    if (!currentPassword) return showPasswordAlert('Enter your current password.', 'error');
+    if (pw.length < 8 || pw.length > 1024) return showPasswordAlert('New password must be 8–1024 characters.', 'error');
+    if (pw !== confirmPw) return showPasswordAlert('Passwords do not match.', 'error');
+
+    showPasswordAlert('Updating password...', 'info');
     try {
-      // Note: Change password endpoint not yet implemented in backend
-      // Placeholder for future implementation
-      alert.className = 'alert alert-warning';
-      alert.innerHTML = '<span class="alert-icon">⚠️</span><span>Change password API endpoint not yet implemented</span>';
-      alert.style.display = 'flex';
-    } catch(e) {
-      alert.className = 'alert alert-error';
-      alert.innerHTML = `<span class="alert-icon">❌</span><span>${e.message}</span>`;
-      alert.style.display = 'flex';
+      const result = await hkvmApi('/api/v1/auth/password/change', {
+        method: 'POST',
+        body: { currentPassword, newPassword: pw }
+      });
+      showPasswordAlert(result.message || 'Password changed successfully.', 'success');
+      document.getElementById('currentPw').value = '';
+      document.getElementById('newPw').value = '';
+      document.getElementById('confirmPw').value = '';
+    } catch (e) {
+      showPasswordAlert(e.message || 'Password could not be changed.', 'error');
     }
   };
 

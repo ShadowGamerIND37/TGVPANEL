@@ -52,7 +52,7 @@ function logError(component, vm_id, action, error) {
 const { getSecretBundle, encryptSecret, decryptSecret, isEncryptedSecret } = require('./lib/security/crypto-vault');
 const { resolveAndMigrateDatabasePath } = require('./lib/db/database');
 const { verifyPasswordWithLegacySupport } = require('./lib/db/hvm-importer');
-const { securityHeadersAndCsrfMiddleware, verifyCsrfMiddleware, createUnifiedAuthMiddleware } = require('./lib/security/middleware');
+const { securityHeadersAndCsrfMiddleware, verifyCsrfMiddleware, createUnifiedAuthMiddleware, createRateLimiter } = require('./lib/security/middleware');
 const { initializeUnifiedHkvmRuntime, attachUnifiedWebSockets } = require('./lib/context');
 const { createApiV1Router } = require('./lib/api/v1/router');
 const { createUnifiedWebRouter } = require('./lib/api/web-routes');
@@ -1650,7 +1650,7 @@ app.use((req, res, next) => {
   } : null;
   
   // Panel version from .env
-  res.locals.panelVersion = process.env.PANEL_VERSION || 'V3.0';
+  res.locals.panelVersion = process.env.PANEL_VERSION || 'V4.0';
   
   // Set default logo and site name
   res.locals.siteLogo = process.env.DEFAULT_LOGO_URL || '/images/logo.png';
@@ -5158,8 +5158,8 @@ app.get('/api/settings', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     
     const settings = {
-      panel_version: 'V3.0',
-      panel_title: 'TGVPANEL V3.0',
+      panel_version: 'V4.0',
+      panel_title: 'TGVPANEL V4.0',
       panel_description: 'Professional VM Management Panel',
       site_name: 'TGVPANEL',
       site_icon_url: '/images/logo.png',
@@ -5179,7 +5179,7 @@ app.get('/api/settings', (req, res) => {
           row.setting_key === 'panel_title' &&
           /^hkvm(\s+panel)?(\s+v[\d.]+)?$/i.test(String(row.setting_value || '').trim())
         ) {
-          settings[row.setting_key] = 'TGVPANEL V3.0';
+          settings[row.setting_key] = 'TGVPANEL V4.0';
         } else {
           settings[row.setting_key] = row.setting_value;
         }
@@ -5387,43 +5387,48 @@ app.put('/api/user/profile', checkAuth, (req, res) => {
   );
 });
 
-// Change password
-app.put('/api/user/password', checkAuth, (req, res) => {
-  const { current_password, new_password } = req.body;
-  
-  if (!current_password || !new_password) {
-    return res.status(400).json({ error: 'All password fields are required' });
+// Legacy password-change endpoint retained for compatibility; apply the same safety rules as V4 API.
+const legacyPasswordChangeLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  keyPrefix: 'legacy_password_change',
+  message: 'Too many password change attempts. Please retry later.',
+});
+app.put('/api/user/password', checkAuth, legacyPasswordChangeLimiter, (req, res) => {
+  if (req.session.impersonatorAdminId) {
+    return res.status(403).json({ error: 'Password changes are unavailable while impersonating another account.' });
   }
-  
-  if (new_password.length < 6) {
-    return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  const currentPassword = String(req.body?.current_password || '');
+  const newPassword = String(req.body?.new_password || '');
+  if (!currentPassword || newPassword.length < 8 || newPassword.length > 1024) {
+    return res.status(400).json({ error: 'Current password and a new password (8–1024 characters) are required.' });
   }
-  
-  // Get current password hash
+
   db.get(`SELECT password FROM users WHERE id = ?`, [req.session.userId], (err, user) => {
-    if (err || !user) {
-      return res.status(404).json({ error: 'User not found' });
+    if (err || !user) return res.status(404).json({ error: 'User not found' });
+
+    let validCurrentPassword = false;
+    try { validCurrentPassword = bcrypt.compareSync(currentPassword, user.password); } catch (_) {}
+    if (!validCurrentPassword) return res.status(400).json({ error: 'Current password is incorrect' });
+    if (bcrypt.compareSync(newPassword, user.password)) {
+      return res.status(400).json({ error: 'Choose a new password different from your current password.' });
     }
-    
-    // Verify current password
-    if (!bcrypt.compareSync(current_password, user.password)) {
-      return res.status(400).json({ error: 'Current password is incorrect' });
-    }
-    
-    // Hash new password
-    const hashedPassword = bcrypt.hashSync(new_password, 10);
-    
-    // Update password
-    db.run(
-      `UPDATE users SET password = ? WHERE id = ?`,
-      [hashedPassword, req.session.userId],
-      function(err) {
-        if (err) {
-          return res.status(500).json({ error: err.message });
-        }
-        res.json({ success: true, message: 'Password changed successfully' });
+
+    const nextHash = bcrypt.hashSync(newPassword, 12);
+    db.run(`UPDATE users SET password = ? WHERE id = ?`, [nextHash, req.session.userId], function(updateErr) {
+      if (updateErr) return res.status(500).json({ error: updateErr.message });
+      if (hkvmV3Context) {
+        hkvmV3Context.db.logActivity({
+          userId: req.session.userId,
+          action: 'password_changed',
+          resourceType: 'user',
+          resourceId: String(req.session.userId),
+          ipAddress: req.ip || null,
+          details: { source: 'legacy_compatibility_endpoint' },
+        }).catch((auditErr) => console.error('[Security] Password-change audit write failed:', auditErr.message));
       }
-    );
+      return res.json({ success: true, message: 'Password changed successfully' });
+    });
   });
 });
 
@@ -5973,7 +5978,7 @@ const hkvmReadyPromise = bootstrapHkvmV3()
 
         console.log(`
 ╔════════════════════════════════════════════════════════════╗
-║         TGVPANEL UNIFIED VIRTUALIZATION PANEL V3.0         ║
+║         TGVPANEL UNIFIED VIRTUALIZATION PANEL V4.0         ║
 ║       QEMU/KVM Virtual Machines + LXC Containers           ║
 ╚════════════════════════════════════════════════════════════╝
 

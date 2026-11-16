@@ -16,7 +16,7 @@ export function createUnifiedWebRouter(
     parseInt(Array.isArray(v) ? v[0] || '0' : v || '0', 10);
 
   router.use(async (_req: Request, res: Response, next) => {
-    res.locals.panelVersion = process.env.PANEL_VERSION || 'V3.0';
+    res.locals.panelVersion = process.env.PANEL_VERSION || 'V4.0';
     res.locals.siteLogo = res.locals.siteLogo || '/images/logo.png';
     res.locals.siteName =
       res.locals.siteName && !/^hkvm(\s+panel)?(\s+v[\d.]+)?$/i.test(String(res.locals.siteName).trim())
@@ -415,7 +415,7 @@ export function createUnifiedWebRouter(
         ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM storage_pools`).catch(() => ({ cnt: 0 })),
         ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM api_keys`).catch(() => ({ cnt: 0 })),
         ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM webhooks WHERE is_active = 1`).catch(() => ({ cnt: 0 })),
-        ctx.db.get<{ max_v: number }>(`SELECT MAX(version) AS max_v FROM schema_migrations`).catch(() => ({ max_v: 10 })),
+        ctx.db.get<{ max_v: number }>(`SELECT MAX(version) AS max_v FROM schema_migrations`).catch(() => ({ max_v: 14 })),
       ]);
 
       const licenseStats = {
@@ -427,7 +427,7 @@ export function createUnifiedWebRouter(
         poolsCount: Number(poolRow?.cnt || 0),
         apiKeysCount: Number(keyRow?.cnt || 0),
         webhooksCount: Number(hookRow?.cnt || 0),
-        schemaVersion: `v${String(migVerRow?.max_v || 10).padStart(3, '0')}`,
+        schemaVersion: `v${String(migVerRow?.max_v || 14).padStart(3, '0')}`,
         nodeJsVersion: process.version,
         platformArch: `${process.platform} / ${process.arch}`,
         uptimeSec: Math.floor(process.uptime()),
@@ -438,7 +438,7 @@ export function createUnifiedWebRouter(
         currentPage: 'license',
         section: 'license',
         user: res.locals.user || (req as any).session?.user,
-        licenseInfo: getLicenseSummary ? getLicenseSummary() : { edition: 'TGVPANEL V3 Free Unified Edition', valid: true },
+        licenseInfo: getLicenseSummary ? getLicenseSummary() : { edition: 'TGVPANEL V4 Free Unified Edition', valid: true },
         licenseStats,
       });
     }

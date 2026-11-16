@@ -83,7 +83,7 @@ print_ascii_logo() {
   printf "  %b%s%b\n" "$C_GRAD3" "$TGVPANEL_ASCII_3" "$C_RESET"
   printf "  %b%s%b\n" "$C_GRAD4" "$TGVPANEL_ASCII_4" "$C_RESET"
   printf "  %b%s%b\n" "$C_GRAD5" "$TGVPANEL_ASCII_5" "$C_RESET"
-  printf "  %bUnified QEMU/KVM Virtual Machines  •  LXC Containers  •  v3.0%b\n" "$C_DIM" "$C_RESET"
+  printf "  %bUnified QEMU/KVM Virtual Machines  •  LXC Containers  •  v4.0%b\n" "$C_DIM" "$C_RESET"
 }
 
 print_section_banner() {
@@ -1655,7 +1655,7 @@ render_banner() {
   printf "%b║%b   %b%s%b  %b║%b\n" "$C_CYAN" "$C_RESET" "$C_GRAD4" "$TGVPANEL_ASCII_4" "$C_RESET" "$C_CYAN" "$C_RESET"
   printf "%b║%b   %b%s%b  %b║%b\n" "$C_CYAN" "$C_RESET" "$C_GRAD5" "$TGVPANEL_ASCII_5" "$C_RESET" "$C_CYAN" "$C_RESET"
   printf "%b║%b                                                                      %b║%b\n" "$C_CYAN" "$C_RESET" "$C_CYAN" "$C_RESET"
-  printf "%b║%b        %bUNIFIED VIRTUALIZATION MANAGEMENT MENU  •  VERSION 3.0%b        %b║%b\n" "$C_CYAN" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET"
+  printf "%b║%b        %bUNIFIED VIRTUALIZATION MANAGEMENT MENU  •  VERSION 4.0%b        %b║%b\n" "$C_CYAN" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_CYAN" "$C_RESET"
   printf "%b║%b          %bQEMU/KVM Virtual Machines  •  LXC Containers  •  24/7%b       %b║%b\n" "$C_CYAN" "$C_RESET" "$C_DIM" "$C_RESET" "$C_CYAN" "$C_RESET"
   printf "%b╠══════════════════════════════════════════════════════════════════════╣%b\n" "$C_CYAN" "$C_RESET"
   echo -e "  Panel : ${p_badge}      Node Agent : ${a_badge}"

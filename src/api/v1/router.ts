@@ -51,13 +51,19 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     max: 15,
     keyPrefix: 'api_v1_reset',
   });
+  const passwordChangeLimiter = createRateLimiter({
+    windowMs: 15 * 60_000,
+    max: 8,
+    keyPrefix: 'api_v1_password_change',
+    message: 'Too many password change attempts. Please retry later.',
+  });
 
   // --- Public / Unauthenticated Health & Password Reset Endpoints ---
   router.get('/health', async (_req: Request, res: Response) => {
     const report = await getNodeHealthReport();
     res.json({
       panel: 'TGVPANEL',
-      version: '3.0.0',
+      version: '4.0.0',
       status: report.status,
       capabilities: report.capabilities,
       warnings: report.warnings,
@@ -216,9 +222,76 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.use((req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     if (req.method !== 'GET' && req.method !== 'HEAD') {
+      // Password changes have a stricter dedicated limiter below; avoid double-counting them.
+      if (req.path === '/auth/password/change') return next();
       return apiMutationLimiter(req, res, next);
     }
     return next();
+  });
+
+  // A password change is an interactive browser-session action, not a bearer-token
+  // operation. Require the current password, throttle attempts, and audit success.
+  router.post('/auth/password/change', passwordChangeLimiter, async (req: Request, res: Response) => {
+    try {
+      const session: any = (req as any).session;
+      const principal = req.principal!;
+      if (
+        principal.viaApiKey ||
+        principal.impersonatedBy ||
+        !session ||
+        Number(session.userId) !== principal.userId
+      ) {
+        return res.status(403).json({ error: 'Password changes require your own authenticated browser session.' });
+      }
+
+      const currentPassword = String(req.body?.currentPassword || '');
+      const newPassword = String(req.body?.newPassword || '');
+      if (!currentPassword || newPassword.length < 8 || newPassword.length > 1024) {
+        return res.status(400).json({ error: 'Current password and a new password (8–1024 characters) are required.' });
+      }
+
+      const user = await ctx.db.get<{ password: string }>(
+        `SELECT password FROM users WHERE id = ?`,
+        [principal.userId]
+      );
+      if (!user) return res.status(404).json({ error: 'User not found.' });
+
+      let currentPasswordIsValid = false;
+      try {
+        currentPasswordIsValid = bcrypt.compareSync(currentPassword, user.password);
+      } catch {
+        currentPasswordIsValid = false;
+      }
+      if (!currentPasswordIsValid) {
+        await ctx.db.logActivity({
+          userId: principal.userId,
+          action: 'password_change_failed',
+          resourceType: 'user',
+          resourceId: String(principal.userId),
+          ipAddress: req.ip || null,
+          details: { reason: 'invalid_current_password' },
+        });
+        return res.status(400).json({ error: 'Current password is incorrect.' });
+      }
+      if (bcrypt.compareSync(newPassword, user.password)) {
+        return res.status(400).json({ error: 'Choose a new password different from your current password.' });
+      }
+
+      const nextHash = bcrypt.hashSync(newPassword, 12);
+      await ctx.db.transaction(async () => {
+        await ctx.db.run(`UPDATE users SET password = ? WHERE id = ?`, [nextHash, principal.userId]);
+        await ctx.db.logActivity({
+          userId: principal.userId,
+          action: 'password_changed',
+          resourceType: 'user',
+          resourceId: String(principal.userId),
+          ipAddress: req.ip || null,
+        });
+      });
+      return res.json({ success: true, message: 'Password changed successfully.' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
   });
 
   // --- 2FA (TOTP) Management ---

@@ -17,7 +17,7 @@ Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Block
 | **Phase 7** | Integrate unified REST API v1, Auth, 2FA, RBAC, CSRF, API Keys, Webhooks & Impersonation | `Tested` | `src/api/v1/router.ts`, `src/api/web-routes.ts`, `src/security/*` tested in **T02**, **T04**, **T05**, **T06**, **T11**. |
 | **Phase 8** | Upgrade Admin (23 sidebar items) & User EJS Frontend | `Tested` | Preserved EJS + dark/light CSS variables, local `/vendor/xterm/`, `public/js/tgvpanel-v3.js`, all 23 Admin routes + User routes verified `200 OK` with `TGVPANEL` branding in **T12**. |
 | **Phase 9** | Build `scripts/install.sh` & `scripts/update.sh` | `Tested` | Capability detection (`/dev/kvm`, `qemu-*`, `lxc-*`, `cgroups v2`), 4 install modes, offline Node header support, `tgvpanel.service` systemd units, syntax verified via `bash -n`. |
-| **Phase 10** | Run acceptance tests, security audit & final verification | `Tested` | `npm test` -> **29/29 Acceptance Suites Passed** (`T01`–`T29`); zero plaintext secrets. |
+| **Phase 10** | Run acceptance tests, security audit & final verification | `Tested` | `npm test` -> **30/30 Acceptance Suites Passed** (`T01`–`T30`); zero plaintext secrets. |
 
 ---
 
@@ -37,3 +37,21 @@ Status Legend: `Not started` | `In progress` | `Implemented` | `Tested` | `Block
 | Storage Pools, Network Bridges/NAT, IPv4/IPv6 CIDR, Port Forwards, Firewall Rollback | Storage & Network | `StorageManager.ts`, `NetworkManager.ts` | `Tested` | Pool/IP/port/firewall CRUD, DNS relay, Netplan sync & `iptables-save`/`iptables-restore` rollback (**T10**, **T16**, **T17**). |
 | Unified Snapshots, SHA-256 Verified Backups & Offline Verified Migration | Backup & Migration | `BackupSnapshotManager.ts`, `MigrationManager.ts` | `Tested` | Real `tar.gz` backup + SHA-256 verification & 7-stage offline migration with pre-commit rollback (**T11**, **T14**). |
 | Multi-Node Agent, Cloudflare Tunnel (No-IPv4) Support, 1-Command Pairing (`--join`), TOFU TLS Pinning, Push Heartbeats, Remote Storage/Ports/Firewall, Circuit Breakers & Monitoring | Nodes & Monitoring | `NodeClient.ts`, `MonitoringService.ts`, `agent.ts`, `menu.sh` | `Tested` | Cloudflare Tunnel / Reverse Proxy domain-only onboarding without public IPv4, combined system Root CA + TOFU X.509 pinning, single-use join tokens (`TGVPANEL_ADVERTISE_URL`), active agent->controller heartbeats, remote `statfs`/NAT/firewall/custom-template staging, multi-node `sync-host`, cross-node backup restore & bridged WSS PTY (**T07**, **T11**, **T21**, **T22**, **T25**). |
+
+
+## V4 Release Baseline
+
+| Area | V4 work in this branch | Verification / boundaries |
+|---|---|---|
+| Release/versioning | Package, panel/API/agent health version, menu, and visible license/settings labels are V4.0 / 4.0.0. | Schema migration v014 backs up before migration through the existing migration runner, upgrades only known panel-owned V3 defaults, and leaves customized settings unchanged. |
+| Account security | Working self-service password change replaces the settings-page placeholder. Requires the current password and the owner’s browser session, applies CSRF protection and IP throttling, rejects password reuse, hashes with bcrypt, and writes success/failure audit events. | Acceptance test T30 exercises incorrect/current/reused passwords, API-key denial, persistence, and audit logging. |
+| Backups & recovery | Existing SHA-256 verified backup/restore workflows remain supported. | No new restore strategy is claimed in this initial V4 slice; further work requires its own end-to-end verification. |
+| Cluster & operations | Existing multi-node health, alerting, and node-agent compatibility remain in place. | No live migration or new HA guarantee is introduced by the version bump. |
+| User workflows | Existing KVM/LXC lifecycle and UI remain in place. | No virtualization operation has been replaced with a mock. |
+
+### V4 follow-on backlog (not implemented in this slice)
+
+- `Not started` — Activate scheduled backup jobs end-to-end (the current `backup_schedules` table has no scheduler), retention cleanup, and restore verification drills across local/remote nodes.
+- `Not started` — Add more cluster-operational workflows and actionable alert delivery, with no unsupported HA or live-migration claims.
+- `Not started` — Extend security policy administration, session management, and auditable API-key lifecycle controls beyond the V4 password-change fix.
+- `Not started` — Add high-value KVM/LXC user-workflow improvements based on deployment needs while preserving real host operations and existing EJS UI.
