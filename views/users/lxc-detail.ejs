@@ -827,6 +827,24 @@
             </div>
           </div>
 
+          <% if (_osRaw.includes('proxmox') || _osRaw.includes('pve')) { %>
+          <div class="lxc-card" style="border-color:rgba(229,112,0,0.35);margin-top:16px;">
+            <div class="lxc-card-head">
+              <div>
+                <h3 class="lxc-card-title" style="color:#f59e0b;">Proxmox VE Hypervisor (Debian Base + First-Boot Install)</h3>
+                <p class="lxc-card-sub">This container boots as Debian, then installs Proxmox VE on first boot (5-15 min). <code>neofetch</code> shows Debian by design — verify PVE with <code>pveversion</code>.</p>
+              </div>
+            </div>
+            <div class="lxc-kv-list">
+              <div class="lxc-kv-row"><span class="lxc-kv-k">Base Image</span><span class="lxc-kv-v">Debian (LinuxContainers.org rootfs) + Proxmox VE on top</span></div>
+              <div class="lxc-kv-row"><span class="lxc-kv-k">Web Console</span><span class="lxc-kv-v"><code>https://<%= instance.primaryIp ? instance.primaryIp.split('/')[0] : '&lt;container-ip&gt;' %>:8006</code> (login: root)</span></div>
+              <div class="lxc-kv-row"><span class="lxc-kv-k">Install Log</span><span class="lxc-kv-v"><code>/var/log/proxmox-install.log</code> (Files tab &rarr; <code>/var/log/</code>)</span></div>
+              <div class="lxc-kv-row"><span class="lxc-kv-k">Status Check</span><span class="lxc-kv-v">Run <code>pve-status</code> or <code>pveversion</code> in the PTY console</span></div>
+              <div class="lxc-kv-row"><span class="lxc-kv-k">Retry Bootstrap</span><span class="lxc-kv-v"><code>systemctl restart tgvpanel-proxmox-setup.service</code></span></div>
+            </div>
+          </div>
+          <% } %>
+
           <% if (_cfg.notes && isStaff) { %>
           <div class="lxc-card" style="padding:14px 18px;">
             <div style="font-size:11.5px;font-weight:700;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;">Internal Admin Notes</div>

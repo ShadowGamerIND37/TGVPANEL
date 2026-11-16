@@ -330,6 +330,11 @@ export class LXCAdapter implements VirtualizationAdapter {
       }
       const isProxmoxLxc = proxmoxCodename !== null;
       // Proxmox VE hypervisor containers need KVM/LXC nesting + privileged mode + PVE minimums
+      const effectiveCpuCores = Math.max(
+        1,
+        Number(input.cpuCores || 1),
+        isProxmoxLxc ? 2 : 0
+      );
       const effectiveRamMb = Math.max(
         128,
         Number(input.ramMb || 1024),
@@ -365,7 +370,7 @@ export class LXCAdapter implements VirtualizationAdapter {
         fallbackRelease,
         templateArchivePath,
         arch,
-        cpuCores: Math.max(1, Number(input.cpuCores || 1)),
+        cpuCores: effectiveCpuCores,
         cpuShares: Number(input.cpuShares || 1024),
         cpuLimitPercent: Number(input.cpuLimitPercent || 100),
         cpuPinning: input.cpuPinning || null,
@@ -436,7 +441,26 @@ export class LXCAdapter implements VirtualizationAdapter {
           hostProvisioned = true;
         }
       } else {
-        warning = 'Registered in database without immediate host provisioning.';
+        warning = isProxmoxLxc
+          ? 'Registered in database without host provisioning — Proxmox VE bootstrap will NOT run until the container is provisioned on a host. Delete and recreate with "Provision Immediately on Host" enabled for the PVE install.'
+          : 'Registered in database without immediate host provisioning.';
+      }
+      if (isProxmoxLxc && input.provisionOnHost !== false) {
+        const proxmoxNotes: string[] = [];
+        if (node.is_local && !fs.existsSync('/dev/kvm')) {
+          proxmoxNotes.push(
+            'Host has no /dev/kvm — Proxmox VE Web UI (:8006) will install, but QEMU/KVM VMs inside PVE will fail until nested KVM is available on the host.'
+          );
+        }
+        if (!node.is_local) {
+          proxmoxNotes.push(
+            'Remote node: ensure the Node Agent is updated (injectProxmoxLxcBootstrap) or the container will remain plain Debian without the PVE bootstrap.'
+          );
+        }
+        proxmoxNotes.push(
+          'Proxmox VE installs on first boot (5-15 min, Debian base — neofetch shows Debian by design). Verify with pveversion and https://<container-ip>:8006.'
+        );
+        warning = warning ? `${warning} ${proxmoxNotes.join(' ')}` : proxmoxNotes.join(' ');
       }
 
       const ins = await this.db.run(
@@ -968,6 +992,9 @@ export class LXCAdapter implements VirtualizationAdapter {
     const reinstallIsProxmox = reinstallProxmoxCodename !== null;
 
     const plainPassword = newRootPassword?.trim() || generateStrongPassword(18);
+    const reinstallCpuCores = Math.max(Number(row.cpu_cores || 1), reinstallIsProxmox ? 2 : 0);
+    const reinstallRamMb = Math.max(Number(row.ram_mb || 1024), Number(tpl.min_ram_mb || 0), reinstallIsProxmox ? 4096 : 0);
+    const reinstallDiskGb = Math.max(Number(row.disk_gb || 20), Number(tpl.min_disk_gb || 0), reinstallIsProxmox ? 40 : 0);
     const reinstallSpec: LxcCreateSpec = {
       containerName: row.container_name,
       hostname: row.hostname || row.container_name,
@@ -976,12 +1003,12 @@ export class LXCAdapter implements VirtualizationAdapter {
       fallbackRelease: tpl.fallback_alias || null,
       templateArchivePath: tpl.file_path || tpl.local_path || null,
       arch: tpl.arch || 'amd64',
-      cpuCores: row.cpu_cores,
+      cpuCores: reinstallCpuCores,
       cpuShares: row.cpu_shares,
       cpuLimitPercent: row.cpu_limit_pct,
-      ramMb: Math.max(Number(row.ram_mb || 1024), Number(tpl.min_ram_mb || 0), reinstallIsProxmox ? 4096 : 0),
+      ramMb: reinstallRamMb,
       swapMb: row.swap_mb,
-      diskGb: Math.max(Number(row.disk_gb || 20), Number(tpl.min_disk_gb || 0), reinstallIsProxmox ? 40 : 0),
+      diskGb: reinstallDiskGb,
       backingStore: row.rootfs_storage_type || 'dir',
       privileged: reinstallIsProxmox ? true : Boolean(row.privileged),
       nesting: reinstallIsProxmox ? true : Boolean(row.nesting),
@@ -1022,9 +1049,24 @@ export class LXCAdapter implements VirtualizationAdapter {
 
     await this.db.run(
       `UPDATE lxc_instances
-       SET os_template = ?, os_family = ?, root_password_enc = ?, status = ?, updated_at = datetime('now')
+       SET os_template = ?, os_family = ?, root_password_enc = ?, status = ?,
+           cpu_cores = ?, ram_mb = ?, disk_gb = ?,
+           privileged = ?, nesting = ?, kvm_nesting = ?,
+           updated_at = datetime('now')
        WHERE id = ?`,
-      [tpl.slug, tpl.family || 'debian', encryptSecret(plainPassword), reinstallState, refId]
+      [
+        tpl.slug,
+        tpl.family || 'debian',
+        encryptSecret(plainPassword),
+        reinstallState,
+        reinstallSpec.cpuCores,
+        reinstallSpec.ramMb,
+        reinstallSpec.diskGb,
+        reinstallSpec.privileged ? 1 : 0,
+        reinstallSpec.nesting ? 1 : 0,
+        reinstallSpec.kvmNesting ? 1 : 0,
+        refId,
+      ]
     );
 
     await this.syncRegistryRow(refId);
