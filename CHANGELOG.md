@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — Phase 15 required documentation (2026-10-30)
+
+- Created the four missing required documents flagged by the audit (roadmap area R / docs):
+  - **`API_DOCUMENTATION.md`** — the `/api/v1` surface (instances, KVM/LXC-specific, storage, networking, backups/snapshots, monitoring, database/import, auth/2FA), the reseller HMAC API, the Node Agent API, legacy `/api/vms` routes, auth mechanisms, and the error model.
+  - **`INSTALLATION.md`** — host/OS prerequisites, the four install modes, ports, environment configuration, first-run steps, verification, and troubleshooting.
+  - **`UPGRADE_GUIDE.md`** — the additive ordered migration model (v001–v025), automatic pre-migration backups, upgrade procedures, rollback, the upgrade checklist, and legacy HVM import with dry-run.
+  - **`SECURITY.md`** — sessions/roles, TOTP 2FA, API keys, CSRF, `TRUSTED_PROXIES` rate-limiter keying, secure cookies, the crypto vault, backup encryption-at-rest, the allowlisted command boundary, node HMAC, data integrity, and an operational hardening checklist.
+- All docs describe what the codebase actually implements (verified against `src/`, `app.js`, migrations, and scripts); no unsupported capability is documented as working.
+- Updated `FEATURE_GAP_ANALYSIS.md` and `FEATURE_STATUS.md` to record the docs as present. No production code, database, or runtime behavior was changed.
+
 ## Unreleased — Phase 14 ISO library inventory: honest size + SHA-256 checksum (2026-10-30)
 
 - Added a unified ISO library inventory endpoint `GET /api/v1/iso/inventory` (admin/subadmin/operator) backed by `StorageManager.listIsoFiles()`. It scans the managed ISO directory (`~/vms/iso`) and returns each `.iso` file with its **honest file size** (`sizeBytes`) and **SHA-256 checksum** (`sha256`) computed from the real file contents via the node-agent checksum helper. The checksum is `null` only when it cannot be computed, never a fabricated value.
