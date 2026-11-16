@@ -8,7 +8,9 @@ export declare class BackupSnapshotManager {
     private scheduleTimer;
     private scheduleBootTimer;
     private isRunningSchedules;
+    private isRunningSnapshotSchedules;
     constructor(db: UnifiedDatabase, nodeManager: NodeManager, virt: VirtualizationManager);
+    private runAllScheduledJobs;
     private nextRunAt;
     startScheduleLoop(intervalMs?: number): void;
     stopScheduleLoop(): void;
@@ -31,6 +33,24 @@ export declare class BackupSnapshotManager {
         succeeded: number;
         failed: number;
     }>;
+    listSnapshotSchedules(filter?: {
+        engine?: 'kvm' | 'lxc';
+        refId?: number;
+    }): Promise<any[]>;
+    upsertSnapshotSchedule(params: {
+        engine: 'kvm' | 'lxc';
+        refId: number;
+        frequency: 'hourly' | 'daily' | 'weekly';
+        retentionCount: number;
+        actorId: number;
+        ownerUserId: number;
+    }): Promise<any>;
+    deleteSnapshotSchedule(engine: 'kvm' | 'lxc', refId: number, actorId: number): Promise<void>;
+    runDueSnapshotSchedules(): Promise<{
+        processed: number;
+        succeeded: number;
+        failed: number;
+    }>;
     listSnapshots(engine: 'kvm' | 'lxc', refId: number): Promise<any[]>;
     createSnapshot(params: {
         engine: 'kvm' | 'lxc';
@@ -38,6 +58,7 @@ export declare class BackupSnapshotManager {
         name?: string;
         description?: string;
         actorId?: number;
+        scheduled?: boolean;
     }): Promise<{
         id: number;
         name: string;

@@ -1650,6 +1650,26 @@ export const MIGRATIONS: MigrationDefinition[] = [
       await db.run(`CREATE INDEX IF NOT EXISTS idx_scheduled_backups_retention ON container_backups(schedule_id, is_scheduled, id DESC)`);
     },
   },
+  {
+    version: 16,
+    name: 'v016_scheduled_snapshot_status_and_retention_metadata',
+    up: async (db) => {
+      await ensureColumn(db, 'snapshot_schedules', 'created_by', 'INTEGER');
+      await ensureColumn(db, 'snapshot_schedules', 'owner_user_id', 'INTEGER');
+      await ensureColumn(db, 'snapshot_schedules', 'last_status', "TEXT DEFAULT 'never'");
+      await ensureColumn(db, 'snapshot_schedules', 'last_error', 'TEXT');
+      await ensureColumn(db, 'snapshot_schedules', 'last_snapshot_id', 'INTEGER');
+      await ensureColumn(db, 'vm_snapshots', 'is_scheduled', 'INTEGER DEFAULT 0');
+      await ensureColumn(db, 'vm_snapshots', 'schedule_id', 'INTEGER');
+      await ensureColumn(db, 'container_snapshots', 'is_scheduled', 'INTEGER DEFAULT 0');
+      await ensureColumn(db, 'container_snapshots', 'schedule_id', 'INTEGER');
+      await db.run(`UPDATE snapshot_schedules SET frequency = 'daily' WHERE frequency NOT IN ('hourly', 'daily', 'weekly') OR frequency IS NULL`);
+      await db.run(`UPDATE snapshot_schedules SET retention_count = 7 WHERE retention_count IS NULL OR retention_count < 1 OR retention_count > 365`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_snapshot_schedules_due ON snapshot_schedules(enabled, next_run)`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_vm_scheduled_snapshots_retention ON vm_snapshots(schedule_id, is_scheduled, snapshot_id DESC)`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_lxc_scheduled_snapshots_retention ON container_snapshots(schedule_id, is_scheduled, id DESC)`);
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{
