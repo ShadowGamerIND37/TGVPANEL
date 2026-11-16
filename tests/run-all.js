@@ -3829,6 +3829,90 @@ fi
       assert.ok(pve8.description.includes('Debian 12 Bookworm base'), 'PVE 8 description must mention Debian base');
       assert.ok(pve8.description.includes('neofetch shows Debian'), 'PVE 8 description must explain neofetch behavior');
     });
+
+    // 29. Proxmox LXC Full Audit Fixes (CPU floor, reinstall DB persist, apt retry, network preserve, UI sync)
+    await runStep('T28: Proxmox LXC audit fixes (CPU floor, reinstall persist, apt retry, network preserve, UI sync)', async () => {
+      const { LxcContainerManager } = require('../lib/node-agent/container-manager');
+
+      // Bootstrap script must have apt retry + network backup/restore + pve-status helper
+      const fakeCtName2 = 'ct-pve-audit-check';
+      const fakeRootfs2 = path.join(tmpRoot, 'local-lxc', fakeCtName2, 'rootfs');
+      fs.mkdirSync(path.join(fakeRootfs2, 'etc', 'systemd', 'system'), { recursive: true });
+      fs.mkdirSync(path.join(fakeRootfs2, 'etc'), { recursive: true });
+      const cm2 = new LxcContainerManager(path.join(tmpRoot, 'local-lxc'));
+      await cm2.injectProxmoxLxcBootstrap(fakeCtName2, 'trixie', null);
+      const script2 = fs.readFileSync(path.join(fakeRootfs2, 'usr', 'local', 'sbin', 'tgvpanel-install-proxmox.sh'), 'utf8');
+      assert.ok(script2.includes('apt_retry'), 'Bootstrap must retry apt commands (3 attempts)');
+      assert.ok(script2.includes('interfaces.tgvpanel-bak'), 'Bootstrap must backup container network config before PVE install');
+      assert.ok(script2.includes('Restoring container eth0'), 'Bootstrap must restore container eth0 networking after PVE install');
+      assert.ok(script2.includes('trixie'), 'Bootstrap must target trixie for VE 9');
+      const pveStatusPath2 = path.join(fakeRootfs2, 'usr', 'local', 'bin', 'pve-status');
+      assert.ok(fs.existsSync(pveStatusPath2), 'pve-status helper must be injected');
+      assert.ok(fs.readFileSync(pveStatusPath2, 'utf8').includes('pveversion'), 'pve-status must check pveversion');
+      const bashrc2 = fs.readFileSync(path.join(fakeRootfs2, 'root', '.bashrc'), 'utf8');
+      assert.ok(bashrc2.includes('tgvpanel-proxmox-status.sh'), 'Root bashrc must hook Proxmox banner for PTY shells');
+
+      // Create with 1 CPU must be bumped to 2 for Proxmox (direct adapter to avoid API rate-limit in full suite)
+      const pveCpuCreated = await ctx.lxcAdapter.createLxcInstance({
+        userId: 1,
+        containerName: 'ct-pve-cpu-check',
+        templateSlug: 'proxmox-ve-8',
+        cpuCores: 1,
+        ramMb: 1024,
+        diskGb: 10,
+        provisionOnHost: false,
+      });
+      assert.ok(pveCpuCreated.instance.cpuCores >= 2, `Proxmox LXC must enforce >=2 vCPU, got ${pveCpuCreated.instance.cpuCores}`);
+      assert.ok(pveCpuCreated.instance.ramMb >= 4096, 'Proxmox LXC must enforce >=4096MB RAM');
+      assert.ok(pveCpuCreated.instance.diskGb >= 40, 'Proxmox LXC must enforce >=40GB disk');
+      assert.ok(
+        String(pveCpuCreated.warning || '').includes('Proxmox VE bootstrap will NOT run'),
+        'DB-only Proxmox create must warn that bootstrap will not run without host provisioning'
+      );
+      const pveCpuRefId = pveCpuCreated.instance.refId;
+      try {
+        const rawPveCpu = await ctx.db.get(`SELECT * FROM lxc_instances WHERE id = ?`, [pveCpuRefId]);
+        assert.ok(Number(rawPveCpu.cpu_cores) >= 2, 'DB must persist bumped CPU for Proxmox');
+        assert.ok(Number(rawPveCpu.ram_mb) >= 4096, 'DB must persist bumped RAM for Proxmox');
+        assert.ok(Number(rawPveCpu.disk_gb) >= 40, 'DB must persist bumped disk for Proxmox');
+        assert.strictEqual(Number(rawPveCpu.privileged), 1, 'DB must persist privileged for Proxmox');
+        assert.strictEqual(Number(rawPveCpu.nesting), 1, 'DB must persist nesting for Proxmox');
+        assert.strictEqual(Number(rawPveCpu.kvm_nesting), 1, 'DB must persist KVM nesting for Proxmox');
+      } finally {
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [pveCpuRefId]).catch(() => {});
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [pveCpuRefId]).catch(() => {});
+      }
+
+      // UI must auto-sync Proxmox minimums + toggles + preset on select
+      const createPage = await adminClient.request('GET', '/admin/instances/create?engine=lxc');
+      assert.ok(createPage.text.includes('getDistroBrand(tpl).cat'), 'UI must detect Proxmox via getDistroBrand');
+      assert.ok(createPage.text.includes('cPriv'), 'UI must reference privileged toggle');
+      assert.ok(createPage.text.includes('neofetch'), 'UI must explain neofetch shows Debian');
+      assert.ok(createPage.text.includes('pveversion'), 'UI must point to pveversion verify');
+
+      // Detail page must show Proxmox info card (direct adapter create to avoid rate-limit)
+      const pveDetailCreated = await ctx.lxcAdapter.createLxcInstance({
+        userId: 1,
+        containerName: 'ct-pve-detail-check',
+        templateSlug: 'proxmox-ve-9',
+        cpuCores: 4,
+        ramMb: 4096,
+        diskGb: 40,
+        provisionOnHost: false,
+      });
+      const pveDetailRefId = pveDetailCreated.instance.refId;
+      try {
+        const detailPage = await adminClient.request('GET', `/lxc/${pveDetailRefId}`);
+        assert.strictEqual(detailPage.status, 200);
+        assert.ok(detailPage.text.includes('Proxmox VE Hypervisor'), 'LXC detail must show Proxmox info card');
+        assert.ok(detailPage.text.includes('/var/log/proxmox-install.log'), 'LXC detail must point to install log');
+        assert.ok(detailPage.text.includes('pve-status'), 'LXC detail must point to pve-status helper');
+        assert.ok(detailPage.text.includes('/images/os/proxmox.svg'), 'LXC detail must show Proxmox logo');
+      } finally {
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [pveDetailRefId]).catch(() => {});
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [pveDetailRefId]).catch(() => {});
+      }
+    });
   } finally {
     const { execFileSync } = require('child_process');
     for (const storeDir of [

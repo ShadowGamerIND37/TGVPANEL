@@ -2813,11 +2813,28 @@ function selectLxcTemplate(slug) {
   if (tpl) {
     const ramInput = document.getElementById('cRam');
     const diskInput = document.getElementById('cDisk');
+    const cpuInput = document.getElementById('cCpu');
+    const cpuRange = document.getElementById('cCpuRange');
     if (ramInput && tpl.min_ram_mb && Number(ramInput.value) < Number(tpl.min_ram_mb)) {
       ramInput.value = tpl.min_ram_mb;
     }
     if (diskInput && tpl.min_disk_gb && Number(diskInput.value) < Number(tpl.min_disk_gb)) {
       diskInput.value = tpl.min_disk_gb;
+    }
+    const isProxmox = getDistroBrand(tpl).cat === 'proxmox';
+    if (isProxmox) {
+      // Proxmox VE minimums: 2 vCPU / 4 GB RAM / 40 GB disk + privileged + nesting + KVM
+      if (cpuInput && Number(cpuInput.value) < 2) cpuInput.value = 2;
+      if (cpuRange && Number(cpuRange.value) < 2) cpuRange.value = 2;
+      const cPriv = document.getElementById('cPriv');
+      const cNest = document.getElementById('cNest');
+      const cKvmNest = document.getElementById('cKvmNest');
+      if (cPriv) cPriv.checked = true;
+      if (cNest) cNest.checked = true;
+      if (cKvmNest) cKvmNest.checked = true;
+      // Auto-select Performance preset (4 vCPU / 4 GB / 60 GB) for Proxmox hypervisor headroom
+      const perfBtn = document.querySelector('#lxcPresetGrid .lxc-preset-card[data-preset="performance"]');
+      if (perfBtn) applyLxcPreset('performance', 4, 4096, 1024, 60, perfBtn);
     }
   }
   renderLxcOsGrid();
@@ -2833,10 +2850,12 @@ function updateSelectedOsBanner() {
   if (!tpl) { banner.style.display = 'none'; return; }
   banner.style.display = 'flex';
   const bannerIcon = resolveLxcIconUrl(tpl);
+  const isProxmoxBanner = getDistroBrand(tpl).cat === 'proxmox';
   banner.innerHTML =
     '<div style="display:flex;align-items:center;gap:9px;"><img src="' + hkvmEsc(bannerIcon) + '" alt="OS logo" style="width:28px;height:28px;border-radius:7px;object-fit:contain;background:#141821;padding:2px;" onerror="this.onerror=null;this.src=\'/images/os/linux.svg\';"><span><strong style="color:var(--text-primary);">Selected Image:</strong> ' + hkvmEsc(tpl.name || tpl.slug) +
     (tpl.description ? ' &mdash; <span style="color:var(--text-muted);">' + hkvmEsc(tpl.description) + '</span>' : '') + '</span></div>' +
-    '<div><code>' + hkvmEsc(tpl.slug) + '</code></div>';
+    '<div><code>' + hkvmEsc(tpl.slug) + '</code></div>' +
+    (isProxmoxBanner ? '<div style="flex-basis:100%;font-size:11.5px;color:#f59e0b;">Proxmox VE installs on first boot (5-15 min) on a Debian base — <code>neofetch</code> shows Debian by design. Verify with <code>pveversion</code> and <code>https://&lt;container-ip&gt;:8006</code>. Requires privileged + nesting + KVM (auto-enabled).</div>' : '');
 }
 
 function selectLxcNode(nodeId) {
