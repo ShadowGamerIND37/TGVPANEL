@@ -4404,6 +4404,185 @@ exec "$@"
       }
     });
 
+    // Phase 27: HAProxy load balancer manager — registry, rendered config
+    // validation, start/reload/stop lifecycle, honest capability gating and
+    // remote-node enforcement through the node agent.
+    await runStep('T42: HAProxy load balancers render, validate, apply and gate honestly', async () => {
+      const cmdRunner = require('../lib/node-agent/command-runner');
+      const origRun = cmdRunner.runAllowlistedCommand;
+      const origAvailable = cmdRunner.isBinaryAvailable;
+      const haproxyDir = path.join(process.env.TGVPANEL_DATA_DIR || os.homedir(), 'haproxy');
+      const calls = [];
+      let haproxyPresent = true;
+      let failValidation = false;
+
+      cmdRunner.isBinaryAvailable = (binary) => (binary === 'haproxy' ? haproxyPresent : origAvailable(binary));
+      cmdRunner.runAllowlistedCommand = async (binary, args, options) => {
+        calls.push({ binary, args });
+        if (binary === 'haproxy' && args[0] === '-c') {
+          if (failValidation) return { exitCode: 1, stdout: '', stderr: 'parse error on line 3', timedOut: false, durationMs: 1 };
+          return { exitCode: 0, stdout: 'Configuration file is valid', stderr: '', timedOut: false, durationMs: 1 };
+        }
+        if (binary === 'haproxy' && args[0] === '-D') {
+          // Simulate HAProxy creating its pidfile.
+          const pidIdx = args.indexOf('-p');
+          if (pidIdx >= 0) fs.writeFileSync(args[pidIdx + 1], String(12345), { mode: 0o640 });
+          return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 1 };
+        }
+        return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 1 };
+      };
+
+      try {
+        // Create a load balancer with two backends.
+        const createRes = await adminClient.request(
+          'POST',
+          '/api/v1/load-balancers',
+          {
+            name: 't42-web-lb',
+            nodeId: 1,
+            listenIp: '0.0.0.0',
+            listenPort: 8080,
+            protocol: 'tcp',
+            algorithm: 'roundrobin',
+            backends: [
+              { name: 'app-1', target: '10.88.10.5', port: 8081, weight: 2 },
+              { name: 'app-2', target: '10.88.10.6', port: 8081, weight: 1 },
+            ],
+          },
+          { 'X-Forwarded-For': '198.51.100.70' }
+        );
+        assert.strictEqual(createRes.status, 201, `LB creation failed: ${createRes.text}`);
+        const lb = createRes.json.loadBalancer;
+        assert.strictEqual(lb.backends.length, 2, 'Both backends must persist');
+        assert.strictEqual(lb.backends[0].target, '10.88.10.5');
+
+        // Apply: config is written, validated and the process started.
+        calls.length = 0;
+        const applyRes = await adminClient.request(
+          'POST',
+          `/api/v1/load-balancers/${lb.id}/apply`,
+          { mode: 'start' },
+          { 'X-Forwarded-For': '198.51.100.71' }
+        );
+        assert.strictEqual(applyRes.status, 200, `LB apply failed: ${applyRes.text}`);
+        assert.strictEqual(applyRes.json.applied, true, 'Apply must succeed with a valid config');
+        assert.strictEqual(applyRes.json.validated, true, 'Config must validate');
+        const cfgPath = path.join(haproxyDir, 't42-web-lb.cfg');
+        const cfg = fs.readFileSync(cfgPath, 'utf8');
+        assert.match(cfg, /frontend t42-web-lb_fe/, 'Rendered config must contain the frontend');
+        assert.match(cfg, /bind 0.0.0.0:8080/, 'Rendered config must bind the listen address');
+        assert.match(cfg, /server app-1 10.88.10.5:8081 weight 2 check/, 'Rendered config must contain backend servers');
+        assert.ok(calls.some((c) => c.binary === 'haproxy' && c.args[0] === '-c'), 'Validation command must run');
+        assert.ok(calls.some((c) => c.binary === 'haproxy' && c.args[0] === '-D'), 'Daemon start command must run');
+
+        // Status reflects the running process (pidfile created by the stubbed start).
+        const statusRes = await adminClient.request('GET', `/api/v1/load-balancers/${lb.id}/status`);
+        assert.strictEqual(statusRes.status, 200, `LB status failed: ${statusRes.text}`);
+        assert.strictEqual(statusRes.json.status.running, true, 'Status must report the running process');
+
+        // Validation failure is recorded honestly and the process is not started.
+        failValidation = true;
+        const badApply = await adminClient.request(
+          'POST',
+          `/api/v1/load-balancers/${lb.id}/apply`,
+          { mode: 'reload' },
+          { 'X-Forwarded-For': '198.51.100.72' }
+        );
+        assert.strictEqual(badApply.status, 200, `LB apply must return 200 with honest failure: ${badApply.text}`);
+        assert.strictEqual(badApply.json.applied, false, 'Failed validation must not apply');
+        assert.strictEqual(badApply.json.validated, false, 'Failed validation must be reported');
+        assert.match(badApply.json.error, /validation failed/i, 'Validation error must be surfaced');
+        const errStatus = await adminClient.request('GET', `/api/v1/load-balancers/${lb.id}/status`);
+        assert.match(errStatus.json.status.lastError, /validation failed/i, 'Last error must be recorded on the LB');
+
+        // Capability gating: no haproxy binary means an honest refusal.
+        failValidation = false;
+        haproxyPresent = false;
+        const noBinary = await adminClient.request(
+          'POST',
+          `/api/v1/load-balancers/${lb.id}/apply`,
+          { mode: 'start' },
+          { 'X-Forwarded-For': '198.51.100.73' }
+        );
+        assert.strictEqual(noBinary.status, 200, `LB apply must return 200 with honest refusal: ${noBinary.text}`);
+        assert.strictEqual(noBinary.json.applied, false, 'Missing binary must refuse apply');
+        assert.match(noBinary.json.error, /haproxy binary is not available/i);
+
+        // Validation rejects malformed input.
+        haproxyPresent = true;
+        const badCreate = await adminClient.request(
+          'POST',
+          '/api/v1/load-balancers',
+          { name: 't42-bad', listenPort: 70000, backends: [] },
+          { 'X-Forwarded-For': '198.51.100.74' }
+        );
+        assert.strictEqual(badCreate.status, 400, `Invalid listenPort must be rejected: ${badCreate.text}`);
+
+        // Update and delete cascade backends.
+        const updRes = await adminClient.request(
+          'PUT',
+          `/api/v1/load-balancers/${lb.id}`,
+          { listenPort: 8443, backends: [{ name: 'only', target: '10.88.10.9', port: 9000, weight: 1 }] },
+          { 'X-Forwarded-For': '198.51.100.75' }
+        );
+        assert.strictEqual(updRes.status, 200, `LB update failed: ${updRes.text}`);
+        assert.strictEqual(updRes.json.loadBalancer.backends.length, 1, 'Backends must be replaced on update');
+
+        // Remote-node enforcement: the agent validates and applies the config.
+        const remoteApply = () =>
+          new Promise((resolve, reject) => {
+            const body = JSON.stringify({ name: 't42-remote-lb', config: 'frontend x\n    bind 0.0.0.0:9000\n', mode: 'start' });
+            const signed = signAgentRequest({
+              nodeId: 'local-loopback-agent',
+              apiKey: agentApiKey,
+              hmacSecret: agentHmacSecret,
+              method: 'POST',
+              pathWithQuery: '/api/v1/load-balancers/apply',
+              bodyBuffer: body,
+            });
+            const r = http.request(
+              {
+                hostname: '127.0.0.1',
+                port: AGENT_PORT,
+                path: '/api/v1/load-balancers/apply',
+                method: 'POST',
+                headers: { ...signed, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+              },
+              (res) => {
+                let txt = '';
+                res.on('data', (c) => (txt += c));
+                res.on('end', () => resolve({ status: res.statusCode, text: txt }));
+              }
+            );
+            r.on('error', reject);
+            r.end(body);
+          });
+        const agentLb = await remoteApply();
+        assert.strictEqual(agentLb.status, 200, `Agent LB apply failed: ${agentLb.text}`);
+        const agentLbJson = JSON.parse(agentLb.text);
+        assert.strictEqual(agentLbJson.applied, true, 'Agent must apply a valid remote config');
+        assert.strictEqual(agentLbJson.validated, true, 'Agent must validate the remote config');
+
+        const delRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/load-balancers/${lb.id}`,
+          undefined,
+          { 'X-Forwarded-For': '198.51.100.76' }
+        );
+        assert.strictEqual(delRes.status, 200, `LB delete failed: ${delRes.text}`);
+        const afterDel = await ctx.db.all(`SELECT id FROM load_balancer_backends WHERE load_balancer_id = ?`, [lb.id]);
+        assert.strictEqual(afterDel.length, 0, 'Backends must cascade on delete');
+      } finally {
+        cmdRunner.runAllowlistedCommand = origRun;
+        cmdRunner.isBinaryAvailable = origAvailable;
+        await ctx.db.run(`DELETE FROM load_balancer_backends`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM load_balancers`).catch(() => undefined);
+        if (fs.existsSync(path.join(haproxyDir, 't42-web-lb.cfg'))) fs.unlinkSync(path.join(haproxyDir, 't42-web-lb.cfg'));
+        if (fs.existsSync(path.join(haproxyDir, 't42-web-lb.pid'))) fs.unlinkSync(path.join(haproxyDir, 't42-web-lb.pid'));
+        if (fs.existsSync(path.join(haproxyDir, 't42-remote-lb.cfg'))) fs.unlinkSync(path.join(haproxyDir, 't42-remote-lb.cfg'));
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

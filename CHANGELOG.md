@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Phase 27 HAProxy load balancer manager (2026-10-30)
+
+- Added the missing load balancer subsystem (audit Area J: no HAProxy manager). Migration **v029** adds `load_balancers` (frontend spec: listen IP/port, protocol, algorithm, lifecycle state) and `load_balancer_backends` (ordered backend pool with target/port/weight, cascade delete).
+- New `LoadBalancerManager` (`src/services/network/LoadBalancerManager.ts`): renders a complete HAProxy config from the registry rows, **validates it with `haproxy -c` before touching any running process**, then starts (`haproxy -D`), reloads (`haproxy -sf`) or stops (pidfile + `kill -TERM`) the process on the target node via allowlisted host commands. Validation/apply results and errors are recorded honestly on each load balancer (`last_applied_at`, `last_validated_at`, `last_error`). Nodes without the `haproxy` binary fail with a clear error — nothing is faked. Remote nodes are enforced through a new agent endpoint (`POST /api/v1/load-balancers/apply`) that validates and applies the rendered config on the host.
+- `haproxy` and `kill` added to the host command allowlist; new `SafeValidators.loadBalancerName`.
+- API: `GET/POST /api/v1/load-balancers`, `GET/PUT/DELETE /api/v1/load-balancers/:id`, `POST /api/v1/load-balancers/:id/apply` (start/reload/stop), `GET /api/v1/load-balancers/:id/status`.
+- Admin UI: new **Load Balancers** section with a create form (dynamic backend rows), a registry table with live status and Apply/Reload/Stop/Delete actions.
+- T42: creation with backends, rendered-config assertions (frontend bind + server lines), validate→start command sequence, running status, honest validation-failure recording, capability gating without the binary, input validation, update/replace-backends, cascade delete, and remote-node enforcement through the agent. Full suite: **42/42 acceptance suites passing**.
+
 ## Unreleased — Phase 26 per-instance bandwidth accounting (2026-10-30)
 
 - Added the missing bandwidth accounting: per-instance network traffic is now measured and accumulated. Migration **v028** adds the `instance_traffic` cumulative ledger (rx/tx totals + last counter readings).

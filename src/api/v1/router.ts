@@ -2212,6 +2212,86 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // --- HAProxy Load Balancers ---
+  router.get(
+    '/load-balancers',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const loadBalancers = await ctx.loadBalancerManager.listLoadBalancers();
+      res.json({ loadBalancers });
+    }
+  );
+
+  router.get(
+    '/load-balancers/:id',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const lb = await ctx.loadBalancerManager.getLoadBalancer(pInt(req.params.id));
+      if (!lb) return res.status(404).json({ error: 'Load balancer does not exist.' });
+      res.json({ loadBalancer: lb });
+    }
+  );
+
+  router.post(
+    '/load-balancers',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const lb = await ctx.loadBalancerManager.createLoadBalancer(req.body || {});
+        res.status(201).json({ loadBalancer: lb });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.put(
+    '/load-balancers/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const lb = await ctx.loadBalancerManager.updateLoadBalancer(pInt(req.params.id), req.body || {});
+        res.json({ loadBalancer: lb });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/load-balancers/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      const id = pInt(req.params.id);
+      const lb = await ctx.loadBalancerManager.getLoadBalancer(id);
+      if (!lb) return res.status(404).json({ error: 'Load balancer does not exist.' });
+      await ctx.loadBalancerManager.deleteLoadBalancer(id);
+      res.json({ success: true });
+    }
+  );
+
+  router.post(
+    '/load-balancers/:id/apply',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      const lb = await ctx.loadBalancerManager.getLoadBalancer(pInt(req.params.id));
+      if (!lb) return res.status(404).json({ error: 'Load balancer does not exist.' });
+      const mode = req.body?.mode === 'reload' || req.body?.mode === 'stop' ? req.body.mode : 'start';
+      const result = await ctx.loadBalancerManager.applyLoadBalancer(lb, mode);
+      res.json(result);
+    }
+  );
+
+  router.get(
+    '/load-balancers/:id/status',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const status = await ctx.loadBalancerManager.getLoadBalancerStatus(pInt(req.params.id));
+      if (!status) return res.status(404).json({ error: 'Load balancer does not exist.' });
+      res.json({ status });
+    }
+  );
+
   // --- Scheduled Snapshot Policies ---
   router.get('/snapshot-schedules', async (req: Request, res: Response) => {
     try {

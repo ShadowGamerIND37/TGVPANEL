@@ -1926,6 +1926,45 @@ export const MIGRATIONS: MigrationDefinition[] = [
       );
     },
   },
+  {
+    version: 29,
+    name: 'v029_load_balancers',
+    up: async (db) => {
+      // HAProxy load balancer registry: frontends plus their backend pools.
+      // The panel renders the HAProxy config from these rows, validates it
+      // with `haproxy -c`, and starts/reloads the process on the target node.
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS load_balancers (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          node_id INTEGER NOT NULL DEFAULT 1,
+          listen_ip TEXT NOT NULL DEFAULT '0.0.0.0',
+          listen_port INTEGER NOT NULL,
+          protocol TEXT NOT NULL DEFAULT 'tcp',
+          algorithm TEXT NOT NULL DEFAULT 'roundrobin',
+          enabled INTEGER DEFAULT 1,
+          last_applied_at DATETIME,
+          last_validated_at DATETIME,
+          last_error TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+        )`
+      );
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS load_balancer_backends (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          load_balancer_id INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          target TEXT NOT NULL,
+          port INTEGER NOT NULL,
+          weight INTEGER DEFAULT 1,
+          enabled INTEGER DEFAULT 1,
+          position INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY(load_balancer_id) REFERENCES load_balancers(id) ON DELETE CASCADE
+        )`
+      );
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

@@ -1876,6 +1876,37 @@
       </div>
       <% } %>
 
+      <!-- SECTION: LOAD BALANCERS -->
+      <% if (section === 'load-balancers') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">HAProxy Load Balancers</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Frontends with backend pools, enforced with validated HAProxy configs on the target node.</p>
+        </div>
+      </div>
+      <div class="v3-card">
+        <h3>Add Load Balancer</h3>
+        <form onsubmit="submitLoadBalancer(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Name</label><input id="lbName" placeholder="web-frontend"></div>
+          <div class="v3-field"><label>Node</label><select id="lbNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select></div>
+          <div class="v3-field"><label>Listen IP</label><input id="lbIp" placeholder="0.0.0.0"></div>
+          <div class="v3-field"><label>Listen Port</label><input id="lbPort" type="number" min="1" max="65535" placeholder="80"></div>
+          <div class="v3-field"><label>Protocol</label><select id="lbProto"><option value="tcp">TCP</option><option value="http">HTTP</option></select></div>
+          <div class="v3-field"><label>Algorithm</label><select id="lbAlgo"><option value="roundrobin">Round Robin</option><option value="leastconn">Least Connections</option><option value="source">Source</option></select></div>
+          <div class="v3-field" style="grid-column:1/-1;"><label>Backends</label><div id="lbBackends"></div>
+            <button type="button" class="btn btn-outline" onclick="addLbBackendRow()" style="margin-top:8px;">+ Add backend</button>
+          </div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Load Balancer</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Name</th><th>Listen</th><th>Mode</th><th>Backends</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="lbBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
       <!-- SECTION: SNAPSHOTS -->
       <% if (section === 'snapshots') { %>
       <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Unified Instance Snapshots (QCOW2 &amp; LXC)</h2></div>
@@ -4820,6 +4851,95 @@ async function delPort(id) {
   loadPorts();
 }
 
+function addLbBackendRow() {
+  const wrap = document.getElementById('lbBackends');
+  if (!wrap) return;
+  const row = document.createElement('div');
+  row.className = 'v3-form-grid';
+  row.style.marginBottom = '8px';
+  row.innerHTML = `
+    <div class="v3-field"><label>Name</label><input class="lbBkName" placeholder="app-1"></div>
+    <div class="v3-field"><label>Target</label><input class="lbBkTarget" placeholder="10.88.10.5"></div>
+    <div class="v3-field"><label>Port</label><input class="lbBkPort" type="number" min="1" max="65535" placeholder="8080"></div>
+    <div class="v3-field"><label>Weight</label><input class="lbBkWeight" type="number" min="1" max="256" value="1"></div>
+    <div class="v3-field" style="display:flex;align-items:flex-end;gap:8px;"><button type="button" class="btn btn-outline" onclick="this.closest('div').remove()">Remove</button></div>`;
+  wrap.appendChild(row);
+}
+
+function collectLbBackends() {
+  return [...document.querySelectorAll('#lbBackends .v3-form-grid')].map((row) => ({
+    name: row.querySelector('.lbBkName').value,
+    target: row.querySelector('.lbBkTarget').value,
+    port: Number(row.querySelector('.lbBkPort').value),
+    weight: Number(row.querySelector('.lbBkWeight').value || 1),
+  }));
+}
+
+async function loadLoadBalancers() {
+  const data = await hkvmApi('/api/v1/load-balancers');
+  document.getElementById('lbBody').innerHTML = data.loadBalancers.length
+    ? data.loadBalancers.map(lb => `<tr>
+        <td>#${lb.id}</td><td><strong>${hkvmEsc(lb.name)}</strong></td>
+        <td><code>${hkvmEsc(lb.listen_ip)}:${lb.listen_port}</code></td>
+        <td>${hkvmEsc(lb.protocol)} / ${hkvmEsc(lb.algorithm)}</td>
+        <td>${lb.backend_count}</td>
+        <td class="lb-status" data-id="${lb.id}" style="font-size:11px;">loading…</td>
+        <td class="v3-btn-row">
+          <button class="btn btn-outline" onclick="applyLoadBalancer(${lb.id}, 'start', this)">Apply</button>
+          <button class="btn btn-outline" onclick="applyLoadBalancer(${lb.id}, 'reload', this)">Reload</button>
+          <button class="btn btn-outline" onclick="applyLoadBalancer(${lb.id}, 'stop', this)">Stop</button>
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="delLoadBalancer(${lb.id})">Delete</button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" style="color:var(--text-muted);">No load balancers configured.</td></tr>';
+  document.querySelectorAll('.lb-status').forEach(async (cell) => {
+    try {
+      const res = await hkvmApi(`/api/v1/load-balancers/${cell.getAttribute('data-id')}/status`);
+      const st = res.status;
+      cell.textContent = st.running ? 'running' : (st.lastError ? 'error' : 'stopped');
+      cell.style.color = st.running ? 'var(--ok)' : (st.lastError ? '#ef4444' : 'var(--text-muted)');
+      if (st.lastError) cell.title = st.lastError;
+    } catch (err) { cell.textContent = '—'; }
+  });
+}
+
+async function submitLoadBalancer(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi('/api/v1/load-balancers', {
+      method: 'POST',
+      body: {
+        name: document.getElementById('lbName').value,
+        nodeId: Number(document.getElementById('lbNode').value),
+        listenIp: document.getElementById('lbIp').value || '0.0.0.0',
+        listenPort: Number(document.getElementById('lbPort').value),
+        protocol: document.getElementById('lbProto').value,
+        algorithm: document.getElementById('lbAlgo').value,
+        backends: collectLbBackends(),
+      },
+    });
+    document.getElementById('lbName').value = '';
+    document.getElementById('lbBackends').innerHTML = '';
+    hkvmToast('Load balancer created');
+    loadLoadBalancers();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function delLoadBalancer(id) {
+  await hkvmApi('/api/v1/load-balancers/' + id, { method: 'DELETE' });
+  loadLoadBalancers();
+}
+
+async function applyLoadBalancer(id, mode, btn) {
+  btn.disabled = true;
+  try {
+    const res = await hkvmApi(`/api/v1/load-balancers/${id}/apply`, { method: 'POST', body: { mode } });
+    hkvmToast(mode + ': ' + (res.applied ? 'applied' : 'failed') + (res.error ? ' — ' + res.error : ''), res.applied ? 'success' : 'error');
+    loadLoadBalancers();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+  btn.disabled = false;
+}
+
 async function loadFirewall() {
   const data = await hkvmApi('/api/v1/network/firewall');
   document.getElementById('fwBody').innerHTML = data.rules.length
@@ -5987,6 +6107,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadFirewall();
     loadFirewallProfiles();
   }
+  if (CURRENT_SECTION === 'load-balancers') loadLoadBalancers();
 
   function addFwProfileRule() {
     const wrap = document.getElementById('fwpRules');

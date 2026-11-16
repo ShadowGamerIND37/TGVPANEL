@@ -8,6 +8,7 @@ import { VirtualizationManager } from './services/virtualization/VirtualizationM
 import { InstanceManager } from './services/virtualization/InstanceManager';
 import { StorageManager } from './services/storage/StorageManager';
 import { NetworkManager } from './services/network/NetworkManager';
+import { LoadBalancerManager } from './services/network/LoadBalancerManager';
 import { BackupSnapshotManager } from './services/backup/BackupSnapshotManager';
 import { MigrationManager } from './services/migration/MigrationManager';
 import { MonitoringService } from './services/monitoring/MonitoringService';
@@ -20,6 +21,7 @@ export interface HkvmRuntimeContext {
     instanceManager: InstanceManager;
     storageManager: StorageManager;
     networkManager: NetworkManager;
+    loadBalancerManager: LoadBalancerManager;
     backupManager: BackupSnapshotManager;
     migrationManager: MigrationManager;
     monitoringService: MonitoringService;

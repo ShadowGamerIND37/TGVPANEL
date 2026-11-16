@@ -896,6 +896,83 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
     }
   });
 
+  // Remote Host HAProxy load balancer lifecycle (config validation + start/reload/stop)
+  app.post('/api/v1/load-balancers/apply', async (req, res) => {
+    try {
+      const name = String(req.body?.name || '').trim();
+      const config = String(req.body?.config || '');
+      const mode: 'start' | 'reload' | 'stop' =
+        req.body?.mode === 'reload' || req.body?.mode === 'stop' ? req.body.mode : 'start';
+
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,59}$/.test(name)) {
+        return res.status(400).json({ error: 'Invalid load balancer name.' });
+      }
+      if (!config || !config.includes('frontend')) {
+        return res.status(400).json({ error: 'A valid HAProxy configuration is required.' });
+      }
+      if (!isBinaryAvailable('haproxy')) {
+        return res.json({ validated: false, applied: false, error: 'The haproxy binary is not available on this node.' });
+      }
+
+      const haproxyDir = path.join(dataDir, 'haproxy');
+      fs.mkdirSync(haproxyDir, { recursive: true });
+      const cfgPath = path.join(haproxyDir, `${name}.cfg`);
+      const pidPath = path.join(haproxyDir, `${name}.pid`);
+      fs.writeFileSync(cfgPath, config, { mode: 0o640 });
+
+      const check = await runAllowlistedCommand('haproxy', ['-c', '-f', cfgPath], {
+        asRoot: true,
+        timeoutMs: 10_000,
+      });
+      if (check.exitCode !== 0) {
+        return res.json({
+          validated: false,
+          applied: false,
+          error: `HAProxy config validation failed: ${(check.stderr || check.stdout).trim()}`,
+        });
+      }
+
+      let applyRes: { exitCode: number; stdout: string; stderr: string } = {
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+      };
+      if (mode === 'stop') {
+        if (fs.existsSync(pidPath)) {
+          const pid = Number(fs.readFileSync(pidPath, 'utf8').trim());
+          if (Number.isInteger(pid) && pid > 0) {
+            applyRes = await runAllowlistedCommand('kill', ['-TERM', String(pid)], {
+              asRoot: true,
+              timeoutMs: 5_000,
+            });
+          }
+          if (applyRes.exitCode === 0) fs.unlinkSync(pidPath);
+        }
+      } else if (mode === 'reload') {
+        applyRes = await runAllowlistedCommand('haproxy', ['-sf', '-p', pidPath, '-f', cfgPath], {
+          asRoot: true,
+          timeoutMs: 10_000,
+        });
+      } else {
+        applyRes = await runAllowlistedCommand('haproxy', ['-D', '-f', cfgPath, '-p', pidPath], {
+          asRoot: true,
+          timeoutMs: 10_000,
+        });
+      }
+
+      if (applyRes.exitCode !== 0) {
+        return res.json({
+          validated: true,
+          applied: false,
+          error: `HAProxy ${mode} failed: ${(applyRes.stderr || applyRes.stdout).trim()}`,
+        });
+      }
+      return res.json({ validated: true, applied: true, error: null });
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+  });
+
   // Offline migration export/import endpoints
   app.post('/api/v1/transfers/export', async (req, res) => {
     try {

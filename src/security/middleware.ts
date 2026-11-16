@@ -416,6 +416,14 @@ export const SafeValidators = {
     return val;
   },
 
+  loadBalancerName(name: unknown): string {
+    const val = String(name || '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,59}$/.test(val)) {
+      throw new Error('Invalid load balancer name: use 2-60 alphanumeric, dash, or underscore characters.');
+    }
+    return val;
+  },
+
   snapshotName(name: unknown): string {
     const val = String(name || '').trim();
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}$/.test(val)) {
