@@ -17,6 +17,7 @@ import { AdminNodeShellManager } from './shell-manager';
 import { isBinaryAvailable, runAllowlistedCommand } from './command-runner';
 import { hashApiKey, signAgentRequest } from '../security/crypto-vault';
 import { SafeValidators } from '../security/middleware';
+import { decryptArchive } from '../services/backup/backup-crypto';
 
 /**
  * In-process runtime combining all Node Agent managers.
@@ -609,6 +610,51 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
         sizeBytes,
         reasons,
       });
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/v1/backups/receive', async (req, res) => {
+    try {
+      const { fileName, archiveBase64, expectedSha256, encrypted } = req.body || {};
+      const safeName = SafeValidators.snapshotName(String(fileName || `backup_${Date.now()}`));
+      const dest = runtime.snapshotManager.resolveConfinedBackupPath(
+        path.join(runtime.snapshotManager.getBackupDir(), safeName)
+      );
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, Buffer.from(String(archiveBase64 || ''), 'base64'), { mode: 0o600 });
+
+      // Verify the received copy: decrypt encrypted archives before checksumming so
+      // the comparison matches the source's decrypted-content SHA-256.
+      let actualSha256: string;
+      if (Number(encrypted || 0) === 1) {
+        const tmp = path.join(
+          runtime.snapshotManager.getBackupDir(),
+          `receivecheck_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
+        );
+        runtime.snapshotManager.resolveConfinedBackupPath(tmp);
+        try {
+          decryptArchive(dest, tmp);
+          actualSha256 = await runtime.snapshotManager.computeFileSha256(tmp);
+        } finally {
+          if (fs.existsSync(tmp)) {
+            try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+          }
+        }
+      } else {
+        actualSha256 = await runtime.snapshotManager.computeFileSha256(dest);
+      }
+
+      if (expectedSha256 && String(expectedSha256).toLowerCase() !== actualSha256.toLowerCase()) {
+        try { fs.unlinkSync(dest); } catch { /* best effort */ }
+        return res.status(409).json({
+          error: `Received backup SHA-256 mismatch (expected ${expectedSha256}, got ${actualSha256})`,
+        });
+      }
+
+      const st = fs.statSync(dest);
+      return res.json({ filePath: dest, checksumSha256: actualSha256, sizeBytes: st.size });
     } catch (err: any) {
       return res.status(400).json({ error: err.message });
     }

@@ -107,6 +107,27 @@ export declare class BackupSnapshotManager {
         sizeBytes: number | null;
         reasons: string[];
     }>;
+    /**
+     * Copies a backup archive to a destination node (backup replication/offload),
+     * addressing the "remote destinations" gap. The stored archive is copied as-is
+     * (encrypted archives stay encrypted) and the copy is integrity-verified against
+     * the source checksum before being recorded in `backup_copies`. For a remote
+     * target the archive is streamed to the node agent's receive endpoint; for a
+     * local target it is written to the confined backup directory and verified here.
+     */
+    copyBackupToNode(backupId: number, targetNodeId: number, actorId?: number): Promise<{
+        copyId: number;
+        backupId: number;
+        targetNodeId: number;
+        filePath: string;
+        checksumSha256: string;
+        sizeBytes: number;
+        encrypted: boolean;
+        status: string;
+    }>;
+    /** Computes the SHA-256 of a stored archive, decrypting encrypted archives first. */
+    private computeStoredChecksum;
+    listBackupCopies(backupId: number): Promise<any[]>;
     restoreBackup(backupId: number, actorId?: number): Promise<{
         restored: boolean;
         status: string;

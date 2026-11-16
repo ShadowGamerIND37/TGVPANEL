@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Phase 10 backup destination: cross-node copy (2026-10-30)
+
+- Added backup destination support via cross-node backup copy (replication/offload). `BackupSnapshotManager.copyBackupToNode(backupId, targetNodeId)` copies a backup archive to a destination node and integrity-verifies the copy against the source SHA-256 before recording it. The stored archive is copied as-is (encrypted archives stay encrypted); the copy is verified by decrypting encrypted archives before checksumming so the comparison matches the source's decrypted-content hash.
+- New `backup_copies` table (migration **v024 `v024_backup_destination_copies`**) records each copy: backup id, target node, file path, checksum, size, encryption flag, and creator. New endpoints: `POST /api/v1/backups/:id/copy` (admin/subadmin) and `GET /api/v1/backups/:id/copies`.
+- New node-agent `POST /api/v1/backups/receive` endpoint writes the archive to the confined backup directory and verifies it (decrypting if encrypted), returning the computed checksum. Local-target copies are written and verified in-process.
+- This addresses the "remote destinations" gap in area E without requiring external S3/FTP/NFS credentials — destinations are TGVPANEL nodes. S3/FTP/SFTP/NFS object destinations remain unimplemented.
+- T14 covers copying an encrypted local backup to the remote node, asserting the copy is recorded, completed, encrypted, and checksum-matches the source, and that the copies list includes it.
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 9 backup restore rehearsal (2026-10-30)
 
 - Added restore rehearsal (dry-run pre-restore verification) for backups. `BackupSnapshotManager.rehearseRestore(backupId)` confirms a backup is restorable WITHOUT performing the restore: it verifies the SHA-256 checksum (decrypting encrypted archives first, building on Phase 7), then structurally inspects the tar.gz via an allowlisted `tar -tzf` to confirm it is a readable archive and reports the entry count and top-level container directory. It returns a structured verdict (`restorable`, `checksumValid`, `archiveValid`, `entryCount`, `topLevelDir`, `reasons`).

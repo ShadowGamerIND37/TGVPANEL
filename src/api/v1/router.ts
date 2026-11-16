@@ -2260,6 +2260,41 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  router.post(
+    '/backups/:id/copy',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const backupId = pInt(req.params.id);
+        const targetNodeId = pInt(req.body?.targetNodeId);
+        if (!targetNodeId) {
+          return res.status(400).json({ error: 'targetNodeId is required.' });
+        }
+        const out = await ctx.backupManager.copyBackupToNode(
+          backupId,
+          targetNodeId,
+          req.principal!.userId
+        );
+        res.status(201).json({ copy: out });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.get(
+    '/backups/:id/copies',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      try {
+        const copies = await ctx.backupManager.listBackupCopies(pInt(req.params.id));
+        res.json({ copies });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
   router.post('/backups/:id/restore', async (req: Request, res: Response) => {
     try {
       const backupId = pInt(req.params.id);

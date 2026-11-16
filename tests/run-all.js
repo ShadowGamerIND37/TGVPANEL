@@ -3354,6 +3354,26 @@ exec "$@"
       assert.strictEqual(negRehearse.json.checksumValid, false);
       await adminClient.request('DELETE', `/api/v1/backups/${negBkpId}`);
 
+      // Phase 10: backup destination — copy the encrypted local backup to the remote
+      // node (backup replication) and verify the copy's integrity + list it.
+      const bkpCopy = await adminClient.request('POST', `/api/v1/backups/${lxcBkpId}/copy`, {
+        targetNodeId: remoteNodeId,
+      });
+      assert.strictEqual(bkpCopy.status, 201, `Backup copy failed: ${bkpCopy.text}`);
+      assert.strictEqual(bkpCopy.json.copy.backupId, lxcBkpId);
+      assert.strictEqual(bkpCopy.json.copy.targetNodeId, remoteNodeId);
+      assert.strictEqual(bkpCopy.json.copy.status, 'completed');
+      assert.strictEqual(bkpCopy.json.copy.encrypted, true, 'Copy must preserve encryption');
+      assert.strictEqual(
+        bkpCopy.json.copy.checksumSha256,
+        bkpCreate.json.backup.checksumSha256,
+        'Copy checksum must match the source backup'
+      );
+      const bkpCopies = await adminClient.request('GET', `/api/v1/backups/${lxcBkpId}/copies`);
+      assert.strictEqual(bkpCopies.status, 200);
+      assert.ok(bkpCopies.json.copies.length >= 1, 'Copies list must include the new copy');
+      assert.strictEqual(bkpCopies.json.copies[0].target_node_id, remoteNodeId);
+
       // Mutate existing file AND add post-backup junk file, then restore archive backup!
       await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/files/content`, {
         path: '/etc/app-version.txt',
