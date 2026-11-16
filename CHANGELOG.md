@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 21 backup deletion cleans up its copies (2026-10-30)
+
+- Fixed an orphaning gap in backup deletion: `BackupSnapshotManager.deleteBackup` removed the backup's archive file and its `container_backups` row but left every recorded copy (`backup_copies`) behind — orphaned rows plus copy files still occupying space on their target nodes. Deletion now removes copies **first** (each copy's file on its target node — local unlink or the node agent's idempotent `DELETE /api/v1/backups/file` — followed by the copy row), then the backup file and row. If any copy cleanup fails, the backup itself is left untouched so the operator can retry; nothing is silently half-deleted.
+- Scheduled backup retention (which calls `deleteBackup` for expired backups) now reclaims copies automatically as well.
+- T36 creates a KVM disk backup, copies it to the remote node, deletes the backup, and asserts the backup row and archive file are gone, the copy row is gone, and the copy file is removed from the target node.
+- Full suite: **36/36 acceptance suites passing**.
+
 ## Unreleased — Phase 20 restore from a backup copy (2026-10-30)
 
 - `BackupSnapshotManager.restoreBackup` now accepts an optional `copyId` and restores an LXC container from a specific recorded copy (`backup_copies`) instead of the primary archive — previously copies created by Phase 10 were write-only and could never serve a restore. The copy must belong to the requested backup and be `completed`; unknown or foreign copy ids are rejected with a 400.

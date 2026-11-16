@@ -116,6 +116,7 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | POST | `/backups/:id/rehearse` | staff | Restore rehearsal (dry-run pre-check; Phase 9). |
 | POST | `/backups/:id/copy` | admin/subadmin | Copy a backup to a destination node with integrity verification (Phase 10). |
 | GET | `/backups/:id/copies` | admin/subadmin | List cross-node backup copies. |
+| DELETE | `/backups/:id` | admin/subadmin | Delete a backup. Removes the archive file and, first, all recorded copies (files on their target nodes + rows); if a copy cleanup fails the backup is left intact for retry. |
 | GET/PUT/DELETE | `/backup-schedules[/:engine/:id]` | staff | Backup schedules (hourly/daily/weekly) + retention. |
 | GET/PUT/DELETE | `/snapshot-schedules[/:engine/:id]` | staff | Snapshot schedules + retention. |
 | GET/POST | `/snapshots/:engine/:id` | staff | List/create snapshots. KVM snapshots expose honest `sizeGb` + `allocatedGb` (Phase 13). |

@@ -3840,6 +3840,56 @@ exec "$@"
     });
 
     // 15. KVM Nesting (/dev/kvm passthrough), WSL2 /proc telemetry fallback & redesigned LXC Detail Control Center
+    // Phase 21: deleting a backup must clean up its recorded copies (rows +
+    // files on their target nodes) so nothing is orphaned behind the deletion.
+    await runStep('T36: Deleting a backup removes its copies (rows and node files)', async () => {
+      const vm = await ctx.db.get(`SELECT vm_id FROM vms LIMIT 1`);
+      assert.ok(vm, 'A KVM VM is required for the backup-deletion cleanup test');
+      const dummyDisk = path.join(tmpRoot, `t36-disk-${vm.vm_id}.qcow2`);
+      fs.writeFileSync(dummyDisk, crypto.randomBytes(65536));
+      const savedDisk = (await ctx.db.get(`SELECT disk_file FROM vms WHERE vm_id = ?`, [vm.vm_id]))?.disk_file;
+      await ctx.db.run(`UPDATE vms SET disk_file = ? WHERE vm_id = ?`, [dummyDisk, vm.vm_id]);
+
+      try {
+        const bkRes = await adminClient.request('POST', '/api/v1/backups', {
+          engine: 'kvm',
+          refId: vm.vm_id,
+        });
+        assert.strictEqual(bkRes.status, 201, `Backup creation failed: ${bkRes.text}`);
+        const bkId = bkRes.json.backup.backupId || bkRes.json.backup.id;
+        const backupFilePath = bkRes.json.backup.filePath;
+        assert.ok(backupFilePath, 'Backup response must include the archive file path');
+
+        const copyRes = await adminClient.request('POST', `/api/v1/backups/${bkId}/copy`, {
+          targetNodeId: remoteNodeId,
+        });
+        assert.strictEqual(copyRes.status, 201, `Backup copy failed: ${copyRes.text}`);
+        const copyId = copyRes.json.copy.copyId;
+        const copyFilePath = copyRes.json.copy.filePath;
+        assert.ok(copyFilePath, 'Copy response must include the copy file path');
+        assert.ok(fs.existsSync(copyFilePath), 'Copy file must exist on the target node before deletion');
+
+        const delRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/backups/${bkId}`,
+          {},
+          { 'X-Forwarded-For': '198.51.100.53' }
+        );
+        assert.strictEqual(delRes.status, 200, `Backup deletion failed: ${delRes.text}`);
+
+        const bkRow = await ctx.db.get(`SELECT id FROM container_backups WHERE id = ?`, [bkId]);
+        assert.strictEqual(bkRow, undefined, 'Deleted backup row must be removed');
+        assert.ok(!fs.existsSync(backupFilePath), 'Deleted backup archive file must be removed');
+
+        const copyRow = await ctx.db.get(`SELECT id FROM backup_copies WHERE id = ?`, [copyId]);
+        assert.strictEqual(copyRow, undefined, 'Copy row must be removed with its backup');
+        assert.ok(!fs.existsSync(copyFilePath), 'Copy file must be removed from the target node');
+      } finally {
+        await ctx.db.run(`UPDATE vms SET disk_file = ? WHERE vm_id = ?`, [savedDisk, vm.vm_id]);
+        try { fs.unlinkSync(dummyDisk); } catch { /* best effort */ }
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');
