@@ -3397,6 +3397,35 @@ exec "$@"
       assert.ok(reinstRes.json.rootPassword.length >= 16);
 
       // 14e. 7-Stage Verified Offline Migration: First test automatic pre-commit ROLLBACK on target conflict!
+      // Phase 8: duplicate-run fencing — an active migration must block a second one.
+      // Tested at the manager level (not via HTTP) so it exercises the exact fencing guard
+      // without adding a mutation request that would count against the shared rate limiter.
+      const lxcRowForFence = await ctx.db.get(
+        `SELECT node_id, container_name FROM lxc_instances WHERE id = ?`,
+        [e2eUbuntuId]
+      );
+      await ctx.db.run(
+        `INSERT INTO vps_migrations
+           (lxc_id, instance_type, instance_ref_id, container_name, source_node_id, target_node_id,
+            strategy, migration_mode, status, progress, initiated_by)
+         VALUES (?, 'lxc', ?, ?, ?, ?, 'offline_snapshot_transfer', 'offline_snapshot', 'exporting', 25, 1)`,
+        [e2eUbuntuId, e2eUbuntuId, lxcRowForFence.container_name, lxcRowForFence.node_id, remoteNodeId]
+      );
+      let fenceError = null;
+      try {
+        await ctx.migrationManager.startOfflineLxcMigration({
+          lxcId: e2eUbuntuId,
+          targetNodeId: remoteNodeId,
+          initiatedByUserId: 1,
+        });
+      } catch (e) {
+        fenceError = e.message;
+      }
+      assert.ok(fenceError, 'Expected fencing guard to reject a second active migration');
+      assert.match(fenceError, /active migration/i, `Fencing error expected: ${fenceError}`);
+      // Remove the injected active row so the real migration below can run.
+      await ctx.db.run(`DELETE FROM vps_migrations WHERE lxc_id = ? AND status = 'exporting'`, [e2eUbuntuId]);
+
       const conflictDir = path.join(tmpRoot, 'agent-lxc', 'e2e-ubuntu-01');
       fs.mkdirSync(conflictDir, { recursive: true });
       fs.writeFileSync(path.join(conflictDir, 'config'), 'lxc.uts.name = e2e-ubuntu-01\n');

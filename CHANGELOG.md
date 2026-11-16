@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Phase 8 migration duplicate-run fencing (2026-10-30)
+
+- Added duplicate-run fencing to offline LXC migration (`MigrationManager.startOfflineLxcMigration`). Before starting a new migration, the manager now queries `vps_migrations` for any active (non-terminal) job — status `preparing`, `preflight`, `exporting`, `transferring`, or `verifying` — for the same instance and rejects the request with a clear error. This prevents two concurrent transfers from racing on the same source container and target import path, which could cause data loss or duplicate target containers. Terminal statuses (`completed`, `rolled_back`, `failed`) do not block a new migration.
+- This closes an audit gap in roadmap area F ("duplicate-run fencing... incomplete") and is covered by T14, which inserts an active migration row and asserts the fencing guard rejects a second start before the real migration runs. The fencing test calls the manager directly so it does not count against the shared API mutation rate limiter.
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 7 backup encryption-at-rest (2026-10-30)
 
 - Added backup encryption at rest for **local LXC backup archives**. Local LXC tar.gz archives produced by `BackupSnapshotManager.createBackup` are now encrypted in place with AES-256-GCM using the existing panel credential key (`getSecretBundle().credentialKeyHex`) before the record is persisted. The plaintext archive is removed after the encrypted file (`<archive>.enc`) is written.
