@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 17 instance metrics history (record-on-read) (2026-10-30)
+
+- Fixed an instance metrics history gap: the monitoring background loop recorded only **node** metrics to `metrics_history`, so `GET /instances/:engine/:id/metrics` always returned an empty history for KVM/LXC instances. Added `MonitoringService.recordInstanceMetrics(engine, targetId, sample)`, and the telemetry endpoint (`GET /instances/:engine/:id/telemetry`) now persists each real measured sample to `metrics_history` on read (best-effort; a recording failure never fails the telemetry response).
+- This is a record-on-read approach rather than a heavy background sweep of every instance every poll cycle — the history reflects actual measured telemetry, and the 14-day `metrics_history` prune keeps it compact. The recorded `disk_used_gb`/`disk_total_gb` therefore carry the honest `qemu-img` figures from Phase 12.
+- T34 fetches KVM telemetry over HTTP, then asserts the metrics history endpoint returns a recorded sample whose `disk_total_gb`/`disk_used_gb` match the telemetry that was just returned — verifying the record-on-read wiring.
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 16 network pool IP capacity accounting (2026-10-30)
 
 - Enriched `NetworkManager.listNetworkPools` with honest per-pool IP capacity: each pool now reports `ipTotal`, `ipAvailable`, and `ipUsed`, computed from real `ip_allocations` counts via a `GROUP BY pool_id` query (`ipAvailable` = rows with `status = 'available'; `ipUsed` = total − available). This replaces a listing that returned only raw pool records with no capacity summary, and the figures are derived from live data rather than a stale recorded value.

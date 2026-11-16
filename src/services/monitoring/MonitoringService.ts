@@ -121,6 +121,43 @@ export class MonitoringService {
     );
   }
 
+  /**
+   * Persists an instance telemetry sample to metrics_history (record-on-read).
+   * This builds honest instance (kvm/lxc) metrics history from real measured
+   * samples without a heavy background sweep of every instance. Failures are
+   * swallowed so a telemetry read never fails because history recording failed.
+   */
+  public async recordInstanceMetrics(
+    engine: 'kvm' | 'lxc',
+    targetId: number,
+    sample: {
+      cpuPercent: number;
+      ramUsedMb: number;
+      ramTotalMb: number;
+      diskUsedGb: number;
+      diskTotalGb: number;
+      netRxBytes: number | null;
+      netTxBytes: number | null;
+    }
+  ): Promise<void> {
+    await this.db.run(
+      `INSERT INTO metrics_history
+         (target_type, target_id, cpu_percent, ram_used_mb, ram_total_mb, disk_used_gb, disk_total_gb, net_rx_bytes, net_tx_bytes, load_avg_1)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      [
+        engine,
+        targetId,
+        sample.cpuPercent,
+        sample.ramUsedMb,
+        sample.ramTotalMb,
+        sample.diskUsedGb,
+        sample.diskTotalGb,
+        sample.netRxBytes,
+        sample.netTxBytes,
+      ]
+    );
+  }
+
   private async evaluateAlertRules(
     scope: 'node' | 'instance',
     metrics: {

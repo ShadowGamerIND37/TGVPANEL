@@ -1713,6 +1713,17 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         assert.strictEqual(kvmDiskTel.diskTotalGb, 30, `KVM diskTotalGb must reflect qemu-img virtual-size (expected 30), got ${kvmDiskTel.diskTotalGb}`);
         assert.strictEqual(kvmDiskTel.diskUsedGb, Number((diskSizeBytes / 1024 ** 3).toFixed(2)), `KVM diskUsedGb must reflect qemu-img allocated disk-size (expected ${Number((diskSizeBytes / 1024 ** 3).toFixed(2))}), got ${kvmDiskTel.diskUsedGb}`);
 
+        // Phase 17: fetching instance telemetry must persist the real measured
+        // sample to metrics_history so the metrics history endpoint returns honest data.
+        const httpTel = await adminClient.request('GET', `/api/v1/instances/kvm/${vm.vm_id}/telemetry`);
+        assert.strictEqual(httpTel.status, 200, `KVM telemetry HTTP failed: ${httpTel.text}`);
+        const metricsHist = await adminClient.request('GET', `/api/v1/instances/kvm/${vm.vm_id}/metrics`);
+        assert.strictEqual(metricsHist.status, 200, `KVM metrics history failed: ${metricsHist.text}`);
+        assert.ok(metricsHist.json.history.length >= 1, 'Fetching telemetry must record a metrics_history sample');
+        const rec = metricsHist.json.history[metricsHist.json.history.length - 1];
+        assert.strictEqual(rec.disk_total_gb, httpTel.json.telemetry.diskTotalGb, `Recorded history disk_total_gb must match the telemetry sample (expected ${httpTel.json.telemetry.diskTotalGb}, got ${rec.disk_total_gb})`);
+        assert.strictEqual(rec.disk_used_gb, httpTel.json.telemetry.diskUsedGb, `Recorded history disk_used_gb must match the telemetry sample (expected ${httpTel.json.telemetry.diskUsedGb}, got ${rec.disk_used_gb})`);
+
         // Phase 13: KVM QCOW2 snapshot sizing must be honest (qemu-img virtual-size for
         // capacity and allocated disk-size for consumption) rather than the raw image-file
         // size, and the snapshot listing must expose both figures.

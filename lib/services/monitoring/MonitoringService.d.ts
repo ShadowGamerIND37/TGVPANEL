@@ -16,6 +16,21 @@ export declare class MonitoringService {
     stopBackgroundLoop(): void;
     collectCycle(): Promise<void>;
     getMetricsHistory(targetType: 'node' | 'kvm' | 'lxc', targetId: number, hours?: number): Promise<any[]>;
+    /**
+     * Persists an instance telemetry sample to metrics_history (record-on-read).
+     * This builds honest instance (kvm/lxc) metrics history from real measured
+     * samples without a heavy background sweep of every instance. Failures are
+     * swallowed so a telemetry read never fails because history recording failed.
+     */
+    recordInstanceMetrics(engine: 'kvm' | 'lxc', targetId: number, sample: {
+        cpuPercent: number;
+        ramUsedMb: number;
+        ramTotalMb: number;
+        diskUsedGb: number;
+        diskTotalGb: number;
+        netRxBytes: number | null;
+        netTxBytes: number | null;
+    }): Promise<void>;
     private evaluateAlertRules;
     createNotification(input: {
         userId: number;

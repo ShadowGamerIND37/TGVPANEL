@@ -660,6 +660,9 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       const engine = pStr(req.params.engine) as VirtualizationEngine;
       const refId = pInt(req.params.id);
       const telemetry = await ctx.instanceManager.getTelemetry(req.principal!, engine, refId);
+      // Record-on-read: persist the real measured sample to metrics_history so
+      // the instance metrics history endpoint returns honest data (best-effort).
+      await ctx.monitoringService.recordInstanceMetrics(engine, refId, telemetry).catch(() => undefined);
       res.json({ telemetry });
     } catch (err: any) {
       res.status(err.statusCode || 500).json({ error: err.message });
