@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Phase 7 backup encryption-at-rest (2026-10-30)
+
+- Added backup encryption at rest for **local LXC backup archives**. Local LXC tar.gz archives produced by `BackupSnapshotManager.createBackup` are now encrypted in place with AES-256-GCM using the existing panel credential key (`getSecretBundle().credentialKeyHex`) before the record is persisted. The plaintext archive is removed after the encrypted file (`<archive>.enc`) is written.
+- The encryption format is self-describing and byte-verifiable: magic header `TGVENC1` (8 bytes) + 12-byte IV + 16-byte GCM authentication tag + ciphertext. AES-GCM authenticates the ciphertext, so tampered or truncated archives fail to decrypt instead of restoring corrupt data.
+- Storage semantics: the `container_backups.encrypted` flag (1 for encrypted local archives, 0 otherwise) and `encryption_alg` column are recorded via migration **v023 `v023_backup_encryption_at_rest`**. The stored `checksum_sha256` remains the hash of the **decrypted** content, so integrity verification (`verifyBackupIntegrity`) decrypts to a confined temp file, recomputes the SHA-256, and cleans up. `restoreBackup` decrypts encrypted archives to a confined temp file before restoring; `deleteBackup` operates on the stored (`.enc`) path.
+- Scope: **local node LXC backups are encrypted at rest**. Remote-node backups remain unencrypted (backward compatibility for the existing cross-node transfer format), and KVM backups use the QCOW2 snapshot path and are unaffected. Encryption uses the panel credential key; key rotation, external KMS, and customer-supplied keys are out of scope for this batch.
+- Tests: T14 now asserts that a created local LXC backup is marked `encrypted=1` with `aes-256-gcm`, that the on-disk archive is an encrypted file, that the plaintext is removed, that encrypt/decrypt round-trips exactly, and that a tampered archive fails decryption. Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 6 security hardening (2026-10-30)
 
 - Hardened the generic rate limiter against `X-Forwarded-For` spoofing: it no longer trusts the client-supplied header unconditionally. The header is now honored only when the immediate socket peer is a configured reverse proxy (`TRUSTED_PROXIES` env var, comma-separated exact IPs or IPv4 CIDRs); otherwise the limiter keys on the socket address, so a directly-exposed panel cannot be bypassed by header spoofing. `createRateLimiter` accepts an optional `trustedProxies` override for testing. T09 covers parsing, exact/CIDR matching, IPv6 exact match, and the spoof-bypass contract. Default behavior (no `TRUSTED_PROXIES`) keys on the socket address, which is the safe default.

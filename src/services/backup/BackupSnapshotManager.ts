@@ -5,6 +5,7 @@ import { UnifiedDatabase } from '../../db/database';
 import { NodeManager } from '../nodes/NodeClient';
 import { VirtualizationManager } from '../virtualization/VirtualizationManager';
 import { SafeValidators } from '../../security/middleware';
+import { encryptArchive, decryptArchive, isEncryptedArchive } from './backup-crypto';
 
 export class BackupSnapshotManager {
   private db: UnifiedDatabase;
@@ -672,11 +673,21 @@ export class BackupSnapshotManager {
       checksumSha256: string;
     };
 
+    let encrypted = 0;
+    let encryptionAlg: string | null = null;
+
     if (row.is_local) {
       artifact = await this.nodeManager.localRuntime.snapshotManager.createTarBackup(
         row.container_name,
         params.label
       );
+      // Encrypt the archive at rest. AES-GCM's tag also guards the stored file; the
+      // recorded checksum remains the decrypted-content SHA-256 for restore verification.
+      const enc = encryptArchive(artifact.filePath);
+      artifact.filePath = enc.encryptedPath;
+      artifact.sizeBytes = enc.plaintextSizeBytes;
+      encrypted = 1;
+      encryptionAlg = 'aes-256-gcm';
     } else {
       const resp = await this.nodeManager.requestRemoteNode<{ backup: typeof artifact }>(
         row.node_id,
@@ -690,8 +701,8 @@ export class BackupSnapshotManager {
 
     const ins = await this.db.run(
       `INSERT INTO container_backups
-         (instance_type, instance_ref_id, node_id, backup_name, file_path, size_bytes, checksum_sha256, status, created_by)
-       VALUES ('lxc', ?, ?, ?, ?, ?, ?, 'completed', ?)`,
+         (instance_type, instance_ref_id, node_id, backup_name, file_path, size_bytes, checksum_sha256, encrypted, encryption_alg, status, created_by)
+       VALUES ('lxc', ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?)`,
       [
         params.refId,
         row.node_id,
@@ -699,6 +710,8 @@ export class BackupSnapshotManager {
         artifact.filePath,
         artifact.sizeBytes,
         artifact.checksumSha256,
+        encrypted,
+        encryptionAlg,
         params.actorId || null,
       ]
     );
@@ -741,11 +754,32 @@ export class BackupSnapshotManager {
     if (!fs.existsSync(bkp.file_path)) {
       return { valid: false, expectedSha256: bkp.checksum_sha256, actualSha256: null };
     }
-    const actual = await this.nodeManager.localRuntime.snapshotManager.computeFileSha256(
-      bkp.file_path
-    );
-    const valid = !bkp.checksum_sha256 || bkp.checksum_sha256.toLowerCase() === actual.toLowerCase();
-    return { valid, expectedSha256: bkp.checksum_sha256, actualSha256: actual };
+
+    // Encrypted archives are verified by decrypting to a temp file and checksumming the
+    // recovered content. AES-GCM authentication also fails here if the stored file was
+    // tampered with, so corruption is surfaced as an invalid/failed verification.
+    let verifyPath = bkp.file_path;
+    let tempVerifyPath: string | null = null;
+    if (Number(bkp.encrypted || 0) === 1) {
+      tempVerifyPath = path.join(
+        this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
+        `verify_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
+      );
+      this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(tempVerifyPath);
+      decryptArchive(bkp.file_path, tempVerifyPath);
+      verifyPath = tempVerifyPath;
+    }
+    try {
+      const actual = await this.nodeManager.localRuntime.snapshotManager.computeFileSha256(
+        verifyPath
+      );
+      const valid = !bkp.checksum_sha256 || bkp.checksum_sha256.toLowerCase() === actual.toLowerCase();
+      return { valid, expectedSha256: bkp.checksum_sha256, actualSha256: actual };
+    } finally {
+      if (tempVerifyPath && fs.existsSync(tempVerifyPath)) {
+        try { fs.unlinkSync(tempVerifyPath); } catch { /* best effort */ }
+      }
+    }
   }
 
   public async restoreBackup(
@@ -803,6 +837,17 @@ export class BackupSnapshotManager {
         );
         fs.mkdirSync(path.dirname(tempLocalFile), { recursive: true });
         fs.writeFileSync(tempLocalFile, Buffer.from(crossNodeBase64, 'base64'), { mode: 0o600 });
+        localTargetFile = tempLocalFile;
+      } else if (Number(bkp.encrypted || 0) === 1) {
+        // Encrypted local archive: decrypt to a confined temp file, then restore from it.
+        // The stored checksum verifies the recovered (decrypted) content.
+        tempLocalFile = this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(
+          path.join(
+            this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
+            `restore_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
+          )
+        );
+        decryptArchive(bkp.file_path, tempLocalFile);
         localTargetFile = tempLocalFile;
       }
       try {

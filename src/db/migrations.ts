@@ -1810,6 +1810,16 @@ export const MIGRATIONS: MigrationDefinition[] = [
       }
     },
   },
+  {
+    version: 23,
+    name: 'v023_backup_encryption_at_rest',
+    up: async (db) => {
+      // Marks local LXC backup archives that are encrypted on disk (AES-256-GCM).
+      // Defaults to 0 so existing and remote-node backups remain unencrypted and compatible.
+      await ensureColumn(db, 'container_backups', 'encrypted', 'INTEGER NOT NULL DEFAULT 0');
+      await ensureColumn(db, 'container_backups', 'encryption_alg', 'TEXT');
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

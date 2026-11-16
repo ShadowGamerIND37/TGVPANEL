@@ -3263,6 +3263,45 @@ exec "$@"
       const lxcBkpId = bkpCreate.json.backup.backupId;
       assert.strictEqual(bkpCreate.json.backup.checksumSha256.length, 64);
 
+      // Phase 7: local LXC backup archives are encrypted at rest (AES-256-GCM).
+      const { isEncryptedArchive } = require('../lib/services/backup/backup-crypto');
+      const lxcBkpRow = await ctx.db.get(
+        `SELECT encrypted, encryption_alg, file_path FROM container_backups WHERE id = ?`,
+        [lxcBkpId]
+      );
+      assert.strictEqual(Number(lxcBkpRow.encrypted), 1, 'Local LXC backup must be marked encrypted');
+      assert.strictEqual(lxcBkpRow.encryption_alg, 'aes-256-gcm');
+      assert.ok(isEncryptedArchive(lxcBkpRow.file_path), 'Stored backup archive must be encrypted on disk');
+      assert.ok(
+        !fs.existsSync(lxcBkpRow.file_path.replace(/\.enc$/, '')),
+        'Original plaintext archive must be removed after encryption'
+      );
+
+      // Direct crypto round-trip + tamper detection (AES-GCM authentication).
+      const { encryptArchive, decryptArchive } = require('../lib/services/backup/backup-crypto');
+      const rtStamp = Date.now();
+      const rtPlain = path.join(tmpRoot, `bkp-rt-${rtStamp}.tar.gz`);
+      const rtCipher = `${rtPlain}.enc`;
+      const rtOut = path.join(tmpRoot, `bkp-rt-${rtStamp}-out.tar.gz`);
+      const rtPayload = crypto.randomBytes(4096);
+      fs.writeFileSync(rtPlain, rtPayload);
+      encryptArchive(rtPlain);
+      assert.ok(fs.existsSync(rtCipher), 'encryptArchive must write a .enc file');
+      assert.ok(!fs.existsSync(rtPlain), 'encryptArchive must remove the plaintext');
+      decryptArchive(rtCipher, rtOut);
+      assert.ok(Buffer.compare(fs.readFileSync(rtOut), rtPayload) === 0, 'Decrypt must recover the original bytes');
+      // Tamper with the ciphertext -> GCM tag verification must fail.
+      const tampered = Buffer.from(fs.readFileSync(rtCipher));
+      tampered[tampered.length - 1] ^= 0xff;
+      fs.writeFileSync(rtCipher, tampered);
+      let tamperCaught = false;
+      try {
+        decryptArchive(rtCipher, rtOut);
+      } catch {
+        tamperCaught = true;
+      }
+      assert.ok(tamperCaught, 'Tampered encrypted archive must fail to decrypt (AES-GCM tag mismatch)');
+
       const bkpVerify = await adminClient.request('POST', `/api/v1/backups/${lxcBkpId}/verify`, {});
       assert.strictEqual(bkpVerify.status, 200);
       assert.strictEqual(bkpVerify.json.valid, true);
