@@ -52,7 +52,7 @@ applies what is pending.
 ## Migration model
 
 Migrations live in `src/db/migrations.ts` as an ordered array
-(`version`, `name`, `up`). Current schema version is **v025**. Each migration
+(`version`, `name`, `up`). Current schema version is **v026**. Each migration
 uses `CREATE TABLE IF NOT EXISTS` / `ensureColumn(...)` so it is safe against
 existing databases. Summary of the schema evolution:
 
@@ -66,6 +66,7 @@ existing databases. Summary of the schema evolution:
 | v019–v022 | tasks, devices, VNC, locks | Instance task history + operation locks; KVM offline device config; KVM local VNC console; non-suspending service lock. |
 | v023–v024 | backup DR | Backup encryption-at-rest; backup destination (cross-node) copies. |
 | v025 | snapshot accounting | KVM snapshot `allocated_gb` column (Phase 13). |
+| v026 | webhook status | `webhooks.last_error` column for retry delivery diagnostics (Phase 22). |
 
 ## Upgrade checklist
 

@@ -42,5 +42,18 @@ export declare class MonitoringService {
     listUserNotifications(userId: number, unreadOnly?: boolean): Promise<any[]>;
     markNotificationsRead(userId: number, notificationId?: number): Promise<void>;
     dispatchWebhookEvent(eventType: string, payload: Record<string, unknown>): Promise<void>;
+    /** Maximum delivery attempts (1 initial + 2 retries) for a webhook event. */
+    private static readonly WEBHOOK_MAX_ATTEMPTS;
+    /** Base backoff between attempts (ms); grows linearly with the failed attempt number. */
+    private static readonly WEBHOOK_RETRY_BASE_MS;
+    /**
+     * Delivers a webhook POST with bounded retries. A delivery that receives a
+     * non-2xx response or fails at the network level is retried with linear
+     * backoff (2s, 4s) up to WEBHOOK_MAX_ATTEMPTS total attempts. Each attempt
+     * updates last_triggered_at/last_status_code/failure_count; last_error
+     * records the failure reason and is cleared on success. Delivery is
+     * non-blocking: the returned promise settles after the attempt decision,
+     * and retries continue in the background.
+     */
     private postWebhookNonBlocking;
 }

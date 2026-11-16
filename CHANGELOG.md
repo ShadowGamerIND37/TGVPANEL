@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 22 webhook delivery retries (2026-10-30)
+
+- Webhook deliveries now retry with bounded attempts and backoff, addressing the documented "retries NOT IMPLEMENTED" gap for outbound webhooks. `MonitoringService.postWebhookNonBlocking` delivers a POST, and a delivery that receives a non-2xx response or fails at the network level is retried up to **3 total attempts** (1 initial + 2 retries) with linear backoff (2s, 4s). Delivery stays non-blocking: the dispatch promise settles after the attempt decision and retries continue in the background.
+- Delivery status is now recorded honestly per attempt: `last_triggered_at` and `last_status_code` update on every attempt (0 for network-level failures), the previously-unused `failure_count` column increments per failed attempt and resets to 0 on success, and a new **`last_error`** column (migration **v026**, additive) records the failure reason (HTTP status or network error text) — cleared on success. `GET /api/v1/webhooks` now exposes `last_error` and `failure_count`.
+- T37 runs a local hook receiver that fails (500) the first two attempts then succeeds, and asserts the receiver sees exactly 3 attempts, the webhook ends at `last_status_code: 200` with `last_error` cleared and `failure_count` reset, and the retried delivery still carries a valid HMAC signature. A second webhook pointed at an unreachable port asserts the bounded attempt count (3), a zero status code, and a recorded `last_error`.
+- Full suite: **37/37 acceptance suites passing**.
+
 ## Unreleased — Phase 21 backup deletion cleans up its copies (2026-10-30)
 
 - Fixed an orphaning gap in backup deletion: `BackupSnapshotManager.deleteBackup` removed the backup's archive file and its `container_backups` row but left every recorded copy (`backup_copies`) behind — orphaned rows plus copy files still occupying space on their target nodes. Deletion now removes copies **first** (each copy's file on its target node — local unlink or the node agent's idempotent `DELETE /api/v1/backups/file` — followed by the copy row), then the backup file and row. If any copy cleanup fails, the backup itself is left untouched so the operator can retry; nothing is silently half-deleted.

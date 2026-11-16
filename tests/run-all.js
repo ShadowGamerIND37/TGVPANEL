@@ -3890,6 +3890,83 @@ exec "$@"
       }
     });
 
+    // Phase 22: webhook delivery retries — a failing delivery is retried with
+    // bounded attempts + backoff, and the outcome (status, error, failure count)
+    // is recorded honestly on the webhook row.
+    await runStep('T37: Webhook deliveries retry with backoff and record honest delivery status', async () => {
+      // Local hook receiver: fails (500) the first two attempts, then succeeds.
+      let requestCount = 0;
+      let capturedBody = '';
+      let capturedSignature = '';
+      const hookServer = http.createServer((req, res) => {
+        requestCount += 1;
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          capturedBody = body;
+          capturedSignature = String(req.headers['x-hkvm-signature-256'] || '');
+          if (requestCount <= 2) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end('{"error":"temporary"}');
+          } else {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end('{"ok":true}');
+          }
+        });
+      });
+      await new Promise((resolve) => hookServer.listen(0, '127.0.0.1', resolve));
+      const hookPort = hookServer.address().port;
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      try {
+        const whRes = await adminClient.request('POST', '/api/v1/webhooks', {
+          name: 't37-retry-hook',
+          url: `http://127.0.0.1:${hookPort}/hook`,
+          events: ['test.retry'],
+          secret: 't37-signing-secret',
+        });
+        assert.strictEqual(whRes.status, 201, `Webhook creation failed: ${whRes.text}`);
+        const retryHookId = whRes.json.id;
+
+        // Unreachable receiver: connection refused on every attempt.
+        const badWhRes = await adminClient.request('POST', '/api/v1/webhooks', {
+          name: 't37-failing-hook',
+          url: 'http://127.0.0.1:1/hook',
+          events: ['test.retry'],
+          secret: 't37-signing-secret',
+        });
+        assert.strictEqual(badWhRes.status, 201, `Webhook creation failed: ${badWhRes.text}`);
+        const badHookId = badWhRes.json.id;
+
+        await ctx.monitoringService.dispatchWebhookEvent('test.retry', { hello: 'world' });
+
+        // Wait for both delivery chains (2s + 4s backoff) to settle.
+        let retryRow = null;
+        let badRow = null;
+        for (let i = 0; i < 40; i += 1) {
+          await sleep(500);
+          retryRow = await ctx.db.get(`SELECT last_status_code, last_error, failure_count FROM webhooks WHERE id = ?`, [retryHookId]);
+          badRow = await ctx.db.get(`SELECT last_status_code, last_error, failure_count FROM webhooks WHERE id = ?`, [badHookId]);
+          if (retryRow?.last_status_code === 200 && badRow?.failure_count >= 3) break;
+        }
+
+        assert.strictEqual(requestCount, 3, 'Receiver must see the initial attempt plus two retries');
+        assert.strictEqual(retryRow?.last_status_code, 200, 'Webhook must succeed after retries');
+        assert.strictEqual(retryRow?.last_error, null, 'last_error must be cleared on success');
+        assert.strictEqual(retryRow?.failure_count, 0, 'failure_count must reset on success');
+        const expectedSig = `sha256=${crypto.createHmac('sha256', 't37-signing-secret').update(capturedBody).digest('hex')}`;
+        assert.strictEqual(capturedSignature, expectedSig, 'Retried delivery must carry the valid HMAC signature');
+
+        assert.strictEqual(badRow?.last_status_code, 0, 'Unreachable webhook must record a zero status code');
+        assert.ok(badRow?.last_error, 'Unreachable webhook must record the failure reason');
+        assert.strictEqual(badRow?.failure_count, 3, 'Unreachable webhook must stop after the bounded attempt count');
+      } finally {
+        await new Promise((resolve) => hookServer.close(() => resolve()));
+        await ctx.db.run(`DELETE FROM webhooks WHERE name IN ('t37-retry-hook', 't37-failing-hook')`);
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

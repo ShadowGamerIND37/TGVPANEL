@@ -1858,6 +1858,17 @@ export const MIGRATIONS: MigrationDefinition[] = [
       await ensureColumn(db, 'vm_snapshots', 'allocated_gb', 'REAL');
     },
   },
+  {
+    version: 26,
+    name: 'v026_webhook_last_error',
+    up: async (db) => {
+      // Records the most recent webhook delivery failure (HTTP status or network
+      // error) alongside the existing last_status_code/failure_count columns so
+      // operators can see why a webhook is not delivering. Cleared on success.
+      // Additive and backward-compatible.
+      await ensureColumn(db, 'webhooks', 'last_error', 'TEXT');
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

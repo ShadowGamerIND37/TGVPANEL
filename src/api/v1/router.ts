@@ -2951,7 +2951,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
 
   router.get('/webhooks', requireRole(['admin']), async (_req: Request, res: Response) => {
     const webhooks = await ctx.db.all<any>(
-      `SELECT id, name, url, events, is_active, last_triggered_at, last_status_code, created_at FROM webhooks ORDER BY id DESC`
+      `SELECT id, name, url, events, is_active, last_triggered_at, last_status_code, last_error, failure_count, created_at FROM webhooks ORDER BY id DESC`
     );
     res.json({ webhooks });
   });

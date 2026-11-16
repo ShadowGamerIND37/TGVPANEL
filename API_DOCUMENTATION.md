@@ -128,7 +128,7 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | Method | Path | Roles | Description |
 |---|---|---|---|
 | GET/POST/DELETE | `/api-keys[/:id]` | authenticated/admin | Manage scoped generic API keys. |
-| GET/POST/DELETE | `/webhooks[/:id]` | admin | Alert/webhook delivery targets. |
+| GET/POST/DELETE | `/webhooks[/:id]` | admin | Alert/webhook delivery targets. Deliveries retry up to 3 attempts with 2s/4s backoff; `GET` exposes `last_status_code`, `last_error`, and `failure_count`. |
 
 ### Database / import
 

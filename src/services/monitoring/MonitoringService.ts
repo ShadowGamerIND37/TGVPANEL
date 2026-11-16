@@ -289,13 +289,54 @@ export class MonitoringService {
     }
   }
 
+  /** Maximum delivery attempts (1 initial + 2 retries) for a webhook event. */
+  private static readonly WEBHOOK_MAX_ATTEMPTS = 3;
+
+  /** Base backoff between attempts (ms); grows linearly with the failed attempt number. */
+  private static readonly WEBHOOK_RETRY_BASE_MS = 2000;
+
+  /**
+   * Delivers a webhook POST with bounded retries. A delivery that receives a
+   * non-2xx response or fails at the network level is retried with linear
+   * backoff (2s, 4s) up to WEBHOOK_MAX_ATTEMPTS total attempts. Each attempt
+   * updates last_triggered_at/last_status_code/failure_count; last_error
+   * records the failure reason and is cleared on success. Delivery is
+   * non-blocking: the returned promise settles after the attempt decision,
+   * and retries continue in the background.
+   */
   private postWebhookNonBlocking(
     hookId: number,
     urlStr: string,
     bodyStr: string,
-    signatureHex: string
+    signatureHex: string,
+    attempt = 1
   ): Promise<void> {
     return new Promise((resolve) => {
+      const recordFailure = (errorText: string) => {
+        void this.db
+          .run(
+            `UPDATE webhooks
+                SET last_triggered_at = datetime('now'),
+                    last_status_code = 0,
+                    last_error = ?,
+                    failure_count = failure_count + 1
+              WHERE id = ?`,
+            [errorText, hookId]
+          )
+          .then(() => {
+            if (attempt >= MonitoringService.WEBHOOK_MAX_ATTEMPTS) {
+              resolve();
+              return;
+            }
+            const delay = MonitoringService.WEBHOOK_RETRY_BASE_MS * attempt;
+            setTimeout(() => {
+              this.postWebhookNonBlocking(hookId, urlStr, bodyStr, signatureHex, attempt + 1)
+                .catch(() => undefined);
+            }, delay);
+            resolve();
+          });
+      };
+
       try {
         const u = new URL(urlStr);
         const isHttps = u.protocol === 'https:';
@@ -316,23 +357,33 @@ export class MonitoringService {
           },
           (res) => {
             res.resume();
-            this.db
-              .run(
-                `UPDATE webhooks SET last_triggered_at = datetime('now'), last_status_code = ? WHERE id = ?`,
-                [res.statusCode || 0, hookId]
-              )
-              .finally(() => resolve());
+            const code = res.statusCode || 0;
+            if (code >= 200 && code < 300) {
+              void this.db
+                .run(
+                  `UPDATE webhooks
+                      SET last_triggered_at = datetime('now'),
+                          last_status_code = ?,
+                          last_error = NULL,
+                          failure_count = 0
+                    WHERE id = ?`,
+                  [code, hookId]
+                )
+                .finally(() => resolve());
+            } else {
+              recordFailure(`HTTP ${code}`);
+            }
           }
         );
-        req.on('error', () => resolve());
+        req.on('error', (err: any) => recordFailure(String(err?.message || err)));
         req.on('timeout', () => {
           req.destroy();
-          resolve();
+          recordFailure('Request timed out');
         });
         req.write(bodyStr);
         req.end();
-      } catch {
-        resolve();
+      } catch (err: any) {
+        recordFailure(String(err?.message || err));
       }
     });
   }

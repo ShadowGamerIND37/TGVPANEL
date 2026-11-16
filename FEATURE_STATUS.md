@@ -37,7 +37,7 @@ The **only roadmap system classified FULLY IMPLEMENTED is the existing reseller 
 | 11 — Docker | NOT IMPLEMENTED | No Docker management service; LXC is separate. |
 | 12 — Load balancer | NOT IMPLEMENTED | No HAProxy manager/configuration API. |
 | 13 — Billing/payments | NOT IMPLEMENTED | No verified billing ledger or payment integration. |
-| 14 — Admin/customer API | PARTIALLY IMPLEMENTED; reseller system FULLY IMPLEMENTED | Existing APIs and generic keys/webhooks exist; broader admin/customer API coverage is incomplete. Preserve the completed reseller API/key system. |
+| 14 — Admin/customer API | PARTIALLY IMPLEMENTED; reseller system FULLY IMPLEMENTED | Existing APIs and generic keys/webhooks exist; **outbound webhook deliveries retry with bounded attempts + backoff and record honest delivery status (Phase 22)**; broader admin/customer API coverage is incomplete. Preserve the completed reseller API/key system. |
 | 15 — DNS | NOT IMPLEMENTED as managed DNS | Local DNS relay exists; no PowerDNS zone/record manager. |
 | 16 — Monitoring/alerting | PARTIALLY IMPLEMENTED; KVM network traffic unavailable | Real selected host/process/cgroup metrics and alerts exist; **instance metrics history is now recorded on telemetry read (Phase 17)**; KVM network counters and unknown IPs are honestly null; IOPS/latency and broad health coverage incomplete. |
 | 17 — White-label/UI | PARTIALLY IMPLEMENTED | EJS dashboards and site settings exist; localization, full branding, search/notifications and consistent responsive polish incomplete. |
