@@ -1565,6 +1565,10 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
           fs.copyFileSync(args[3], args[4]);
           return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 0 };
         }
+        if (args[0] === 'snapshot') {
+          // qemu-img snapshot -c/-a/-d: succeed without touching the fixture image.
+          return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 0 };
+        }
         return { exitCode: 2, stdout: '', stderr: 'unexpected qemu-img command', timedOut: false, durationMs: 0 };
       };
       const testKvmAdapter = new KVMAdapter(ctx.db, {}, fakeQemuRunner);
@@ -1708,6 +1712,22 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         assert.strictEqual(kvmDiskTel.diskFormat, 'qcow2', 'KVM telemetry must report the qemu-img image format');
         assert.strictEqual(kvmDiskTel.diskTotalGb, 30, `KVM diskTotalGb must reflect qemu-img virtual-size (expected 30), got ${kvmDiskTel.diskTotalGb}`);
         assert.strictEqual(kvmDiskTel.diskUsedGb, Number((diskSizeBytes / 1024 ** 3).toFixed(2)), `KVM diskUsedGb must reflect qemu-img allocated disk-size (expected ${Number((diskSizeBytes / 1024 ** 3).toFixed(2))}), got ${kvmDiskTel.diskUsedGb}`);
+
+        // Phase 13: KVM QCOW2 snapshot sizing must be honest (qemu-img virtual-size for
+        // capacity and allocated disk-size for consumption) rather than the raw image-file
+        // size, and the snapshot listing must expose both figures.
+        const snapName = `phase13-snap-${Date.now()}`;
+        const snapCreate = await ctx.instanceManager.virt.kvm.createQcow2Snapshot(vm.vm_id, snapName, 'Phase 13 honest sizing');
+        assert.strictEqual(snapCreate.name, snapName, 'Snapshot should be created with the requested name');
+        const snapRow = await ctx.db.get(`SELECT size_gb, allocated_gb FROM vm_snapshots WHERE snapshot_id = ?`, [snapCreate.id]);
+        assert.strictEqual(snapRow.size_gb, 30, `KVM snapshot size_gb must reflect qemu-img virtual-size (expected 30), got ${snapRow.size_gb}`);
+        assert.strictEqual(snapRow.allocated_gb, Number((diskSizeBytes / 1024 ** 3).toFixed(2)), `KVM snapshot allocated_gb must reflect qemu-img allocated disk-size (expected ${Number((diskSizeBytes / 1024 ** 3).toFixed(2))}), got ${snapRow.allocated_gb}`);
+        const snapList = await ctx.backupManager.listSnapshots('kvm', vm.vm_id);
+        const snapListed = snapList.find((sn) => sn.id === snapCreate.id);
+        assert.ok(snapListed, 'Created snapshot must appear in the KVM snapshot listing');
+        assert.strictEqual(snapListed.sizeGb, 30, `Listed snapshot sizeGb must be honest (expected 30), got ${snapListed.sizeGb}`);
+        assert.strictEqual(snapListed.allocatedGb, Number((diskSizeBytes / 1024 ** 3).toFixed(2)), `Listed snapshot allocatedGb must be honest (expected ${Number((diskSizeBytes / 1024 ** 3).toFixed(2))}), got ${snapListed.allocatedGb}`);
+        await ctx.instanceManager.virt.kvm.deleteQcow2Snapshot(vm.vm_id, snapCreate.id);
 
         const shrinkResponse = await adminClient.request(
           'POST',

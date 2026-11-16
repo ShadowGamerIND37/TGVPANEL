@@ -500,7 +500,7 @@ export class BackupSnapshotManager {
   public async listSnapshots(engine: 'kvm' | 'lxc', refId: number) {
     if (engine === 'kvm') {
       return this.db.all<any>(
-        `SELECT snapshot_id AS id, vm_id AS ref_id, 'kvm' AS engine, snapshot_name, description, created_at
+        `SELECT snapshot_id AS id, vm_id AS ref_id, 'kvm' AS engine, snapshot_name, description, size_gb AS sizeGb, allocated_gb AS allocatedGb, created_at
          FROM vm_snapshots WHERE vm_id = ? ORDER BY snapshot_id DESC`,
         [refId]
       );

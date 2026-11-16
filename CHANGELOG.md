@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Phase 13 KVM snapshots: honest sizing & consumption accounting (2026-10-30)
+
+- Corrected a KVM snapshot honesty gap: `KVMAdapter.createQcow2Snapshot` previously recorded `size_gb` as the raw disk-**image-file** size (`fs.statSync`), which does not reflect the snapshot's disk capacity or actual on-disk consumption. The method now uses the injected command runner (consistent with Phase 12) and calls `getDiskImageStats` to read honest `qemu-img` figures: `size_gb` is the snapshot disk's **virtual capacity** and a new **`allocated_gb`** records the actual **on-disk consumption**. It falls back to the previous image-file-size behavior (with `allocated_gb` null) only when `qemu-img` is unavailable, so snapshot creation never breaks on hosts without the tool.
+- Added migration **v025** `v025_kvm_snapshot_allocated_gb` adding an additive `allocated_gb REAL` column to `vm_snapshots` (existing rows keep NULL until re-measured; backward-compatible).
+- `BackupSnapshotManager.listSnapshots` now returns `sizeGb` and `allocatedGb` for KVM snapshots, exposing the honest figures to the snapshot listing API. The legacy `SELECT *` snapshot endpoint and the `vm-detail` snapshot UI pick up the new column automatically.
+- T34 extends the mocked `qemu-img` runner with a `snapshot` handler and asserts that after a disk resize to 30G, a created KVM snapshot stores `size_gb: 30` (virtual capacity) and `allocated_gb` equal to the reported allocated disk-size, and that the listing exposes both — proving the values come from `qemu-img` rather than the image file.
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 12 KVM telemetry: honest disk image stats (2026-10-30)
 
 - Corrected a KVM telemetry honesty gap: `KVMAdapter.getTelemetry` previously reported `diskUsedGb` as the raw disk-image **file size** (`fs.statSync`), which does not reflect the guest's actual disk usage or capacity. Added a `getDiskImageStats(diskPath)` helper that runs `qemu-img info --output=json` (read-only, no writes) and reads the honest `virtual-size` (guest disk capacity) and `disk-size` (allocated bytes on disk) plus the image `format`.

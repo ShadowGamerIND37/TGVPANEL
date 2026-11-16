@@ -955,26 +955,35 @@ export class KVMAdapter implements VirtualizationAdapter {
     if ((vm.disk_format || 'qcow2').toLowerCase() !== 'qcow2') {
       throw new Error('Internal QEMU snapshots require QCOW2 disk format (current disk is RAW).');
     }
-    if (!isBinaryAvailable('qemu-img')) {
-      throw new Error('qemu-img binary is not installed on this host.');
-    }
     const diskPath = this.resolveVmDiskPath(vm);
     if (!diskPath || !fs.existsSync(diskPath)) {
       throw new Error(`VM disk image does not exist on disk: ${diskPath}`);
     }
 
-    const res = await runAllowlistedCommand('qemu-img', ['snapshot', '-c', safeSnap, diskPath], {
+    const res = await this.commandRunner('qemu-img', ['snapshot', '-c', safeSnap, diskPath], {
       timeoutMs: 120_000,
     });
-    if (res.exitCode !== 0) {
+    if (res.exitCode !== 0 || res.timedOut) {
       throw new Error(`qemu-img snapshot failed: ${res.stderr || res.stdout}`);
     }
 
-    const sizeGb = Number((fs.statSync(diskPath).size / 1024 ** 3).toFixed(2));
+    // Honest sizing: size_gb is the snapshot disk's virtual capacity and
+    // allocated_gb is the actual on-disk consumption, both read from qemu-img.
+    // Fall back to the image-file size only when qemu-img stats are unavailable.
+    const stats = await this.getDiskImageStats(diskPath);
+    let sizeGb: number;
+    let allocatedGb: number | null;
+    if (stats) {
+      sizeGb = Number((stats.virtualSizeBytes / 1024 ** 3).toFixed(2));
+      allocatedGb = Number((stats.diskSizeBytes / 1024 ** 3).toFixed(2));
+    } else {
+      sizeGb = Number((fs.statSync(diskPath).size / 1024 ** 3).toFixed(2));
+      allocatedGb = null;
+    }
     const ins = await this.db.run(
-      `INSERT INTO vm_snapshots (vm_id, snapshot_name, tag_name, file_path, size_gb, description, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'completed')`,
-      [vmId, safeSnap, safeSnap, diskPath, sizeGb, description]
+      `INSERT INTO vm_snapshots (vm_id, snapshot_name, tag_name, file_path, size_gb, allocated_gb, description, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'completed')`,
+      [vmId, safeSnap, safeSnap, diskPath, sizeGb, allocatedGb, description]
     );
     return { id: ins.lastID, name: safeSnap };
   }
