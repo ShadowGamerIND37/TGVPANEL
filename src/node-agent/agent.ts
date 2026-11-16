@@ -565,6 +565,55 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
     }
   });
 
+  app.post('/api/v1/backups/rehearse', async (req, res) => {
+    try {
+      const { filePath, expectedSha256 } = req.body || {};
+      const confined = runtime.snapshotManager.resolveConfinedBackupPath(String(filePath || ''));
+      const reasons: string[] = [];
+      if (!fs.existsSync(confined)) {
+        return res.json({
+          restorable: false,
+          checksumValid: false,
+          archiveValid: false,
+          entryCount: null,
+          topLevelDir: null,
+          sizeBytes: null,
+          reasons: ['Backup archive file is missing on this node.'],
+        });
+      }
+      const actual = await runtime.snapshotManager.computeFileSha256(confined);
+      const checksumValid = !expectedSha256 || String(expectedSha256).toLowerCase() === actual.toLowerCase();
+      if (!checksumValid) reasons.push('Checksum verification failed.');
+
+      let archiveValid = false;
+      let entryCount: number | null = null;
+      let topLevelDir: string | null = null;
+      let sizeBytes: number | null = null;
+      try {
+        const inspect = await runtime.snapshotManager.inspectTarArchive(confined);
+        archiveValid = inspect.valid;
+        entryCount = inspect.entryCount;
+        topLevelDir = inspect.topLevelDir;
+        sizeBytes = inspect.sizeBytes;
+        if (inspect.entryCount === 0) reasons.push('Archive contains no entries.');
+      } catch (err: any) {
+        reasons.push(`Archive inspection failed: ${err.message}`);
+      }
+
+      return res.json({
+        restorable: checksumValid && archiveValid,
+        checksumValid,
+        archiveValid,
+        entryCount,
+        topLevelDir,
+        sizeBytes,
+        reasons,
+      });
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+  });
+
   app.delete('/api/v1/backups/file', (req, res) => {
     try {
       const filePath = String(req.body?.filePath || req.query.filePath || '');

@@ -86,6 +86,27 @@ export declare class BackupSnapshotManager {
         expectedSha256: string | null;
         actualSha256: string | null;
     }>;
+    /**
+     * Restore rehearsal (dry-run): confirms a backup is restorable WITHOUT performing
+     * the restore. For local archives this verifies the checksum (decrypting encrypted
+     * archives first), then structurally inspects the tar.gz (entry count + top-level
+     * container dir) so an operator can see whether a restore would succeed before
+     * touching the live container. For remote archives it delegates to the node agent's
+     * rehearsal endpoint. Returns a structured, human-readable verdict.
+     */
+    rehearseRestore(backupId: number): Promise<{
+        restorable: boolean;
+        backupId: number;
+        instanceType: string;
+        instanceRefId: number;
+        encrypted: boolean;
+        checksumValid: boolean;
+        archiveValid: boolean;
+        entryCount: number | null;
+        topLevelDir: string | null;
+        sizeBytes: number | null;
+        reasons: string[];
+    }>;
     restoreBackup(backupId: number, actorId?: number): Promise<{
         restored: boolean;
         status: string;

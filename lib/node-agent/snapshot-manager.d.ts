@@ -26,4 +26,17 @@ export declare class LxcSnapshotAndBackupManager {
     createTarBackup(containerName: string, backupLabel?: string): Promise<BackupArtifact>;
     restoreTarBackup(archivePath: string, expectedChecksumSha256?: string, cleanContainerName?: string): Promise<void>;
     computeFileSha256(filePath: string): Promise<string>;
+    /**
+     * Structurally inspects a tar.gz archive WITHOUT extracting it, for restore
+     * rehearsal. Lists entries via the allowlisted `tar -tzf` and reports the entry
+     * count, the top-level directory (the container name captured at backup time),
+     * and whether the archive is a valid, readable gzip tar. Does not modify the
+     * archive. Throws if the archive is missing or not a valid tar.gz.
+     */
+    inspectTarArchive(archivePath: string): Promise<{
+        valid: boolean;
+        entryCount: number;
+        topLevelDir: string | null;
+        sizeBytes: number;
+    }>;
 }

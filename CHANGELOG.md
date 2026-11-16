@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Phase 9 backup restore rehearsal (2026-10-30)
+
+- Added restore rehearsal (dry-run pre-restore verification) for backups. `BackupSnapshotManager.rehearseRestore(backupId)` confirms a backup is restorable WITHOUT performing the restore: it verifies the SHA-256 checksum (decrypting encrypted archives first, building on Phase 7), then structurally inspects the tar.gz via an allowlisted `tar -tzf` to confirm it is a readable archive and reports the entry count and top-level container directory. It returns a structured verdict (`restorable`, `checksumValid`, `archiveValid`, `entryCount`, `topLevelDir`, `reasons`).
+- New `inspectTarArchive` helper in `src/node-agent/snapshot-manager.ts` lists archive entries without extracting. Remote-node backups rehearse via a new node-agent `POST /api/v1/backups/rehearse` endpoint (mirroring the existing verify endpoint), and the panel exposes `POST /api/v1/backups/:id/rehearse` for admin/subadmin/operator.
+- T14 covers both paths: a valid encrypted backup rehearses as restorable (decrypt + checksum + archive inspection), and a tampered encrypted archive rehearses as not restorable (decrypt/checksum failure).
+- Test harness: each acceptance step now uses a unique `X-Forwarded-For` value so every step gets a fresh rate-limiter bucket instead of sharing one 120/min mutation window across the whole suite. This removes flaky 429s in later steps without weakening the production rate limiter; T09 still exercises the real limiter within its own step.
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 8 migration duplicate-run fencing (2026-10-30)
 
 - Added duplicate-run fencing to offline LXC migration (`MigrationManager.startOfflineLxcMigration`). Before starting a new migration, the manager now queries `vps_migrations` for any active (non-terminal) job — status `preparing`, `preflight`, `exporting`, `transferring`, or `verifying` — for the same instance and rejects the request with a clear error. This prevents two concurrent transfers from racing on the same source container and target import path, which could cause data loss or duplicate target containers. Terminal statuses (`completed`, `rolled_back`, `failed`) do not block a new migration.

@@ -2247,6 +2247,19 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  router.post(
+    '/backups/:id/rehearse',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      try {
+        const out = await ctx.backupManager.rehearseRestore(pInt(req.params.id));
+        res.json(out);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
   router.post('/backups/:id/restore', async (req: Request, res: Response) => {
     try {
       const backupId = pInt(req.params.id);

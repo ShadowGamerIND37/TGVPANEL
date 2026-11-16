@@ -78,7 +78,14 @@ const {
 } = require('../lib/node-agent/container-manager');
 
 const results = [];
+// The harness acts as a trusted reverse proxy (TRUSTED_PROXIES=127.0.0.1), so the
+// rate limiter honors X-Forwarded-For. Give each test step a unique XFF so every step
+// gets a fresh limiter bucket instead of sharing one 120/min window across the whole
+// suite. T09 still exercises the real limiter within its own step via a shared XFF.
+let currentTestXff = null;
+let testStepCounter = 0;
 async function runStep(name, fn) {
+  currentTestXff = `10.${(testStepCounter++) % 250}.0.1`;
   const start = Date.now();
   try {
     await fn();
@@ -101,6 +108,7 @@ class SessionClient {
 
   async request(method, urlPath, body = undefined, extraHeaders = {}) {
     const headers = { ...extraHeaders };
+    if (currentTestXff && !headers['X-Forwarded-For']) headers['X-Forwarded-For'] = currentTestXff;
     if (this.cookie) headers['Cookie'] = this.cookie;
     if (this.csrfToken && !headers['X-CSRF-Token'] && !headers['Authorization']) {
       headers['X-CSRF-Token'] = this.csrfToken;
@@ -3305,6 +3313,46 @@ exec "$@"
       const bkpVerify = await adminClient.request('POST', `/api/v1/backups/${lxcBkpId}/verify`, {});
       assert.strictEqual(bkpVerify.status, 200);
       assert.strictEqual(bkpVerify.json.valid, true);
+
+      // Phase 9: restore rehearsal (dry-run) on the encrypted local backup — must
+      // report restorable without performing the restore, and decrypt + inspect the archive.
+      const bkpRehearse = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${lxcBkpId}/rehearse`,
+        {}
+      );
+      assert.strictEqual(bkpRehearse.status, 200, `Rehearsal failed: ${bkpRehearse.text}`);
+      assert.strictEqual(bkpRehearse.json.restorable, true, `Backup should be restorable: ${bkpRehearse.text}`);
+      assert.strictEqual(bkpRehearse.json.encrypted, true);
+      assert.strictEqual(bkpRehearse.json.checksumValid, true);
+      assert.strictEqual(bkpRehearse.json.archiveValid, true);
+      assert.ok(bkpRehearse.json.entryCount > 0, 'Rehearsal must report archive entries');
+      assert.ok(bkpRehearse.json.topLevelDir, 'Rehearsal must report the top-level container dir');
+
+      // Phase 9 negative case: a tampered (corrupt) encrypted archive must fail rehearsal.
+      const negBkpCreate = await adminClient.request('POST', '/api/v1/backups', {
+        engine: 'lxc',
+        refId: e2eUbuntuId,
+        label: 'pre_mig_neg',
+      });
+      assert.strictEqual(negBkpCreate.status, 201, `Neg-case backup failed: ${negBkpCreate.text}`);
+      const negBkpId = negBkpCreate.json.backup.backupId;
+      const negBkpRow = await ctx.db.get(
+        `SELECT file_path FROM container_backups WHERE id = ?`,
+        [negBkpId]
+      );
+      const negEncBuf = Buffer.from(fs.readFileSync(negBkpRow.file_path));
+      negEncBuf[negEncBuf.length - 1] ^= 0xff; // corrupt the ciphertext
+      fs.writeFileSync(negBkpRow.file_path, negEncBuf);
+      const negRehearse = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${negBkpId}/rehearse`,
+        {}
+      );
+      assert.strictEqual(negRehearse.status, 200, `Neg rehearsal failed: ${negRehearse.text}`);
+      assert.strictEqual(negRehearse.json.restorable, false, 'Tampered archive must not be restorable');
+      assert.strictEqual(negRehearse.json.checksumValid, false);
+      await adminClient.request('DELETE', `/api/v1/backups/${negBkpId}`);
 
       // Mutate existing file AND add post-backup junk file, then restore archive backup!
       await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/files/content`, {

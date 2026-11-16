@@ -782,6 +782,147 @@ export class BackupSnapshotManager {
     }
   }
 
+  /**
+   * Restore rehearsal (dry-run): confirms a backup is restorable WITHOUT performing
+   * the restore. For local archives this verifies the checksum (decrypting encrypted
+   * archives first), then structurally inspects the tar.gz (entry count + top-level
+   * container dir) so an operator can see whether a restore would succeed before
+   * touching the live container. For remote archives it delegates to the node agent's
+   * rehearsal endpoint. Returns a structured, human-readable verdict.
+   */
+  public async rehearseRestore(backupId: number): Promise<{
+    restorable: boolean;
+    backupId: number;
+    instanceType: string;
+    instanceRefId: number;
+    encrypted: boolean;
+    checksumValid: boolean;
+    archiveValid: boolean;
+    entryCount: number | null;
+    topLevelDir: string | null;
+    sizeBytes: number | null;
+    reasons: string[];
+  }> {
+    const bkp = await this.getBackupRecord(backupId);
+    if (!bkp) throw new Error('Backup record not found.');
+
+    const reasons: string[] = [];
+    const encrypted = Number(bkp.encrypted || 0) === 1;
+    const base: {
+      restorable: boolean;
+      backupId: number;
+      instanceType: string;
+      instanceRefId: number;
+      encrypted: boolean;
+      checksumValid: boolean;
+      archiveValid: boolean;
+      entryCount: number | null;
+      topLevelDir: string | null;
+      sizeBytes: number | null;
+      reasons: string[];
+    } = {
+      restorable: false,
+      backupId: Number(backupId),
+      instanceType: bkp.instance_type,
+      instanceRefId: Number(bkp.instance_ref_id),
+      encrypted,
+      checksumValid: false,
+      archiveValid: false,
+      entryCount: null,
+      topLevelDir: null,
+      sizeBytes: bkp.size_bytes ? Number(bkp.size_bytes) : null,
+      reasons,
+    };
+
+    // Remote archives: delegate structural + checksum inspection to the node agent.
+    if (bkp.node_id && bkp.is_local === 0) {
+      const remote = await this.nodeManager.requestRemoteNode<{
+        restorable: boolean;
+        checksumValid: boolean;
+        archiveValid: boolean;
+        entryCount: number | null;
+        topLevelDir: string | null;
+        sizeBytes: number | null;
+        reasons: string[];
+      }>(bkp.node_id, 'POST', '/api/v1/backups/rehearse', {
+        filePath: bkp.file_path,
+        expectedSha256: bkp.checksum_sha256 || undefined,
+        encrypted,
+      });
+      return {
+        ...base,
+        restorable: remote.restorable,
+        checksumValid: remote.checksumValid,
+        archiveValid: remote.archiveValid,
+        entryCount: remote.entryCount,
+        topLevelDir: remote.topLevelDir,
+        sizeBytes: remote.sizeBytes ?? base.sizeBytes,
+        reasons: remote.reasons,
+      };
+    }
+
+    if (!fs.existsSync(bkp.file_path)) {
+      reasons.push('Backup archive file is missing on this node.');
+      return base;
+    }
+
+    // Decrypt encrypted archives to a confined temp file for checksum + inspection.
+    let inspectPath = bkp.file_path;
+    let tempPath: string | null = null;
+    if (encrypted) {
+      tempPath = path.join(
+        this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
+        `rehearse_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
+      );
+      this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(tempPath);
+      try {
+        decryptArchive(bkp.file_path, tempPath);
+      } catch (err: any) {
+        reasons.push(`Archive cannot be decrypted: ${err.message}`);
+        return base;
+      }
+      inspectPath = tempPath;
+    }
+
+    try {
+      // 1. Checksum integrity (of the recovered/decrypted content).
+      if (bkp.checksum_sha256) {
+        const actual = await this.nodeManager.localRuntime.snapshotManager.computeFileSha256(
+          inspectPath
+        );
+        const ok = bkp.checksum_sha256.toLowerCase() === actual.toLowerCase();
+        base.checksumValid = ok;
+        if (!ok) reasons.push('Checksum verification failed.');
+      } else {
+        base.checksumValid = true;
+      }
+
+      // 2. Structural archive inspection (valid tar.gz + readable entries).
+      const inspect = await this.nodeManager.localRuntime.snapshotManager.inspectTarArchive(
+        inspectPath
+      );
+      base.archiveValid = inspect.valid;
+      base.entryCount = inspect.entryCount;
+      base.topLevelDir = inspect.topLevelDir;
+      if (inspect.entryCount === 0) {
+        reasons.push('Archive contains no entries.');
+      }
+    } catch (err: any) {
+      reasons.push(`Archive inspection failed: ${err.message}`);
+      return base;
+    } finally {
+      if (tempPath && fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch { /* best effort */ }
+      }
+    }
+
+    base.restorable = base.checksumValid && base.archiveValid;
+    if (base.restorable) {
+      reasons.push('Backup is restorable.');
+    }
+    return base;
+  }
+
   public async restoreBackup(
     backupId: number,
     actorId?: number
