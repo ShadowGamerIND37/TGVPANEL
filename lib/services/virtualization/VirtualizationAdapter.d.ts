@@ -30,6 +30,8 @@ export interface UnifiedInstanceRecord {
     status: string;
     suspended: boolean;
     suspendedReason?: string | null;
+    serviceLocked?: boolean;
+    serviceLockReason?: string | null;
     osLabel: string;
     cpuCores: number;
     ramMb: number;
@@ -53,8 +55,9 @@ export interface InstanceTelemetry {
     ramPercent: number;
     diskUsedGb: number;
     diskTotalGb: number;
-    netRxBytes: number;
-    netTxBytes: number;
+    /** Null when the engine does not provide a measured counter (never substitute zero). */
+    netRxBytes: number | null;
+    netTxBytes: number | null;
     primaryIp?: string | null;
     measuredAt: string;
 }

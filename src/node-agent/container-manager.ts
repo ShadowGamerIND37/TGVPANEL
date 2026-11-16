@@ -4065,6 +4065,63 @@ export class LxcContainerManager {
     }
   }
 
+  /**
+   * Make a full offline LXC copy using the host's native lxc-copy utility. The clone
+   * is deliberately created with networking disabled: copied guest files can contain
+   * static addressing, MAC-bound settings, machine identity, keys and secrets. An
+   * operator must review/reconfigure those before attaching a network or starting it.
+   */
+  public async cloneContainer(
+    sourceName: string,
+    targetName: string,
+    resources: {
+      cpuCores?: number;
+      cpuShares?: number;
+      cpuLimitPercent?: number;
+      cpuPinning?: string | null;
+      ramMb?: number;
+      swapMb?: number;
+      nesting?: boolean;
+      kvmNesting?: boolean;
+    } = {}
+  ): Promise<LxcContainerRuntimeInfo> {
+    this.assertLxcInstalled();
+    if (!isBinaryAvailable('lxc-copy')) {
+      throw Object.assign(new Error('LXC cloning requires the lxc-copy utility on the selected host.'), { statusCode: 501 });
+    }
+    const source = SafeValidators.containerName(sourceName);
+    const target = SafeValidators.containerName(targetName);
+    if (source.toLowerCase() === target.toLowerCase()) throw new Error('Clone name must differ from the source container name.');
+    const sourceDir = this.getContainerDir(source);
+    const targetDir = this.getContainerDir(target);
+    if (!privilegedFs.existsSync(path.join(sourceDir, 'config'))) throw Object.assign(new Error('Source LXC configuration is missing from the managed container store.'), { statusCode: 404 });
+    if (privilegedFs.existsSync(targetDir)) throw Object.assign(new Error(`LXC container "${target}" already exists on this host.`), { statusCode: 409 });
+    const sourceInfo = await this.inspectContainer(source);
+    if (sourceInfo.state !== 'stopped') {
+      throw Object.assign(new Error('LXC cloning is offline-only; stop the source container first.'), { statusCode: 409 });
+    }
+    try {
+      const copy = await runAllowlistedCommand('lxc-copy', [...this.lxcPathArgs(), '-n', source, '-N', target], {
+        timeoutMs: 600_000,
+        maxOutputBytes: 2 * 1024 * 1024,
+        asRoot: this.needsRootForStore() || undefined,
+      });
+      if (copy.exitCode !== 0 || copy.timedOut) {
+        throw new Error(`lxc-copy failed${copy.timedOut ? ' (timed out)' : ''}: ${copy.stderr || copy.stdout}`);
+      }
+      await this.writeManagedConfigSection(target, {
+        ...resources,
+        hostname: target,
+        bridge: '', // detach inherited host network to prevent duplicate IP/MAC use on first boot
+      });
+      return await this.inspectContainer(target);
+    } catch (err) {
+      // Native copy can leave a partial target after a timeout or storage error.
+      if (privilegedFs.existsSync(targetDir)) await this.destroyContainer(target).catch(() => undefined);
+      throw err;
+    }
+  }
+
   public async destroyContainer(containerName: string): Promise<void> {
     this.assertLxcInstalled();
     const safeName = SafeValidators.containerName(containerName);

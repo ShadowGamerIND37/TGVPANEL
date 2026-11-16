@@ -42,6 +42,11 @@ export async function getNodeHealthReport(
         '/dev/kvm is unavailable on this host; QEMU instances will fall back to TCG software emulation.'
       );
     }
+    if (capabilities.qemuSystemAvailable && capabilities.qemuArchitectureMismatch) {
+      warnings.push(
+        'The selected QEMU system binary does not match this host CPU architecture. KVM guest startup may fail until a matching QEMU package is installed.'
+      );
+    }
   }
 
   const interactiveShellEnabled =

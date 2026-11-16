@@ -1264,7 +1264,8 @@ function jumpToPane(name) {
 }
 
 function formatBytesHuman(bytes) {
-  const b = Number(bytes || 0);
+  if (bytes === null || bytes === undefined || !Number.isFinite(Number(bytes))) return 'N/A';
+  const b = Number(bytes);
   if (b < 1024) return b + ' B';
   if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
   if (b < 1073741824) return (b / 1048576).toFixed(2) + ' MB';

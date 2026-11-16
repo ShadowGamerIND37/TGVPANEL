@@ -11,8 +11,10 @@ const assert = require('assert');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 const sqlite3 = require('sqlite3');
 const WebSocket = require('ws');
 
@@ -63,6 +65,8 @@ const {
 const { signResellerRequest } = require('../lib/security/reseller-api-auth');
 const { UnifiedDatabase, resolveAndMigrateDatabasePath } = require('../lib/db/database');
 const { runMigrations } = require('../lib/db/migrations');
+const { KVMAdapter } = require('../lib/services/virtualization/KVMAdapter');
+const { LXCAdapter } = require('../lib/services/virtualization/LXCAdapter');
 const { importHvmDatabase } = require('../lib/db/hvm-importer');
 const { createNodeAgentServer } = require('../lib/node-agent/agent');
 const { runAllowlistedCommand, buildSafeSpawnEnv } = require('../lib/node-agent/command-runner');
@@ -168,7 +172,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
-    await runStep('T01: Transactional SQLite backup & migrations v001..v018 preserve legacy data & cascade VM FKs', async () => {
+    await runStep('T01: Transactional SQLite backup & migrations v001..v022 preserve legacy data, task locks, KVM device/VNC/service-lock settings & cascade VM FKs', async () => {
       const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
       const v2Raw = new sqlite3.Database(v2ScratchPath);
       const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
@@ -191,7 +195,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       `);
 
       const migRes = await runMigrations(v2Db);
-      assert.ok(migRes.applied.length >= 18, 'Expected all v001..v018 migrations to apply');
+      assert.ok(migRes.applied.length >= 22, 'Expected all v001..v022 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
 
       // Verify v009 upgraded vm_logs & vm_snapshots to ON DELETE CASCADE while preserving rows,
@@ -205,6 +209,18 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
       const lxcCols = await v2Db.all(`PRAGMA table_info(lxc_instances)`);
       assert.ok(lxcCols.some((c) => c.name === 'kvm_nesting'), 'Expected kvm_nesting column on lxc_instances');
+
+      const kvmDeviceColumns = await v2Db.all(`PRAGMA table_info(vms)`);
+      assert.ok(kvmDeviceColumns.some((column) => column.name === 'extra_disks_json'), 'Expected v020 secondary-disk configuration');
+      assert.ok(kvmDeviceColumns.some((column) => column.name === 'extra_nics_json'), 'Expected v020 secondary-NIC configuration');
+      assert.ok(kvmDeviceColumns.some((column) => column.name === 'vnc_port'), 'Expected v021 local VNC configuration');
+      assert.ok(kvmDeviceColumns.some((column) => column.name === 'service_locked'), 'Expected v022 KVM service lock');
+      assert.ok(lxcCols.some((column) => column.name === 'service_locked'), 'Expected v022 LXC service lock');
+
+      const instanceTaskColumns = await v2Db.all(`PRAGMA table_info(instance_tasks)`);
+      assert.ok(instanceTaskColumns.some((column) => column.name === 'progress'), 'Expected durable task progress from v019');
+      const taskIndexes = await v2Db.all(`PRAGMA index_list(instance_tasks)`);
+      assert.ok(taskIndexes.some((index) => index.name === 'idx_instance_tasks_active_lock' && index.unique === 1), 'Expected one-active-task-per-VPS uniqueness lock');
 
       const resellerCustomerColumns = await v2Db.all(`PRAGMA table_info(reseller_customers)`);
       assert.ok(resellerCustomerColumns.some((column) => column.name === 'reseller_user_id'), 'Expected reseller customer ownership column from v018');
@@ -601,22 +617,898 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const lxcCap = ctx.lxcAdapter.getCapabilityProfile();
       assert.strictEqual(kvmCap.supportsFreeze, false);
       assert.strictEqual(lxcCap.supportsFreeze, true);
+      const { selectQemuSystemBinary, qemuBinaryMatchesArchitecture } = require('../lib/node-agent/command-runner');
+      assert.strictEqual(
+        selectQemuSystemBinary((name) => name === 'qemu-system-aarch64'),
+        'qemu-system-aarch64',
+        'ARM-only QEMU nodes should still report a QEMU binary for version probing'
+      );
+      assert.strictEqual(
+        selectQemuSystemBinary((name) => name === 'qemu-system-x86_64' || name === 'qemu-system-aarch64'),
+        'qemu-system-x86_64',
+        'Prefer x86_64 QEMU when both system binaries are installed'
+      );
+      assert.strictEqual(
+        selectQemuSystemBinary((name) => name === 'qemu-system-x86_64' || name === 'qemu-system-aarch64', 'aarch64'),
+        'qemu-system-aarch64',
+        'Prefer the ARM QEMU binary on ARM hosts even when x86_64 QEMU is installed'
+      );
+      assert.strictEqual(selectQemuSystemBinary(() => false), null);
+      assert.strictEqual(qemuBinaryMatchesArchitecture('qemu-system-aarch64', 'aarch64'), true);
+      assert.strictEqual(qemuBinaryMatchesArchitecture('qemu-system-x86_64', 'aarch64'), false);
+      assert.strictEqual(qemuBinaryMatchesArchitecture('qemu-system-x86_64', 'x86_64'), true);
+      assert.strictEqual(qemuBinaryMatchesArchitecture('qemu-system-aarch64', 'x86_64'), false);
 
-      const vm = await ctx.db.get(`SELECT vm_id FROM vms LIMIT 1`);
-      await ctx.db.run(`UPDATE vms SET pid = ?, status = 'running' WHERE vm_id = ?`, [
+      const vm = await ctx.db.get(`SELECT vm_id, ipv4_address FROM vms LIMIT 1`);
+      const noHookKvm = new KVMAdapter(ctx.db);
+      await assert.rejects(
+        noHookKvm.performLifecycleAction(vm.vm_id, 'restart'),
+        /KVM restart requires a registered restart hook or both stop and start hooks/
+      );
+      const restartCalls = [];
+      const hookedKvm = new KVMAdapter(ctx.db, {
+        stopVmById: async (id) => {
+          restartCalls.push(`stop:${id}`);
+          await ctx.db.run(`UPDATE vms SET status = 'stopped', pid = NULL WHERE vm_id = ?`, [id]);
+        },
+        startVmById: async (id) => {
+          restartCalls.push(`start:${id}`);
+          await ctx.db.run(`UPDATE vms SET status = 'running', pid = ? WHERE vm_id = ?`, [process.pid, id]);
+        },
+      });
+      await hookedKvm.performLifecycleAction(vm.vm_id, 'restart');
+      assert.deepStrictEqual(restartCalls, [`stop:${vm.vm_id}`, `start:${vm.vm_id}`]);
+
+      const hookedGuardRow = {
+        vm_id: 900003,
+        vm_name: 'hook-guard-vm',
+        hostname: 'hook-guard-vm',
+        owner_id: 1,
+        node_id: 1,
+        status: 'stopped',
+        suspended: 0,
+        pid: null,
+        disk_size: '10G',
+        memory: 1024,
+        cpus: 1,
+        shared_with: '[]',
+        created_at: new Date().toISOString(),
+      };
+      const hookedGuardStatements = [];
+      const startHookMissKvm = new KVMAdapter(
+        {
+          get: async () => hookedGuardRow,
+          run: async (sql) => {
+            hookedGuardStatements.push(String(sql));
+            return { changes: 1, lastID: 0 };
+          },
+        },
+        {
+          startVmById: async () => {},
+        }
+      );
+      await assert.rejects(
+        startHookMissKvm.performLifecycleAction(hookedGuardRow.vm_id, 'start'),
+        /KVM VM #900003 did not reach the running state after the lifecycle hook\./,
+        'KVM start must refuse when the hook leaves the VM without a live process'
+      );
+      assert.ok(
+        !hookedGuardStatements.some((sql) => sql.includes(`status = 'running'`)),
+        'Failed hooked KVM start must not persist running panel state'
+      );
+
+      hookedGuardRow.status = 'running';
+      hookedGuardRow.pid = process.pid;
+      const stopHookMissKvm = new KVMAdapter(
+        {
+          get: async () => hookedGuardRow,
+          run: async (sql) => {
+            hookedGuardStatements.push(String(sql));
+            return { changes: 1, lastID: 0 };
+          },
+        },
+        {
+          stopVmById: async () => {},
+        }
+      );
+      await assert.rejects(
+        stopHookMissKvm.performLifecycleAction(hookedGuardRow.vm_id, 'stop'),
+        /KVM VM #900003 still has a live process after the lifecycle hook; refusing to record stopped state\./,
+        'KVM stop must refuse when the hook leaves a live process behind'
+      );
+      assert.ok(
+        !hookedGuardStatements.some((sql) => sql.includes(`status = 'stopped'`)),
+        'Failed hooked KVM stop must not persist stopped panel state'
+      );
+
+      hookedGuardRow.status = 'stopped';
+      hookedGuardRow.pid = null;
+      const deleteHookMissKvm = new KVMAdapter(
+        {
+          get: async () => hookedGuardRow,
+          run: async (sql) => {
+            hookedGuardStatements.push(String(sql));
+            return { changes: 1, lastID: 0 };
+          },
+        },
+        {
+          deleteVmById: async () => {},
+        }
+      );
+      await assert.rejects(
+        deleteHookMissKvm.performLifecycleAction(hookedGuardRow.vm_id, 'delete'),
+        /KVM VM #900003 was not removed by the delete hook; refusing to report deletion\./,
+        'KVM deletion must refuse when the hook leaves the VM record behind'
+      );
+      assert.ok(
+        !hookedGuardStatements.some((sql) => sql.trim().startsWith('DELETE FROM instances')),
+        'Failed hooked KVM deletion must not remove the unified registry row'
+      );
+
+      const lxcRow = {
+        id: 900001,
+        node_id: 1,
+        container_name: 'host-failure-guard',
+        is_local: true,
+        suspended: 0,
+        suspension_history: '[]',
+      };
+      const lxcDbStatements = [];
+      const failingHostLxc = new LXCAdapter(
+        {
+          get: async () => lxcRow,
+          run: async (sql) => {
+            lxcDbStatements.push(String(sql));
+            return { changes: 0, lastID: 0 };
+          },
+        },
+        {
+          localRuntime: {
+            containerManager: {
+              inspectContainer: async () => ({ state: 'running' }),
+              stopContainer: async () => {
+                throw new Error('host stop failed');
+              },
+              destroyContainer: async () => {
+                throw new Error('host destroy failed');
+              },
+            },
+          },
+        }
+      );
+      await assert.rejects(
+        failingHostLxc.performLifecycleAction(lxcRow.id, 'suspend', { reason: 'guard' }),
+        /host stop failed/,
+        'LXC suspension must not persist panel state when the host stop fails'
+      );
+      assert.ok(!lxcDbStatements.some((sql) => sql.includes('UPDATE lxc_instances')), 'Failed LXC suspension must not mark the record suspended');
+      await assert.rejects(
+        failingHostLxc.performLifecycleAction(lxcRow.id, 'delete'),
+        /host destroy failed/,
+        'LXC deletion must not delete panel records when the host destroy fails'
+      );
+      assert.ok(
+        !lxcDbStatements.some((sql) => sql.trim().startsWith('DELETE FROM lxc_instances')),
+        'Failed LXC deletion must retain the instance record'
+      );
+
+      const stateMismatchStatements = [];
+      const stateMismatchLxc = new LXCAdapter(
+        {
+          get: async () => lxcRow,
+          run: async (sql) => {
+            stateMismatchStatements.push(String(sql));
+            return { changes: 0, lastID: 0 };
+          },
+        },
+        {
+          localRuntime: {
+            containerManager: {
+              startContainer: async () => {},
+              inspectContainer: async () => ({ state: 'stopped' }),
+              stopContainer: async () => {},
+              destroyContainer: async () => {},
+            },
+          },
+        }
+      );
+      await assert.rejects(
+        stateMismatchLxc.performLifecycleAction(lxcRow.id, 'start'),
+        /LXC start did not reach expected "running" state on host; host reports "stopped"\./,
+        'LXC start must not persist running status when the host inspection reports stopped'
+      );
+      assert.ok(
+        !stateMismatchStatements.some((sql) => sql.includes(`status = 'running'`)),
+        'Failed LXC start must not record running panel state'
+      );
+
+      const deleteMismatchStatements = [];
+      const deleteMismatchLxc = new LXCAdapter(
+        {
+          get: async () => lxcRow,
+          run: async (sql) => {
+            deleteMismatchStatements.push(String(sql));
+            return { changes: 0, lastID: 0 };
+          },
+        },
+        {
+          localRuntime: {
+            containerManager: {
+              destroyContainer: async () => {},
+              inspectContainer: async () => ({ state: 'stopped' }),
+            },
+          },
+        }
+      );
+      await assert.rejects(
+        deleteMismatchLxc.performLifecycleAction(lxcRow.id, 'delete'),
+        /LXC delete did not remove the container on host; host reports "stopped"\. Refusing to remove panel records\./,
+        'LXC deletion must not remove panel records when the host leaves the container behind'
+      );
+      assert.ok(
+        !deleteMismatchStatements.some((sql) => sql.trim().startsWith('DELETE FROM lxc_instances')),
+        'Failed LXC deletion must retain the instance record when the container remains'
+      );
+
+      const missingDeleteStatements = [];
+      const missingDeleteLxc = new LXCAdapter(
+        {
+          get: async () => lxcRow,
+          run: async (sql) => {
+            missingDeleteStatements.push(String(sql));
+            return { changes: 1, lastID: 0 };
+          },
+        },
+        {
+          localRuntime: {
+            containerManager: {
+              inspectContainer: async () => ({ state: 'missing' }),
+              destroyContainer: async () => {
+                throw new Error('destroy should not be called for a missing container');
+              },
+            },
+          },
+        }
+      );
+      await missingDeleteLxc.performLifecycleAction(lxcRow.id, 'delete');
+      assert.ok(
+        missingDeleteStatements.some((sql) => sql.trim().startsWith('DELETE FROM lxc_instances')),
+        'LXC deletion of a missing container should remove panel records without host destroy tooling'
+      );
+
+      // Native KVM lifecycle guards: fallback stop must wait for the guest process to exit,
+      // suspension must stop a running guest without a hook, and deletion must not remove
+      // records while a live guest process remains.
+      const kvmGuardStatements = [];
+      const kvmGuardRow = {
+        vm_id: 900002,
+        vm_name: 'lifecycle-guard-vm',
+        hostname: 'lifecycle-guard-vm',
+        owner_id: 1,
+        node_id: 1,
+        status: 'running',
+        suspended: 0,
+        pid: null,
+        disk_size: '10G',
+        memory: 1024,
+        cpus: 1,
+        shared_with: '[]',
+        created_at: new Date().toISOString(),
+      };
+      const noHookGuardKvm = new KVMAdapter(
+        {
+          get: async () => kvmGuardRow,
+          run: async (sql) => {
+            kvmGuardStatements.push(String(sql));
+            if (String(sql).includes('UPDATE vms SET status = \'stopped\'')) {
+              kvmGuardRow.status = 'stopped';
+              kvmGuardRow.pid = null;
+            }
+            if (String(sql).includes('UPDATE vms SET suspended = 1')) {
+              kvmGuardRow.suspended = 1;
+              kvmGuardRow.status = 'stopped';
+              kvmGuardRow.pid = null;
+            }
+            return { changes: 1, lastID: 0 };
+          },
+        },
+        {}
+      );
+      const startGuestProcess = async () => {
+        const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], {
+          stdio: 'ignore',
+        });
+        await new Promise((resolve, reject) => {
+          child.once('spawn', resolve);
+          child.once('error', reject);
+        });
+        kvmGuardRow.pid = child.pid;
+        kvmGuardRow.status = 'running';
+        kvmGuardRow.suspended = 0;
+        return child;
+      };
+      const stopGuestProcess = async (child) => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        await new Promise((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) {
+            resolve();
+          } else {
+            child.once('exit', resolve);
+          }
+        });
+      };
+      const waitForGuestExit = async (child) => {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('Guest process did not exit')), 2000);
+          child.once('exit', () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+      };
+
+      const stopGuardChild = await startGuestProcess();
+      try {
+        await noHookGuardKvm.performLifecycleAction(kvmGuardRow.vm_id, 'stop');
+        await waitForGuestExit(stopGuardChild);
+        assert.ok(
+          kvmGuardStatements.some((sql) => sql.includes(`UPDATE vms SET status = 'stopped', pid = NULL`)),
+          'KVM fallback stop must persist the stopped state only after the guest exits'
+        );
+      } finally {
+        await stopGuestProcess(stopGuardChild);
+      }
+
+      const suspendGuardChild = await startGuestProcess();
+      try {
+        await noHookGuardKvm.performLifecycleAction(kvmGuardRow.vm_id, 'suspend', { reason: 'guard' });
+        await waitForGuestExit(suspendGuardChild);
+        assert.ok(
+          kvmGuardStatements.some((sql) => sql.includes('UPDATE vms SET suspended = 1')),
+          'KVM suspend must persist suspension after stopping a running guest'
+        );
+      } finally {
+        await stopGuestProcess(suspendGuardChild);
+      }
+
+      const deleteGuardChild = await startGuestProcess();
+      try {
+        await assert.rejects(
+          noHookGuardKvm.performLifecycleAction(kvmGuardRow.vm_id, 'delete'),
+          /KVM delete hook is not registered/,
+          'KVM deletion must refuse without a registered host delete hook'
+        );
+        assert.ok(
+          !kvmGuardStatements.some((sql) => sql.trim().startsWith('DELETE FROM vms')),
+          'Refused KVM deletion must retain the VM record'
+        );
+      } finally {
+        await stopGuestProcess(deleteGuardChild);
+      }
+
+      kvmGuardRow.status = 'running';
+      kvmGuardRow.pid = null;
+      kvmGuardRow.suspended = 0;
+      const staleGuardStatements = kvmGuardStatements.length;
+      await assert.rejects(
+        noHookGuardKvm.performLifecycleAction(kvmGuardRow.vm_id, 'stop'),
+        /no stop hook or live PID is available/,
+        'KVM fallback stop must reject stale running state without a stop hook or PID'
+      );
+      await assert.rejects(
+        noHookGuardKvm.performLifecycleAction(kvmGuardRow.vm_id, 'suspend', { reason: 'guard' }),
+        /no stop hook or live PID is available/,
+        'KVM suspend must reject stale running state without a stop hook or PID'
+      );
+      assert.strictEqual(
+        kvmGuardStatements.length,
+        staleGuardStatements,
+        'Rejected stale-state KVM lifecycle actions must not mutate the record'
+      );
+
+      await ctx.db.run(`UPDATE vms SET pid = ?, status = 'running', ipv4_address = NULL WHERE vm_id = ?`, [
         process.pid,
         vm.vm_id,
       ]);
+      const mapped = await ctx.kvmAdapter.getInstance(vm.vm_id);
+      assert.strictEqual(mapped.primaryIp, null, 'Unknown KVM addresses must not become a localhost placeholder');
       const tel = await ctx.kvmAdapter.getTelemetry(vm.vm_id);
       assert.strictEqual(tel.pid, process.pid);
       assert.ok(tel.ramUsedMb > 10, `Expected real RSS > 10MB from /proc/${process.pid}/status`);
-      await ctx.db.run(`UPDATE vms SET pid = NULL, status = 'stopped' WHERE vm_id = ?`, [vm.vm_id]);
+      assert.strictEqual(tel.netRxBytes, null, 'Unmeasured KVM RX must be null, not a fabricated zero');
+      assert.strictEqual(tel.netTxBytes, null, 'Unmeasured KVM TX must be null, not a fabricated zero');
+      await ctx.db.run(`UPDATE vms SET pid = NULL, status = 'stopped', ipv4_address = ? WHERE vm_id = ?`, [
+        vm.ipv4_address || null,
+        vm.vm_id,
+      ]);
+      await ctx.kvmAdapter.syncRegistryRow(vm.vm_id);
 
       const freezeKvm = await adminClient.request('POST', `/api/v1/instances/kvm/${vm.vm_id}/action`, {
         action: 'freeze',
       });
       assert.strictEqual(freezeKvm.status, 400);
       assert.match(freezeKvm.json.error, /only supported for LXC/i);
+    });
+
+    await runStep('T34: VPS tasks recover safely and verify KVM/LXC cloning, rescue ISO, disk/device workflows, VNC proxy, locks and access', async () => {
+      const vm = await ctx.db.get(`SELECT vm_id FROM vms ORDER BY vm_id LIMIT 1`);
+      assert.ok(vm?.vm_id, 'Need an existing test KVM VM');
+      const rejectedAction = await adminClient.request(
+        'POST',
+        `/api/v1/instances/kvm/${vm.vm_id}/action`,
+        { action: 'freeze', async: true },
+        { 'X-Forwarded-For': '198.51.100.34' }
+      );
+      assert.strictEqual(rejectedAction.status, 202, `Task enqueue should return 202: ${rejectedAction.text}`);
+      assert.ok(rejectedAction.json.task?.id, 'Expected durable task id');
+      await assert.rejects(
+        () => ctx.instanceManager.getAuthorizedTask(
+          { userId: 999999, username: 'not-the-owner', role: 'user' },
+          rejectedAction.json.task.id
+        ),
+        (err) => err.statusCode === 403
+      );
+
+      let asyncTask;
+      for (let i = 0; i < 30; i += 1) {
+        const poll = await adminClient.request('GET', `/api/v1/tasks/${rejectedAction.json.task.id}`);
+        assert.strictEqual(poll.status, 200, `Authorized task status request failed: ${poll.text}`);
+        asyncTask = poll.json.task;
+        if (['succeeded', 'failed'].includes(asyncTask.status)) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.strictEqual(asyncTask.status, 'failed', 'Unsupported KVM freeze must be honestly reported as a failed task');
+      assert.match(asyncTask.error, /only supported for LXC/i);
+      const taskHistory = await adminClient.request('GET', `/api/v1/instances/kvm/${vm.vm_id}/tasks`);
+      assert.strictEqual(taskHistory.status, 200);
+      assert.ok(taskHistory.json.tasks.some((task) => task.id === asyncTask.id));
+
+      const taskManager = ctx.instanceManager.tasks;
+      let activeTaskId = '';
+      const activeTask = await taskManager.start({
+        engine: 'lxc', instanceRefId: 987654, actorId: 1, action: 'lock-test',
+        worker: async (report) => {
+          activeTaskId = 'running';
+          await report(25, 'Testing persisted progress');
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          await report(60, 'Finishing test operation');
+          return { verified: true };
+        },
+      });
+      assert.ok(['queued', 'running'].includes(activeTask.status), 'New task should be queued or already running');
+      await assert.rejects(
+        () => taskManager.start({
+          engine: 'lxc', instanceRefId: 987654, actorId: 1, action: 'duplicate',
+          worker: async () => true,
+        }),
+        (err) => err.statusCode === 409 && /already queued or running/i.test(err.message)
+      );
+      await assert.rejects(
+        () => taskManager.runSync({
+          engine: 'lxc', instanceRefId: 987654, actorId: 1, action: 'sync-duplicate',
+          worker: async () => true,
+        }),
+        (err) => err.statusCode === 409 && /already queued or running/i.test(err.message)
+      );
+      let inProgress = await taskManager.get(activeTask.id);
+      for (let i = 0; i < 10 && Number(inProgress?.progress || 0) < 25; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        inProgress = await taskManager.get(activeTask.id);
+      }
+      assert.ok(inProgress.progress >= 25 && inProgress.progress < 100, 'Progress endpoint data must reflect an in-flight operation');
+      assert.strictEqual(inProgress.currentStep, 'Testing persisted progress');
+
+      let finished = await taskManager.get(activeTask.id);
+      for (let i = 0; i < 30 && finished?.status !== 'succeeded'; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        finished = await taskManager.get(activeTask.id);
+      }
+      assert.strictEqual(finished.status, 'succeeded');
+      assert.strictEqual(finished.progress, 100);
+      assert.deepStrictEqual(finished.result, { verified: true });
+      assert.strictEqual(activeTaskId, 'running');
+
+      const legacyConflictTask = await taskManager.start({
+        engine: 'kvm', instanceRefId: Number(vm.vm_id), actorId: 1, action: 'lock-test',
+        worker: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          return { verified: true };
+        },
+      });
+      const legacyConflict = await adminClient.request(
+        'POST',
+        `/api/vms/${vm.vm_id}/start`,
+        {},
+        { 'X-Forwarded-For': '198.51.100.35' }
+      );
+      assert.strictEqual(legacyConflict.status, 409, `Legacy KVM lifecycle route should honor the active task lock: ${legacyConflict.text}`);
+      const legacyConsoleConflict = await adminClient.request(
+        'POST', `/api/vms/${vm.vm_id}/console/command`, { command: 'echo must-not-run' },
+        { 'X-Forwarded-For': '198.51.100.51' }
+      );
+      assert.strictEqual(legacyConsoleConflict.status, 409, `Legacy serial-console commands must share the per-instance task lock: ${legacyConsoleConflict.text}`);
+      let legacyFinished = await taskManager.get(legacyConflictTask.id);
+      for (let i = 0; i < 30 && legacyFinished?.status !== 'succeeded'; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        legacyFinished = await taskManager.get(legacyConflictTask.id);
+      }
+      assert.strictEqual(legacyFinished.status, 'succeeded');
+
+      const lxc = await ctx.db.get(`SELECT id FROM lxc_instances ORDER BY id LIMIT 1`);
+      assert.ok(lxc?.id, 'Need an existing test LXC instance');
+      const directLxcTask = await taskManager.start({
+        engine: 'lxc', instanceRefId: Number(lxc.id), actorId: 1, action: 'lock-test',
+        worker: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          return { verified: true };
+        },
+      });
+      const lxcMutationConflict = await adminClient.request(
+        'POST',
+        `/api/v1/lxc/${lxc.id}/password`,
+        { password: 'should-not-be-applied' },
+        { 'X-Forwarded-For': '198.51.100.36' }
+      );
+      assert.strictEqual(lxcMutationConflict.status, 409, `Direct LXC password mutation should honor the active task lock: ${lxcMutationConflict.text}`);
+      const lxcFileConflict = await adminClient.request(
+        'POST',
+        `/api/v1/lxc/${lxc.id}/files/content`,
+        { path: '/tmp/tgvpanel-task-lock-test', content: 'must-not-write' },
+        { 'X-Forwarded-For': '198.51.100.39' }
+      );
+      assert.strictEqual(lxcFileConflict.status, 409, `Direct LXC file writes should honor the active task lock: ${lxcFileConflict.text}`);
+      let directLxcFinished = await taskManager.get(directLxcTask.id);
+      for (let i = 0; i < 30 && directLxcFinished?.status !== 'succeeded'; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        directLxcFinished = await taskManager.get(directLxcTask.id);
+      }
+      assert.strictEqual(directLxcFinished.status, 'succeeded');
+
+      const lxcCloneSource = await ctx.db.get(`SELECT * FROM lxc_instances WHERE id = ?`, [lxc.id]);
+      const cloneContainerManager = ctx.nodeManager.localRuntime.containerManager;
+      const originalCloneContainer = cloneContainerManager.cloneContainer;
+      const originalDestroyContainer = cloneContainerManager.destroyContainer;
+      const originalRemoteNodeRequest = ctx.nodeManager.requestRemoteNode;
+      const cloneTestName = `t34-clone-${Date.now()}`;
+      let clonedLxcId = null;
+      try {
+        await ctx.db.run(`UPDATE lxc_instances SET status = 'stopped', rootfs_storage_type = 'dir' WHERE id = ?`, [lxc.id]);
+        cloneContainerManager.cloneContainer = async (sourceName, targetName, resources) => {
+          assert.strictEqual(sourceName, lxcCloneSource.container_name);
+          assert.strictEqual(targetName, cloneTestName);
+          assert.ok(resources.cpuCores >= 1);
+          return { name: targetName, state: 'stopped', pid: null, ips: [] };
+        };
+        cloneContainerManager.destroyContainer = async () => {};
+        ctx.nodeManager.requestRemoteNode = async (_nodeId, method, route, body) => {
+          assert.strictEqual(method, 'POST');
+          assert.match(route, /\/clone$/);
+          assert.strictEqual(body.targetName, cloneTestName);
+          return { success: true, networkDetached: true };
+        };
+        const missingCloneAck = await adminClient.request(
+          'POST', `/api/v1/instances/lxc/${lxc.id}/clone`, { name: cloneTestName },
+          { 'X-Forwarded-For': '198.51.100.40' }
+        );
+        assert.strictEqual(missingCloneAck.status, 400, 'LXC clone must require explicit guest identity/network risk acknowledgement');
+        const lxcCloneResponse = await adminClient.request(
+          'POST', `/api/v1/instances/lxc/${lxc.id}/clone`,
+          { name: cloneTestName, acknowledgeGuestIdentityRisk: true },
+          { 'X-Forwarded-For': '198.51.100.41' }
+        );
+        assert.strictEqual(lxcCloneResponse.status, 201, `Stopped directory-backed LXC should clone through its task-tracked API: ${lxcCloneResponse.text}`);
+        assert.strictEqual(lxcCloneResponse.json.clone.networkDetached, true);
+        assert.strictEqual(lxcCloneResponse.json.clone.guestIdentityResetRequired, true);
+        assert.match(lxcCloneResponse.json.warning, /network detached/i);
+        clonedLxcId = lxcCloneResponse.json.clone.instance.refId;
+        const disconnectedClone = await ctx.db.get(`SELECT status, bridge, ip_address, rootfs_storage_type FROM lxc_instances WHERE id = ?`, [clonedLxcId]);
+        assert.deepStrictEqual(disconnectedClone, { status: 'stopped', bridge: null, ip_address: null, rootfs_storage_type: 'dir' });
+      } finally {
+        cloneContainerManager.cloneContainer = originalCloneContainer;
+        cloneContainerManager.destroyContainer = originalDestroyContainer;
+        ctx.nodeManager.requestRemoteNode = originalRemoteNodeRequest;
+        if (clonedLxcId) {
+          await ctx.db.run(`DELETE FROM vps_expiration WHERE lxc_id = ?`, [clonedLxcId]);
+          await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [clonedLxcId]);
+          await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [clonedLxcId]);
+        }
+        await ctx.db.run(`UPDATE lxc_instances SET status = ?, rootfs_storage_type = ? WHERE id = ?`, [lxcCloneSource.status, lxcCloneSource.rootfs_storage_type, lxc.id]);
+      }
+
+      const staleId = crypto.randomUUID();
+      await ctx.db.run(
+        `INSERT INTO instance_tasks (id, engine, instance_ref_id, actor_id, action, status, progress, updated_at)
+         VALUES (?, 'lxc', 987655, 1, 'interrupted-test', 'running', 40, datetime('now', '-10 minutes'))`,
+        [staleId]
+      );
+      assert.strictEqual(await taskManager.failStaleTasks(5), 1, 'Stale in-flight tasks should be failed instead of retried blindly');
+      assert.strictEqual((await taskManager.get(staleId)).status, 'failed');
+      const interruptedId = crypto.randomUUID();
+      await ctx.db.run(
+        `INSERT INTO instance_tasks (id, engine, instance_ref_id, actor_id, action, status, updated_at)
+         VALUES (?, 'lxc', 987656, 1, 'startup-recovery-test', 'queued', datetime('now'))`,
+        [interruptedId]
+      );
+      assert.strictEqual(await taskManager.recoverInterruptedTasks(), 1, 'Even recently queued work must be interrupted after a controller restart');
+      assert.strictEqual((await taskManager.get(interruptedId)).status, 'failed');
+
+      const resizeRoot = fs.mkdtempSync(path.join(os.homedir(), 'vms', '.tgvpanel-resize-test-'));
+      const fakeDisk = path.join(resizeRoot, 'disk.qcow2');
+      fs.writeFileSync(fakeDisk, 'test image fixture');
+      let virtualSizeBytes = 20 * 1024 ** 3;
+      const fakeQemuRunner = async (_binary, args) => {
+        if (args[0] === 'info') {
+          return { exitCode: 0, stdout: JSON.stringify({ format: 'qcow2', 'virtual-size': virtualSizeBytes }), stderr: '', timedOut: false, durationMs: 0 };
+        }
+        if (args[0] === 'resize') {
+          virtualSizeBytes = Number(args[2]);
+          return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 0 };
+        }
+        if (args[0] === 'create') {
+          fs.mkdirSync(path.dirname(args[3]), { recursive: true });
+          fs.writeFileSync(args[3], 'fake qcow2 image');
+          return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 0 };
+        }
+        if (args[0] === 'convert') {
+          fs.mkdirSync(path.dirname(args[4]), { recursive: true });
+          fs.copyFileSync(args[3], args[4]);
+          return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 0 };
+        }
+        return { exitCode: 2, stdout: '', stderr: 'unexpected qemu-img command', timedOut: false, durationMs: 0 };
+      };
+      const testKvmAdapter = new KVMAdapter(ctx.db, {}, fakeQemuRunner);
+      const productionKvmAdapter = ctx.instanceManager.virt.kvm;
+      let testExtraDiskPath = null;
+      let testCloneVmId = 0;
+      let testCloneDiskPath = null;
+      let fakeVncServer = null;
+      let testVncPort = null;
+      const savedVmDisk = await ctx.db.get(`SELECT disk_file, disk_size, status, pid, ssh_port, mac_address, extra_disks_json, extra_nics_json, vnc_port, service_locked, service_lock_reason, service_locked_at, service_locked_by FROM vms WHERE vm_id = ?`, [vm.vm_id]);
+      try {
+        await ctx.db.run(`UPDATE vms SET disk_file = ?, disk_size = '20G', status = 'stopped', pid = NULL WHERE vm_id = ?`, [fakeDisk, vm.vm_id]);
+        ctx.instanceManager.virt.kvm = testKvmAdapter;
+        const vncEnable = await adminClient.request(
+          'POST',
+          `/api/v1/instances/kvm/${vm.vm_id}/vnc`,
+          { enabled: true },
+          { 'X-Forwarded-For': '198.51.100.48' }
+        );
+        assert.strictEqual(vncEnable.status, 200, `Stopped KVM should enable loopback VNC: ${vncEnable.text}`);
+        testVncPort = vncEnable.json.vnc.port;
+        assert.ok(testVncPort >= 5900 && testVncPort < 65000);
+        const vncPage = await adminClient.request('GET', `/vm/${vm.vm_id}/vnc`);
+        assert.strictEqual(vncPage.status, 200, `Authorized VNC page should render: ${vncPage.text}`);
+        assert.match(vncPage.text, /core\/rfb\.js/);
+        const vncAsset = await adminClient.request('GET', '/vendor/novnc/core/rfb.js');
+        assert.strictEqual(vncAsset.status, 200, 'Vendored noVNC RFB module should be served locally');
+        fakeVncServer = net.createServer((socket) => socket.on('data', (chunk) => socket.write(chunk)));
+        await new Promise((resolve, reject) => {
+          fakeVncServer.once('error', reject);
+          fakeVncServer.listen(testVncPort, '127.0.0.1', resolve);
+        });
+        const rejectedVncOrigin = await new Promise((resolve, reject) => {
+          const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/vnc/${vm.vm_id}`, {
+            headers: { Cookie: adminClient.cookie, Origin: 'https://attacker.example' },
+          });
+          const timer = setTimeout(() => { ws.terminate(); reject(new Error('Timed out waiting for hostile VNC origin rejection')); }, 3000);
+          ws.once('unexpected-response', (_request, response) => {
+            clearTimeout(timer);
+            response.resume();
+            resolve(response.statusCode);
+          });
+          ws.once('error', (err) => { clearTimeout(timer); reject(err); });
+        });
+        assert.strictEqual(rejectedVncOrigin, 403, 'VNC WebSocket must reject cross-origin browser sessions');
+        const vncFrame = Buffer.from('tgvpanel-vnc-proxy-frame');
+        const proxiedFrame = await new Promise((resolve, reject) => {
+          const ws = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/vnc/${vm.vm_id}`, {
+            headers: { Cookie: adminClient.cookie },
+          });
+          const timer = setTimeout(() => { ws.terminate(); reject(new Error('Timed out waiting for VNC TCP/WebSocket proxy echo')); }, 3000);
+          ws.once('open', () => ws.send(vncFrame, { binary: true }));
+          ws.once('message', (data, isBinary) => {
+            clearTimeout(timer);
+            ws.close();
+            if (!isBinary) return reject(new Error('VNC proxy must preserve binary framing'));
+            resolve(Buffer.from(data));
+          });
+          ws.once('error', (err) => { clearTimeout(timer); reject(err); });
+        });
+        assert.deepStrictEqual(proxiedFrame, vncFrame, 'Authenticated noVNC WebSocket should proxy raw binary VNC bytes');
+        await new Promise((resolve) => fakeVncServer.close(resolve));
+        fakeVncServer = null;
+        const vncDisable = await adminClient.request(
+          'POST',
+          `/api/v1/instances/kvm/${vm.vm_id}/vnc`,
+          { enabled: false },
+          { 'X-Forwarded-For': '198.51.100.49' }
+        );
+        assert.strictEqual(vncDisable.status, 200, `Stopped KVM should disable VNC: ${vncDisable.text}`);
+        testVncPort = null;
+        const rescueIsoFilename = `.tgvpanel-rescue-${Date.now()}.iso`;
+        const rescueIsoPath = path.join(os.homedir(), 'vms', 'iso', rescueIsoFilename);
+        fs.mkdirSync(path.dirname(rescueIsoPath), { recursive: true });
+        fs.writeFileSync(rescueIsoPath, 'test rescue media fixture');
+        try {
+          const badRescueIso = await adminClient.request(
+            'POST', `/api/v1/instances/kvm/${vm.vm_id}/rescue`,
+            { enabled: true, isoFilename: '../outside.iso' },
+            { 'X-Forwarded-For': '198.51.100.42' }
+          );
+          assert.strictEqual(badRescueIso.status, 400, 'Rescue ISO endpoint must reject paths and accept only managed filenames');
+          const rescueEnabled = await adminClient.request(
+            'POST', `/api/v1/instances/kvm/${vm.vm_id}/rescue`,
+            { enabled: true, isoFilename: rescueIsoFilename },
+            { 'X-Forwarded-For': '198.51.100.43' }
+          );
+          assert.strictEqual(rescueEnabled.status, 200, `Stopped KVM should configure managed rescue media: ${rescueEnabled.text}`);
+          const rescueRow = await ctx.db.get(`SELECT iso_attached, boot_from_iso FROM vms WHERE vm_id = ?`, [vm.vm_id]);
+          assert.deepStrictEqual(rescueRow, { iso_attached: rescueIsoFilename, boot_from_iso: 1 });
+          const rescueDisabled = await adminClient.request(
+            'POST', `/api/v1/instances/kvm/${vm.vm_id}/rescue`,
+            { enabled: false },
+            { 'X-Forwarded-For': '198.51.100.44' }
+          );
+          assert.strictEqual(rescueDisabled.status, 200, `Stopped KVM should restore disk-first boot after rescue: ${rescueDisabled.text}`);
+          const restoredBoot = await ctx.db.get(`SELECT iso_attached, boot_from_iso FROM vms WHERE vm_id = ?`, [vm.vm_id]);
+          assert.deepStrictEqual(restoredBoot, { iso_attached: null, boot_from_iso: 0 });
+        } finally {
+          try { fs.unlinkSync(rescueIsoPath); } catch { /* test cleanup */ }
+        }
+        const lockedService = await adminClient.request(
+          'POST', `/api/v1/instances/kvm/${vm.vm_id}/service-lock`,
+          { locked: true, reason: 'T34 service-lock regression' },
+          { 'X-Forwarded-For': '198.51.100.45' }
+        );
+        assert.strictEqual(lockedService.status, 200, `Staff should set a non-suspending service lock: ${lockedService.text}`);
+        const lockRow = await ctx.db.get(`SELECT service_locked, service_lock_reason FROM vms WHERE vm_id = ?`, [vm.vm_id]);
+        assert.deepStrictEqual(lockRow, { service_locked: 1, service_lock_reason: 'T34 service-lock regression' });
+        const blockedV1Start = await adminClient.request(
+          'POST', `/api/v1/instances/kvm/${vm.vm_id}/action`, { action: 'start' },
+          { 'X-Forwarded-For': '198.51.100.46' }
+        );
+        assert.strictEqual(blockedV1Start.status, 423, `Unified start must honor service lock: ${blockedV1Start.text}`);
+        const blockedLegacyStart = await adminClient.request(
+          'POST', `/api/vms/${vm.vm_id}/start`, {},
+          { 'X-Forwarded-For': '198.51.100.47' }
+        );
+        assert.strictEqual(blockedLegacyStart.status, 423, `Legacy start must honor service lock: ${blockedLegacyStart.text}`);
+        const unlockedService = await adminClient.request(
+          'POST', `/api/v1/instances/kvm/${vm.vm_id}/service-lock`, { locked: false },
+          { 'X-Forwarded-For': '198.51.100.48' }
+        );
+        assert.strictEqual(unlockedService.status, 200, `Staff should clear service lock: ${unlockedService.text}`);
+        assert.strictEqual(unlockedService.json.instance.serviceLocked, false);
+        const resizeResponse = await adminClient.request(
+          'POST',
+          `/api/v1/instances/kvm/${vm.vm_id}/disk/resize`,
+          { diskSize: '30G' },
+          { 'X-Forwarded-For': '198.51.100.37' }
+        );
+        assert.strictEqual(resizeResponse.status, 200, `KVM disk expansion should succeed: ${resizeResponse.text}`);
+        assert.strictEqual(resizeResponse.json.diskSize, '30G');
+        assert.strictEqual(resizeResponse.json.virtualSizeBytes, 30 * 1024 ** 3);
+        assert.strictEqual(resizeResponse.json.guestFilesystemResizeRequired, true, 'Guest partition/filesystem expansion must be explicitly left to the guest');
+        const shrinkResponse = await adminClient.request(
+          'POST',
+          `/api/v1/instances/kvm/${vm.vm_id}/disk/resize`,
+          { diskSize: '10G' },
+          { 'X-Forwarded-For': '198.51.100.38' }
+        );
+        assert.strictEqual(shrinkResponse.status, 400, `Unsafe KVM disk shrink must be refused: ${shrinkResponse.text}`);
+        assert.match(shrinkResponse.json.error, /shrinking is disabled/i);
+        assert.strictEqual(virtualSizeBytes, 30 * 1024 ** 3, 'Rejected shrink must not alter the image');
+
+        const attachDisk = await adminClient.request(
+          'POST',
+          `/api/v1/instances/kvm/${vm.vm_id}/devices/disks`,
+          { size: '2G' },
+          { 'X-Forwarded-For': '198.51.100.40' }
+        );
+        assert.strictEqual(attachDisk.status, 201, `Stopped KVM should attach a secondary disk: ${attachDisk.text}`);
+        assert.strictEqual(attachDisk.json.disk.sizeBytes, 2 * 1024 ** 3);
+        const extraImagePath = path.join(os.homedir(), 'vms', `vm-${vm.vm_id}-devices`, `${attachDisk.json.disk.id}.qcow2`);
+        testExtraDiskPath = extraImagePath;
+        assert.ok(fs.existsSync(extraImagePath), 'Secondary disk image should be created in managed storage');
+        const detachDisk = await adminClient.request(
+          'DELETE',
+          `/api/v1/instances/kvm/${vm.vm_id}/devices/disks/${attachDisk.json.disk.id}`,
+          {},
+          { 'X-Forwarded-For': '198.51.100.41' }
+        );
+        assert.strictEqual(detachDisk.status, 200, `Secondary disk should detach safely: ${detachDisk.text}`);
+        assert.strictEqual(detachDisk.json.disk.imagePreserved, true);
+        assert.ok(fs.existsSync(extraImagePath), 'Detaching a disk must preserve its image data');
+        let deviceList = await adminClient.request('GET', `/api/v1/instances/kvm/${vm.vm_id}/devices`);
+        assert.strictEqual(deviceList.status, 200);
+        assert.strictEqual(deviceList.json.devices.disks[0].attached, false, 'Detached images remain catalogued');
+        const reattachDisk = await adminClient.request(
+          'POST',
+          `/api/v1/instances/kvm/${vm.vm_id}/devices/disks/${attachDisk.json.disk.id}/attach`,
+          {},
+          { 'X-Forwarded-For': '198.51.100.44' }
+        );
+        assert.strictEqual(reattachDisk.status, 200, `Preserved disk should be reattachable: ${reattachDisk.text}`);
+        deviceList = await adminClient.request('GET', `/api/v1/instances/kvm/${vm.vm_id}/devices`);
+        assert.strictEqual(deviceList.json.devices.disks[0].attached, true);
+        const detachAgain = await adminClient.request(
+          'DELETE',
+          `/api/v1/instances/kvm/${vm.vm_id}/devices/disks/${attachDisk.json.disk.id}`,
+          {},
+          { 'X-Forwarded-For': '198.51.100.47' }
+        );
+        assert.strictEqual(detachAgain.status, 200, `Disk should detach before primary-disk-only clone: ${detachAgain.text}`);
+
+        const attachNic = await adminClient.request(
+          'POST',
+          `/api/v1/instances/kvm/${vm.vm_id}/devices/nics`,
+          {},
+          { 'X-Forwarded-For': '198.51.100.42' }
+        );
+        assert.strictEqual(attachNic.status, 201, `Stopped KVM should attach a NAT NIC: ${attachNic.text}`);
+        assert.strictEqual(attachNic.json.nic.networkMode, 'user');
+        assert.match(attachNic.json.nic.macAddress, /^52:54:00:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}$/i);
+        const detachNic = await adminClient.request(
+          'DELETE',
+          `/api/v1/instances/kvm/${vm.vm_id}/devices/nics/${attachNic.json.nic.id}`,
+          {},
+          { 'X-Forwarded-For': '198.51.100.43' }
+        );
+        assert.strictEqual(detachNic.status, 200, `Secondary NIC should detach: ${detachNic.text}`);
+        try { fs.unlinkSync(extraImagePath); } catch { /* cleanup after retention assertion */ }
+
+        const refusedClone = await adminClient.request(
+          'POST',
+          `/api/v1/instances/kvm/${vm.vm_id}/clone`,
+          { name: `tgv-clone-${Date.now()}` },
+          { 'X-Forwarded-For': '198.51.100.45' }
+        );
+        assert.strictEqual(refusedClone.status, 400, 'Clone must require explicit acknowledgement of guest identity reuse');
+        const cloneName = `tgv-clone-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const cloneResponse = await adminClient.request(
+          'POST',
+          `/api/v1/instances/kvm/${vm.vm_id}/clone`,
+          { name: cloneName, acknowledgeGuestIdentityRisk: true },
+          { 'X-Forwarded-For': '198.51.100.46' }
+        );
+        assert.strictEqual(cloneResponse.status, 201, `Stopped NAT VM should clone safely: ${cloneResponse.text}`);
+        assert.strictEqual(cloneResponse.json.clone.name, cloneName);
+        assert.strictEqual(cloneResponse.json.clone.guestIdentityResetRequired, true);
+        assert.match(cloneResponse.json.warning, /SSH host keys/i);
+        testCloneVmId = cloneResponse.json.clone.vmId;
+        const clonedRow = await ctx.db.get(`SELECT vm_id, status, clone_of, network_type, ssh_port, mac_address, disk_file FROM vms WHERE vm_id = ?`, [testCloneVmId]);
+        assert.strictEqual(clonedRow.status, 'stopped');
+        assert.strictEqual(Number(clonedRow.clone_of), Number(vm.vm_id));
+        assert.strictEqual(clonedRow.network_type, 'nat');
+        assert.notStrictEqual(Number(clonedRow.ssh_port), Number(savedVmDisk.ssh_port));
+        assert.notStrictEqual(clonedRow.mac_address, (await ctx.db.get(`SELECT mac_address FROM vms WHERE vm_id = ?`, [vm.vm_id])).mac_address);
+        testCloneDiskPath = clonedRow.disk_file;
+        assert.ok(fs.existsSync(testCloneDiskPath), 'Clone should own a separate verified disk image');
+      } finally {
+        ctx.instanceManager.virt.kvm = productionKvmAdapter;
+        if (testCloneVmId) {
+          await ctx.db.run(`DELETE FROM instances WHERE engine = 'kvm' AND ref_id = ?`, [testCloneVmId]).catch(() => undefined);
+          await ctx.db.run(`DELETE FROM vm_logs WHERE vm_id = ?`, [testCloneVmId]).catch(() => undefined);
+          await ctx.db.run(`DELETE FROM vm_snapshots WHERE vm_id = ?`, [testCloneVmId]).catch(() => undefined);
+          await ctx.db.run(`DELETE FROM vms WHERE vm_id = ?`, [testCloneVmId]).catch(() => undefined);
+        }
+        if (testCloneDiskPath) {
+          try { fs.unlinkSync(testCloneDiskPath); } catch { /* cleanup best effort */ }
+        }
+        if (fakeVncServer) await new Promise((resolve) => fakeVncServer.close(resolve));
+        if (testExtraDiskPath) {
+          try { fs.unlinkSync(testExtraDiskPath); } catch { /* cleanup best effort */ }
+          try { fs.rmdirSync(path.dirname(testExtraDiskPath)); } catch { /* preserve non-empty device storage */ }
+        }
+        await ctx.db.run(`UPDATE vms SET disk_file = ?, disk_size = ?, status = ?, pid = ?, extra_disks_json = ?, extra_nics_json = ?, vnc_port = ?, service_locked = ?, service_lock_reason = ?, service_locked_at = ?, service_locked_by = ? WHERE vm_id = ?`, [
+          savedVmDisk.disk_file, savedVmDisk.disk_size, savedVmDisk.status, savedVmDisk.pid,
+          savedVmDisk.extra_disks_json, savedVmDisk.extra_nics_json, savedVmDisk.vnc_port,
+          savedVmDisk.service_locked, savedVmDisk.service_lock_reason, savedVmDisk.service_locked_at, savedVmDisk.service_locked_by, vm.vm_id,
+        ]);
+        await ctx.kvmAdapter.syncRegistryRow(vm.vm_id);
+        fs.rmSync(resizeRoot, { recursive: true, force: true });
+      }
     });
 
     // 10. Rootfs Path Traversal Defense & Command Runner Allowlist
@@ -841,6 +1733,17 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         assert.ok(r.text.includes('TGVPANEL'), `Expected TGVPANEL branding on user route ${p}`);
         assert.ok(!/HKVM\s*PANEL/i.test(r.text), `Unexpected visible HKVM Panel branding on user route ${p}`);
       }
+      const adminInstancesHtml = await adminClient.request('GET', '/admin/instances');
+      const userInstancesHtml = await adminClient.request('GET', '/instances');
+      const sharedUiSource = fs.readFileSync(path.resolve(__dirname, '../public/js/tgvpanel-v3.js'), 'utf8');
+      assert.ok(adminInstancesHtml.text.includes('hkvmShowInstanceTaskHistory'), 'Admin instance table should link to task history');
+      assert.ok(userInstancesHtml.text.includes('hkvmShowInstanceTaskHistory'), 'User instance cards should link to task history');
+      const adminLicenseHtml = await adminClient.request('GET', '/admin/license');
+      assert.strictEqual(adminLicenseHtml.status, 200, `Admin license page failed: ${adminLicenseHtml.text}`);
+      assert.ok(adminLicenseHtml.text.includes('browser loopback-proxied VNC/noVNC and SSH/serial consoles'), 'Admin feature copy should describe the implemented console types');
+      assert.ok(adminLicenseHtml.text.includes('loopback-only'), 'Admin feature copy must disclose VNC is proxied locally');
+      assert.ok(sharedUiSource.includes('window.hkvmRunInstanceAction'), 'Shared UI should poll task status for lifecycle actions');
+      assert.ok(sharedUiSource.includes("progress.removeAttribute('value')"), 'Unknown hypervisor progress must stay indeterminate, not fabricated');
 
       await new Promise((resolve, reject) => {
         const unauthWs = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws/nodes/1/shell`);
@@ -2554,6 +3457,7 @@ exec "$@"
       const { isAllowlistedBinary } = require('../lib/node-agent/command-runner');
 
       // 1. Verify dual iptables-legacy & modprobe allowlist without weakening shell restrictions
+      assert.ok(isAllowlistedBinary('lxc-copy'), 'Native LXC clone utility should be allowlisted');
       assert.ok(isAllowlistedBinary('iptables-legacy'), 'Expected iptables-legacy in allowlist');
       assert.ok(isAllowlistedBinary('ip6tables-legacy'), 'Expected ip6tables-legacy in allowlist');
       assert.ok(isAllowlistedBinary('modprobe'), 'Expected modprobe in allowlist');

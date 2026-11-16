@@ -36,6 +36,14 @@ export declare function canPasswordlessSudo(): boolean;
 export declare function buildSafeSpawnEnv(effectiveRoot: boolean, extraEnv?: NodeJS.ProcessEnv): Record<string, string>;
 export declare function resolveBinaryPath(binaryName: string): string | null;
 export declare function isBinaryAvailable(binaryName: string): boolean;
+export type QemuSystemBinary = 'qemu-system-x86_64' | 'qemu-system-aarch64';
+export declare function qemuBinaryMatchesArchitecture(binary: QemuSystemBinary, hostArch?: string): boolean;
+/**
+ * Prefer the QEMU system binary matching the host CPU architecture, then fall back to the
+ * other installed binary so ARM-only and x86-only hosts are both reported accurately.
+ * This reports installed host tooling only; it does not validate guest template compatibility.
+ */
+export declare function selectQemuSystemBinary(available?: (binaryName: string) => boolean, hostArch?: string): QemuSystemBinary | null;
 /**
  * Safely executes an allowlisted binary with `shell: false`, optional stdin pipe,
  * controlled `sudo -n` elevation for privileged host tools, valid `HOME` env,
@@ -87,6 +95,7 @@ export interface HostCapabilities {
     lxcVersion: string | null;
     kernelVersion: string;
     architecture: string;
+    qemuArchitectureMismatch?: boolean;
 }
 export declare function detectHostCapabilities(): Promise<HostCapabilities>;
 /**

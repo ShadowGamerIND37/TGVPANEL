@@ -33,6 +33,7 @@ export interface CommandOptions {
 const ALLOWED_BINARIES = new Set([
   // LXC native tools
   'lxc-create',
+  'lxc-copy',
   'lxc-start',
   'lxc-stop',
   'lxc-destroy',
@@ -108,6 +109,7 @@ export function isAllowlistedBinary(binaryName: string): boolean {
 
 const PRIVILEGED_SYSTEM_BINARIES = new Set([
   'lxc-create',
+  'lxc-copy',
   'lxc-start',
   'lxc-stop',
   'lxc-destroy',
@@ -284,6 +286,54 @@ export function isBinaryAvailable(binaryName: string): boolean {
   } catch {
     return false;
   }
+}
+
+export type QemuSystemBinary = 'qemu-system-x86_64' | 'qemu-system-aarch64';
+
+function normalizeArchitecture(arch: string | undefined): string {
+  return String(arch || '').trim().toLowerCase();
+}
+
+export function qemuBinaryMatchesArchitecture(
+  binary: QemuSystemBinary,
+  hostArch: string = process.arch
+): boolean {
+  const arch = normalizeArchitecture(hostArch);
+  if (binary === 'qemu-system-aarch64') {
+    return arch.includes('aarch64') || arch.includes('arm64') || arch.includes('arm');
+  }
+  return arch.includes('x86_64') || arch.includes('x64') || arch.includes('i386') || arch.includes('i686');
+}
+
+/**
+ * Prefer the QEMU system binary matching the host CPU architecture, then fall back to the
+ * other installed binary so ARM-only and x86-only hosts are both reported accurately.
+ * This reports installed host tooling only; it does not validate guest template compatibility.
+ */
+export function selectQemuSystemBinary(
+  available: (binaryName: string) => boolean = isBinaryAvailable,
+  hostArch: string = process.arch
+): QemuSystemBinary | null {
+  const arch = normalizeArchitecture(hostArch);
+  const prefersArm = arch.includes('aarch64') || arch.includes('arm64') || arch.includes('arm');
+  const prefersX86 = arch.includes('x86_64') || arch.includes('x64') || arch.includes('i386') || arch.includes('i686');
+
+  if (prefersArm) {
+    if (available('qemu-system-aarch64')) return 'qemu-system-aarch64';
+    if (available('qemu-system-x86_64')) return 'qemu-system-x86_64';
+    return null;
+  }
+
+  if (prefersX86) {
+    if (available('qemu-system-x86_64')) return 'qemu-system-x86_64';
+    if (available('qemu-system-aarch64')) return 'qemu-system-aarch64';
+    return null;
+  }
+
+  // Unknown architecture: keep the existing x86_64 preference for installed tooling.
+  if (available('qemu-system-x86_64')) return 'qemu-system-x86_64';
+  if (available('qemu-system-aarch64')) return 'qemu-system-aarch64';
+  return null;
 }
 
 function isPureVersionProbe(args: string[]): boolean {
@@ -685,12 +735,18 @@ export interface HostCapabilities {
   lxcVersion: string | null;
   kernelVersion: string;
   architecture: string;
+  qemuArchitectureMismatch?: boolean;
 }
 
 export async function detectHostCapabilities(): Promise<HostCapabilities> {
   const kvmDevicePresent = fs.existsSync('/dev/kvm');
-  const qemuSystemAvailable =
-    isBinaryAvailable('qemu-system-x86_64') || isBinaryAvailable('qemu-system-aarch64');
+  const archRes = await runAllowlistedCommand('uname', ['-m'], { timeoutMs: 3000 });
+  const hostArchitecture = archRes.stdout.trim() || process.arch;
+  const qemuSystemBinary = selectQemuSystemBinary(isBinaryAvailable, hostArchitecture);
+  const qemuSystemAvailable = qemuSystemBinary !== null;
+  const qemuArchitectureMismatch = Boolean(
+    qemuSystemBinary && !qemuBinaryMatchesArchitecture(qemuSystemBinary, hostArchitecture)
+  );
   const qemuImgAvailable = isBinaryAvailable('qemu-img');
   const lxcCreateAvailable = isBinaryAvailable('lxc-create');
   const lxcStartAvailable = isBinaryAvailable('lxc-start');
@@ -717,8 +773,8 @@ export async function detectHostCapabilities(): Promise<HostCapabilities> {
   if (isBinaryAvailable('tc')) networkBackends.push('tc-qos');
 
   let qemuVersion: string | null = null;
-  if (isBinaryAvailable('qemu-system-x86_64')) {
-    const res = await runAllowlistedCommand('qemu-system-x86_64', ['--version'], { timeoutMs: 5000 });
+  if (qemuSystemBinary) {
+    const res = await runAllowlistedCommand(qemuSystemBinary, ['--version'], { timeoutMs: 5000 });
     if (res.exitCode === 0) {
       qemuVersion = res.stdout.split('\n')[0]?.trim() || null;
     }
@@ -733,7 +789,6 @@ export async function detectHostCapabilities(): Promise<HostCapabilities> {
   }
 
   const unameRes = await runAllowlistedCommand('uname', ['-r'], { timeoutMs: 3000 });
-  const archRes = await runAllowlistedCommand('uname', ['-m'], { timeoutMs: 3000 });
 
   const lxcfsAvailable = isBinaryAvailable('lxcfs');
   let lxcfsMounted = false;
@@ -760,7 +815,8 @@ export async function detectHostCapabilities(): Promise<HostCapabilities> {
     qemuVersion,
     lxcVersion,
     kernelVersion: unameRes.stdout.trim() || process.platform,
-    architecture: archRes.stdout.trim() || process.arch,
+    architecture: hostArchitecture,
+    qemuArchitectureMismatch,
   };
 }
 

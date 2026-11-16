@@ -170,6 +170,53 @@
 <script>
 const USER_SECTION = '<%= section %>';
 
+async function openUserKvmVnc(id) {
+  try {
+    const current = await hkvmApi(`/api/v1/instances/kvm/${id}/vnc`);
+    if (!current.vnc.enabled) {
+      if (!confirm('Enable loopback-only VNC? The VM must be stopped; the console becomes available after its next start.')) return;
+      await hkvmApi(`/api/v1/instances/kvm/${id}/vnc`, { method: 'POST', body: { enabled: true } });
+      hkvmToast('VNC enabled for the next start. Start the VM, then open VNC Console.', 'warning');
+      return;
+    }
+    window.open(`/vm/${id}/vnc`, '_blank', 'noopener');
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function manageUserKvmRescueIso(id) {
+  try {
+    const current = await hkvmApi(`/api/vms/${id}/iso/status`);
+    if (current.iso_attached && current.boot_from_iso) {
+      if (!confirm('Disable rescue mode? This detaches the ISO and restores disk-first boot. Stop the VM first.')) return;
+      await hkvmApi(`/api/v1/instances/kvm/${id}/rescue`, { method: 'POST', body: { enabled: false } });
+      hkvmToast('Rescue ISO detached; disk-first boot restored.', 'success');
+      return;
+    }
+    const isos = await hkvmApi('/api/iso-list');
+    if (!Array.isArray(isos) || !isos.length) return hkvmToast('No managed ISO files found. Upload a bootable rescue ISO to ~/vms/iso first.', 'warning');
+    const filename = prompt(`Choose an ISO filename from the managed list:
+${isos.join('
+')}`);
+    if (!filename || !isos.includes(filename.trim())) return;
+    if (!confirm('TGVPANEL does not provide rescue software or verify that this ISO is bootable. Stop the VM, configure the ISO, start it and use its serial/VNC console. Disable rescue after stopping it. Continue?')) return;
+    await hkvmApi(`/api/v1/instances/kvm/${id}/rescue`, { method: 'POST', body: { enabled: true, isoFilename: filename.trim() } });
+    hkvmToast('Rescue ISO selected for the next start. Start the VM and connect using its console.', 'warning');
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
+async function cloneUserLxc(id) {
+  if (!confirm('This copies the stopped LXC disk and duplicates guest keys, passwords, machine identity and secrets. The clone is created with networking detached. Review in-guest static IP settings and reset identity before reconnecting it. Continue?')) return;
+  const name = prompt('Enter a unique name for the stopped LXC clone:');
+  if (!name) return;
+  try {
+    const result = await hkvmApi(`/api/v1/instances/lxc/${id}/clone`, {
+      method: 'POST', body: { name: name.trim(), acknowledgeGuestIdentityRisk: true }
+    });
+    hkvmToast(`Created disconnected LXC clone ${result.clone.instance.name}. Review guest networking before connecting it.`, 'warning');
+    loadMyInstances();
+  } catch (e) { hkvmToast(e.message, 'error'); }
+}
+
 async function loadMyInstances() {
   const eng = document.getElementById('uEngineFilter').value;
   const data = await hkvmApi('/api/v1/instances' + (eng ? '?engine=' + eng : ''));
@@ -184,7 +231,7 @@ async function loadMyInstances() {
     return `<div class="u3-card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <span class="u3-pill ${i.engine}">${i.engine.toUpperCase()}</span>
-        <span class="u3-pill ${i.status}">${hkvmEsc(i.status)}</span>
+        <span class="u3-pill ${i.status}">${hkvmEsc(i.status)}</span>${i.serviceLocked ? '<span class="u3-pill suspended">STAFF LOCK</span>' : ''}
       </div>
       <h3 style="margin:0 0 4px;color:var(--text-primary);">${hkvmEsc(i.name)}</h3>
       <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">${hkvmEsc(i.osLabel)} • IP: <code>${hkvmEsc(i.primaryIp || 'Pending')}</code></div>
@@ -192,8 +239,11 @@ async function loadMyInstances() {
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <a class="btn btn-primary" href="${detailHref}">Manage</a>
         <a class="btn btn-outline" href="${consoleHref}">Console</a>
-        <button class="btn btn-outline" onclick="uAct('${i.engine}',${i.refId},'start')">Start</button>
+        ${i.engine === 'kvm' ? `<button class="btn btn-outline" onclick="openUserKvmVnc(${i.refId})">VNC Console</button>${i.status === 'stopped' ? `<button class="btn btn-outline" onclick="manageUserKvmRescueIso(${i.refId})">Rescue ISO</button>` : ''}` : ''}
+        ${i.engine === 'lxc' && i.status === 'stopped' && !i.suspended ? `<button class="btn btn-outline" onclick="cloneUserLxc(${i.refId})">Clone</button>` : ''}
+        <button class="btn btn-outline" onclick="uAct('${i.engine}',${i.refId},'start')" ${i.serviceLocked ? 'disabled title="Administrative service lock is active"' : ''}>Start</button>
         <button class="btn btn-outline" onclick="uAct('${i.engine}',${i.refId},'stop')">Stop</button>
+        <button class="btn btn-outline" onclick="hkvmShowInstanceTaskHistory('${i.engine}',${i.refId})">Task history</button>
       </div>
     </div>`;
   }).join('');
@@ -201,8 +251,7 @@ async function loadMyInstances() {
 
 async function uAct(engine, id, action) {
   try {
-    await hkvmApi(`/api/v1/instances/${engine}/${id}/action`, { method: 'POST', body: { action } });
-    hkvmToast('Instance ' + action + ' succeeded');
+    await hkvmRunInstanceAction(engine, id, action);
     loadMyInstances();
   } catch (e) { hkvmToast(e.message, 'error'); }
 }

@@ -410,6 +410,22 @@ export declare class LxcContainerManager {
     restartContainer(containerName: string): Promise<void>;
     freezeContainer(containerName: string): Promise<void>;
     unfreezeContainer(containerName: string): Promise<void>;
+    /**
+     * Make a full offline LXC copy using the host's native lxc-copy utility. The clone
+     * is deliberately created with networking disabled: copied guest files can contain
+     * static addressing, MAC-bound settings, machine identity, keys and secrets. An
+     * operator must review/reconfigure those before attaching a network or starting it.
+     */
+    cloneContainer(sourceName: string, targetName: string, resources?: {
+        cpuCores?: number;
+        cpuShares?: number;
+        cpuLimitPercent?: number;
+        cpuPinning?: string | null;
+        ramMb?: number;
+        swapMb?: number;
+        nesting?: boolean;
+        kvmNesting?: boolean;
+    }): Promise<LxcContainerRuntimeInfo>;
     destroyContainer(containerName: string): Promise<void>;
     reinstallContainer(spec: LxcCreateSpec): Promise<LxcContainerRuntimeInfo>;
     updateContainerResources(containerName: string, update: LxcResourceUpdateSpec): Promise<void>;

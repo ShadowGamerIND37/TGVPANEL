@@ -235,10 +235,10 @@
                 </div>
                 <div class="card-body">
                   <div class="form-group" style="margin-bottom: 0;">
-                    <label class="form-label">Disk Size <span style="color: #F59E0B; font-size: 11px;">(Read-only)</span></label>
+                    <label class="form-label">Virtual Disk Size <span style="color: #10B981; font-size: 11px;">(Expand only • VM must be stopped)</span></label>
                     <input type="text" class="form-control" name="disk_size" value="<%= vm ? (vm.disk_size || '20G') : '20G' %>"
                       <%= vm && vm.status !== 'stopped' ? 'disabled' : '' %> placeholder="20G">
-                    <div class="form-hint">Format: 20G, 100G, 1T. Disk can be expanded or shrunk.</div>
+                    <div class="form-hint">Use 20G, 100G, 1T, etc. Shrinking is disabled to prevent data loss. After expansion, grow the partition/filesystem inside the guest OS separately.</div>
                   </div>
                 </div>
 

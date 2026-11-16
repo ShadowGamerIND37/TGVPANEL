@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { isIP } from 'net';
 import bcrypt from 'bcryptjs';
 import { Router, Request, Response } from 'express';
@@ -17,6 +18,7 @@ import {
   verifyTotpCode,
 } from '../../security/crypto-vault';
 import {
+  AuthenticatedPrincipal,
   createRateLimiter,
   requirePrincipal,
   requireRole,
@@ -39,6 +41,33 @@ function pStr(val: string | string[] | undefined): string {
 
 function pInt(val: string | string[] | undefined): number {
   return parseInt(pStr(val), 10);
+}
+
+async function runTrackedInstanceMutation<T>(
+  ctx: HkvmRuntimeContext,
+  principal: AuthenticatedPrincipal,
+  engine: VirtualizationEngine,
+  refId: number,
+  action: string,
+  worker: () => Promise<T>,
+  requireOwnerOrStaff = false
+): Promise<T> {
+  await ctx.instanceManager.getAuthorizedInstance(principal, engine, refId, requireOwnerOrStaff);
+  let result!: T;
+  await ctx.instanceManager.tasks.runSync({
+    engine,
+    instanceRefId: refId,
+    actorId: principal.userId,
+    action,
+    worker: async (reportProgress) => {
+      await reportProgress(null, `Applying ${action.replace(/_/g, ' ')} operation`);
+      result = await worker();
+      await reportProgress(null, 'Operation completed; refreshing VPS record');
+      // Do not persist adapter responses: they can contain passwords, keys, or host details.
+      return { completed: true };
+    },
+  });
+  return result;
 }
 
 function requireResellerScope(scope: ResellerApiScope) {
@@ -601,6 +630,31 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   });
 
+  router.get('/tasks/:taskId', async (req: Request, res: Response) => {
+    try {
+      const task = await ctx.instanceManager.getAuthorizedTask(req.principal!, String(req.params.taskId || ''));
+      return res.json({ task });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.get('/instances/:engine/:id/tasks', async (req: Request, res: Response) => {
+    try {
+      const engine = pStr(req.params.engine) as VirtualizationEngine;
+      if (engine !== 'kvm' && engine !== 'lxc') return res.status(400).json({ error: 'Unsupported instance engine.' });
+      const refId = pInt(req.params.id);
+      const limit = req.query.limit === undefined ? 50 : Number(req.query.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+        return res.status(400).json({ error: 'Task history limit must be between 1 and 100.' });
+      }
+      const tasks = await ctx.instanceManager.listInstanceTasks(req.principal!, engine, refId, limit);
+      return res.json({ tasks });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
   router.get('/instances/:engine/:id/telemetry', async (req: Request, res: Response) => {
     try {
       const engine = pStr(req.params.engine) as VirtualizationEngine;
@@ -646,7 +700,18 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       if (!allowed.includes(action)) {
         return res.status(400).json({ error: `Invalid lifecycle action: ${action}` });
       }
-      const instance = await ctx.instanceManager.executeAction(
+      if (req.body?.async === true || req.body?.async === 'true') {
+        const task = await ctx.instanceManager.startActionTask(
+          req.principal!,
+          engine,
+          refId,
+          action,
+          req.body?.reason ? String(req.body.reason) : undefined,
+          Boolean(req.body?.force)
+        );
+        return res.status(202).json({ success: true, task });
+      }
+      const instance = await ctx.instanceManager.executeActionTracked(
         req.principal!,
         engine,
         refId,
@@ -664,6 +729,206 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
           ? 400
           : 500);
       return res.status(code).json({ error: err.message });
+    }
+  });
+
+  router.post('/instances/kvm/:id/disk/resize', async (req: Request, res: Response) => {
+    try {
+      const refId = pInt(req.params.id);
+      const diskSize = String(req.body?.diskSize || '').trim();
+      if (!diskSize) return res.status(400).json({ error: 'A target diskSize is required.' });
+      const result = await ctx.instanceManager.resizeKvmDisk(req.principal!, refId, diskSize);
+      return res.json({ success: true, ...result });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.get('/instances/kvm/:id/vnc', async (req: Request, res: Response) => {
+    try {
+      const vnc = await ctx.instanceManager.getKvmVncSettings(req.principal!, pInt(req.params.id));
+      return res.json({ vnc });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.post('/instances/kvm/:id/vnc', async (req: Request, res: Response) => {
+    try {
+      if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be a boolean.' });
+      const vnc = await ctx.instanceManager.setKvmVncEnabled(req.principal!, pInt(req.params.id), req.body.enabled);
+      return res.json({ success: true, vnc, note: 'VNC configuration applies on the next VM start and is bound to loopback only.' });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.post(
+    '/instances/:engine/:id/service-lock',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      try {
+        const engine = pStr(req.params.engine) as VirtualizationEngine;
+        if (engine !== 'kvm' && engine !== 'lxc') return res.status(400).json({ error: 'Unsupported instance engine.' });
+        if (typeof req.body?.locked !== 'boolean') return res.status(400).json({ error: 'locked must be a boolean.' });
+        const instance = await ctx.instanceManager.setInstanceServiceLock(
+          req.principal!, engine, pInt(req.params.id), req.body.locked, String(req.body?.reason || '')
+        );
+        return res.json({
+          success: true,
+          instance,
+          note: req.body.locked
+            ? 'Administrative service lock is active. It does not stop an already-running VPS, but blocks start/restart until staff unlocks it.'
+            : 'Administrative service lock cleared.',
+        });
+      } catch (err: any) {
+        return res.status(err.statusCode || 500).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post('/instances/kvm/:id/clone', async (req: Request, res: Response) => {
+    try {
+      if (req.body?.acknowledgeGuestIdentityRisk !== true) {
+        return res.status(400).json({ error: 'Confirm that the cloned guest disk initially contains the same OS identity, SSH host keys, and installed secrets as the source.' });
+      }
+      const clone = await ctx.instanceManager.cloneKvmInstance(
+        req.principal!, pInt(req.params.id), String(req.body?.name || '')
+      );
+      return res.status(201).json({
+        success: true,
+        clone,
+        warning: 'Only the primary disk is cloned. The VM is stopped and receives a new MAC and NAT SSH forwarding port, but its guest disk retains machine-id, SSH host keys, and secrets; regenerate them and verify guest networking before external use.'
+      });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.post('/instances/lxc/:id/clone', async (req: Request, res: Response) => {
+    try {
+      if (req.body?.acknowledgeGuestIdentityRisk !== true) {
+        return res.status(400).json({ error: 'Confirm the copy contains the same guest machine identity, SSH keys, passwords and installed secrets as the source, and that its guest network configuration must be reviewed.' });
+      }
+      const clone = await ctx.instanceManager.cloneLxcInstance(
+        req.principal!, pInt(req.params.id), String(req.body?.name || '')
+      );
+      return res.status(201).json({
+        success: true,
+        clone,
+        warning: 'The copied LXC remains stopped with its host network detached to prevent duplicate IP/MAC use. Review guest identity, keys, secrets and in-guest static network settings before attaching a bridge and starting it. Directory-backed local or remote LXC only; lxc-copy must be installed on the target node.'
+      });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.post('/instances/kvm/:id/rescue', async (req: Request, res: Response) => {
+    try {
+      if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be a boolean.' });
+      const refId = pInt(req.params.id);
+      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'kvm', refId, true);
+      const vm = await ctx.db.get<any>(`SELECT status FROM vms WHERE vm_id = ?`, [refId]);
+      if (!vm) return res.status(404).json({ error: 'KVM VM not found.' });
+      if (String(vm.status || '').toLowerCase() !== 'stopped') {
+        return res.status(409).json({ error: 'Rescue ISO changes require a stopped VM.' });
+      }
+      let isoPath: string | null = null;
+      let selectedIsoFilename: string | null = null;
+      if (req.body.enabled) {
+        const isoFilename = String(req.body.isoFilename || '').trim();
+        selectedIsoFilename = isoFilename;
+        if (!isoFilename || path.basename(isoFilename) !== isoFilename || !/\.iso$/i.test(isoFilename)) {
+          return res.status(400).json({ error: 'Provide a rescue ISO filename (not a path) ending in .iso.' });
+        }
+        const isoRoot = path.resolve(os.homedir(), 'vms', 'iso');
+        try {
+          const realRoot = fs.realpathSync(isoRoot);
+          isoPath = fs.realpathSync(path.join(realRoot, isoFilename));
+          if (!isoPath.startsWith(realRoot + path.sep) || !fs.statSync(isoPath).isFile()) throw new Error('Invalid ISO file.');
+        } catch {
+          return res.status(400).json({ error: 'Rescue ISO was not found as a regular file inside the managed ISO directory.' });
+        }
+      }
+      const outcome = await ctx.instanceManager.tasks.runSync({
+        engine: 'kvm', instanceRefId: refId, actorId: req.principal!.userId,
+        action: req.body.enabled ? 'rescue_iso_enable' : 'rescue_iso_disable',
+        worker: async (reportProgress) => {
+          await reportProgress(null, req.body.enabled ? 'Setting the operator-supplied rescue ISO as next boot media' : 'Restoring disk-first boot and detaching the rescue ISO');
+          if (req.body.enabled) {
+            await ctx.db.run(`UPDATE vms SET iso_attached = ?, boot_from_iso = 1 WHERE vm_id = ?`, [selectedIsoFilename, refId]);
+          } else {
+            await ctx.db.run(`UPDATE vms SET iso_attached = NULL, boot_from_iso = 0 WHERE vm_id = ?`, [refId]);
+          }
+          return { enabled: req.body.enabled, isoFilename: req.body.enabled ? selectedIsoFilename : null };
+        },
+      });
+      return res.json({
+        success: true,
+        rescue: outcome.result,
+        note: req.body.enabled
+          ? 'Rescue media is configured for the next VM start. Start the stopped VM and open its serial/VNC console; after recovery, stop it and disable rescue to restore disk-first boot.'
+          : 'Rescue media detached; the next VM start boots from the disk.',
+      });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.get('/instances/kvm/:id/devices', async (req: Request, res: Response) => {
+    try {
+      const devices = await ctx.instanceManager.listKvmDevices(req.principal!, pInt(req.params.id));
+      return res.json({ devices });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.post('/instances/kvm/:id/devices/disks', async (req: Request, res: Response) => {
+    try {
+      const refId = pInt(req.params.id);
+      const size = String(req.body?.size || '').trim();
+      if (!size) return res.status(400).json({ error: 'A disk size is required.' });
+      const disk = await ctx.instanceManager.attachKvmDisk(req.principal!, refId, size);
+      return res.status(201).json({ success: true, disk, note: 'The disk is created and attached while the VM is stopped.' });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.post('/instances/kvm/:id/devices/disks/:deviceId/attach', async (req: Request, res: Response) => {
+    try {
+      const disk = await ctx.instanceManager.reattachKvmDisk(req.principal!, pInt(req.params.id), String(req.params.deviceId || ''));
+      return res.json({ success: true, disk });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.delete('/instances/kvm/:id/devices/disks/:deviceId', async (req: Request, res: Response) => {
+    try {
+      const disk = await ctx.instanceManager.detachKvmDisk(req.principal!, pInt(req.params.id), String(req.params.deviceId || ''));
+      return res.json({ success: true, disk, note: 'Disk image preserved; only the device attachment was removed.' });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.post('/instances/kvm/:id/devices/nics', async (req: Request, res: Response) => {
+    try {
+      const nic = await ctx.instanceManager.attachKvmNatNic(req.principal!, pInt(req.params.id));
+      return res.status(201).json({ success: true, nic, note: 'User-mode NAT only; no host bridge is exposed.' });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
+  router.delete('/instances/kvm/:id/devices/nics/:deviceId', async (req: Request, res: Response) => {
+    try {
+      const nic = await ctx.instanceManager.detachKvmNic(req.principal!, pInt(req.params.id), String(req.params.deviceId || ''));
+      return res.json({ success: true, nic });
+    } catch (err: any) {
+      return res.status(err.statusCode || 500).json({ error: err.message });
     }
   });
 
@@ -830,10 +1095,18 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     async (req: Request, res: Response) => {
       try {
         const refId = pInt(req.params.id);
-        const updated = await ctx.lxcAdapter.resizeAndUpdateConfig(
+        const updated = await runTrackedInstanceMutation(
+          ctx,
+          req.principal!,
+          'lxc',
           refId,
-          req.body || {},
-          req.body?.applyToHost !== false
+          'resize_config',
+          () => ctx.lxcAdapter.resizeAndUpdateConfig(
+            refId,
+            req.body || {},
+            req.body?.applyToHost !== false
+          ),
+          true
         );
         res.json({ success: true, instance: updated });
       } catch (err: any) {
@@ -845,11 +1118,18 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.post('/lxc/:id/reinstall', async (req: Request, res: Response) => {
     try {
       const refId = pInt(req.params.id);
-      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId, true);
-      const out = await ctx.lxcAdapter.reinstallLxcInstance(
+      const out = await runTrackedInstanceMutation(
+        ctx,
+        req.principal!,
+        'lxc',
         refId,
-        String(req.body?.templateSlug || 'ubuntu-24.04'),
-        req.body?.rootPassword ? String(req.body.rootPassword) : undefined
+        'reinstall',
+        () => ctx.lxcAdapter.reinstallLxcInstance(
+          refId,
+          String(req.body?.templateSlug || 'ubuntu-24.04'),
+          req.body?.rootPassword ? String(req.body.rootPassword) : undefined
+        ),
+        true
       );
       res.json(out);
     } catch (err: any) {
@@ -860,8 +1140,15 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.post('/lxc/:id/cloudflare-tunnel', async (req: Request, res: Response) => {
     try {
       const refId = pInt(req.params.id);
-      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId, true);
-      const status = await ctx.lxcAdapter.startProxmoxCloudflareTunnel(refId);
+      const status = await runTrackedInstanceMutation(
+        ctx,
+        req.principal!,
+        'lxc',
+        refId,
+        'cloudflare_tunnel_start',
+        () => ctx.lxcAdapter.startProxmoxCloudflareTunnel(refId),
+        true
+      );
       return res.status(202).json({ success: true, ...status });
     } catch (err: any) {
       return res.status(err.statusCode || 400).json({ error: err.message });
@@ -882,8 +1169,15 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.post('/lxc/:id/repair-network', async (req: Request, res: Response) => {
     try {
       const refId = pInt(req.params.id);
-      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId, true);
-      const out = await ctx.lxcAdapter.repairLxcNetworking(refId);
+      const out = await runTrackedInstanceMutation(
+        ctx,
+        req.principal!,
+        'lxc',
+        refId,
+        'repair_network',
+        () => ctx.lxcAdapter.repairLxcNetworking(refId),
+        true
+      );
       await ctx.db
         .logActivity({
           userId: req.principal!.userId,
@@ -902,10 +1196,17 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.post('/lxc/:id/password', async (req: Request, res: Response) => {
     try {
       const refId = pInt(req.params.id);
-      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId, true);
-      const newPassword = await ctx.lxcAdapter.resetRootPassword(
+      const newPassword = await runTrackedInstanceMutation(
+        ctx,
+        req.principal!,
+        'lxc',
         refId,
-        req.body?.password ? String(req.body.password) : undefined
+        'reset_password',
+        () => ctx.lxcAdapter.resetRootPassword(
+          refId,
+          req.body?.password ? String(req.body.password) : undefined
+        ),
+        true
       );
       res.json({ success: true, rootPassword: newPassword });
     } catch (err: any) {
@@ -916,8 +1217,14 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.post('/lxc/:id/ssh-key', async (req: Request, res: Response) => {
     try {
       const refId = pInt(req.params.id);
-      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId);
-      await ctx.lxcAdapter.injectSshKey(refId, String(req.body?.publicKey || ''));
+      await runTrackedInstanceMutation(
+        ctx,
+        req.principal!,
+        'lxc',
+        refId,
+        'inject_ssh_key',
+        () => ctx.lxcAdapter.injectSshKey(refId, String(req.body?.publicKey || ''))
+      );
       res.json({ success: true });
     } catch (err: any) {
       res.status(err.statusCode || 400).json({ error: err.message });
@@ -929,9 +1236,15 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     requireRole(['admin', 'subadmin']),
     async (req: Request, res: Response) => {
       try {
-        const updated = await ctx.lxcAdapter.renewExpiration(
-          pInt(req.params.id),
-          Number(req.body?.days || 30)
+        const refId = pInt(req.params.id);
+        const updated = await runTrackedInstanceMutation(
+          ctx,
+          req.principal!,
+          'lxc',
+          refId,
+          'renew_expiration',
+          () => ctx.lxcAdapter.renewExpiration(refId, Number(req.body?.days || 30)),
+          true
         );
         res.json({ success: true, instance: updated });
       } catch (err: any) {
@@ -945,9 +1258,15 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     requireRole(['admin', 'subadmin']),
     async (req: Request, res: Response) => {
       try {
-        const updated = await ctx.lxcAdapter.transferOwnership(
-          pInt(req.params.id),
-          Number(req.body?.userId)
+        const refId = pInt(req.params.id);
+        const updated = await runTrackedInstanceMutation(
+          ctx,
+          req.principal!,
+          'lxc',
+          refId,
+          'transfer_owner',
+          () => ctx.lxcAdapter.transferOwnership(refId, Number(req.body?.userId)),
+          true
         );
         res.json({ success: true, instance: updated });
       } catch (err: any) {
@@ -959,9 +1278,16 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.put('/lxc/:id/sharing', async (req: Request, res: Response) => {
     try {
       const refId = pInt(req.params.id);
-      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId, true);
       const userIds = Array.isArray(req.body?.userIds) ? req.body.userIds.map(Number) : [];
-      const updated = await ctx.lxcAdapter.updateSharing(refId, userIds);
+      const updated = await runTrackedInstanceMutation(
+        ctx,
+        req.principal!,
+        'lxc',
+        refId,
+        'update_sharing',
+        () => ctx.lxcAdapter.updateSharing(refId, userIds),
+        true
+      );
       res.json({ success: true, instance: updated });
     } catch (err: any) {
       res.status(err.statusCode || 400).json({ error: err.message });
@@ -1021,13 +1347,19 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.post('/lxc/:id/files/content', async (req: Request, res: Response) => {
     try {
       const refId = pInt(req.params.id);
-      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId);
       const subPath = String(req.body?.path || '');
       const buf =
         typeof req.body?.contentBase64 === 'string'
           ? Buffer.from(req.body.contentBase64, 'base64')
           : Buffer.from(String(req.body?.content ?? ''), 'utf8');
-      await ctx.lxcAdapter.writeFile(refId, subPath, buf);
+      await runTrackedInstanceMutation(
+        ctx,
+        req.principal!,
+        'lxc',
+        refId,
+        'write_file',
+        () => ctx.lxcAdapter.writeFile(refId, subPath, buf)
+      );
       res.json({ success: true });
     } catch (err: any) {
       res.status(err.statusCode || 400).json({ error: err.message });
@@ -1037,8 +1369,14 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   router.delete('/lxc/:id/files', async (req: Request, res: Response) => {
     try {
       const refId = pInt(req.params.id);
-      await ctx.instanceManager.getAuthorizedInstance(req.principal!, 'lxc', refId);
-      await ctx.lxcAdapter.deleteFile(refId, String(req.query.path || ''));
+      await runTrackedInstanceMutation(
+        ctx,
+        req.principal!,
+        'lxc',
+        refId,
+        'delete_file',
+        () => ctx.lxcAdapter.deleteFile(refId, String(req.query.path || ''))
+      );
       res.json({ success: true });
     } catch (err: any) {
       res.status(err.statusCode || 400).json({ error: err.message });
@@ -2400,8 +2738,17 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       ctx.instanceManager.getTelemetry(req.principal!, instance.engine, instance.refId).catch(() => null)
     ));
     const available = telemetry.filter((sample): sample is NonNullable<typeof sample> => sample !== null);
-    const sumMeasured = (field: 'cpuPercent' | 'ramUsedMb' | 'ramTotalMb' | 'diskUsedGb' | 'netRxBytes' | 'netTxBytes') =>
-      available.length ? available.reduce((total, sample) => total + Number(sample[field] || 0), 0) : null;
+    const sumMeasured = (field: 'cpuPercent' | 'ramUsedMb' | 'ramTotalMb' | 'diskUsedGb' | 'netRxBytes' | 'netTxBytes') => {
+      // Do not present a partial network total as a complete reseller aggregate when any VM
+      // lacks a measured counter (notably KVM, which currently reports null honestly).
+      if ((field === 'netRxBytes' || field === 'netTxBytes') && available.some((sample) => sample[field] === null)) {
+        return null;
+      }
+      const values = available
+        .map((sample) => sample[field])
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+      return values.length ? values.reduce((total, value) => total + value, 0) : null;
+    };
     const measuredTimes = available.map((sample) => sample.measuredAt).filter(Boolean).sort();
     const measuredAt = measuredTimes.length ? measuredTimes[measuredTimes.length - 1] : null;
     return res.json({

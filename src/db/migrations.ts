@@ -1750,6 +1750,66 @@ export const MIGRATIONS: MigrationDefinition[] = [
       `);
     },
   },
+  {
+    version: 19,
+    name: 'v019_instance_task_history_and_operation_locks',
+    up: async (db) => {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS instance_tasks (
+          id TEXT PRIMARY KEY,
+          engine TEXT NOT NULL CHECK(engine IN ('kvm', 'lxc')),
+          instance_ref_id INTEGER NOT NULL CHECK(instance_ref_id > 0),
+          actor_id INTEGER,
+          action TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'queued'
+            CHECK(status IN ('queued', 'running', 'succeeded', 'failed')),
+          progress INTEGER CHECK(progress BETWEEN 0 AND 100),
+          current_step TEXT,
+          result_json TEXT,
+          error_message TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          started_at DATETIME,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at DATETIME,
+          FOREIGN KEY(actor_id) REFERENCES users(id) ON DELETE SET NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_instance_tasks_active_lock
+          ON instance_tasks(engine, instance_ref_id)
+          WHERE status IN ('queued', 'running');
+        CREATE INDEX IF NOT EXISTS idx_instance_tasks_instance_history
+          ON instance_tasks(engine, instance_ref_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_instance_tasks_status_updated
+          ON instance_tasks(status, updated_at);
+      `);
+    },
+  },
+  {
+    version: 20,
+    name: 'v020_kvm_offline_device_configuration',
+    up: async (db) => {
+      await ensureColumn(db, 'vms', 'extra_disks_json', "TEXT NOT NULL DEFAULT '[]'");
+      await ensureColumn(db, 'vms', 'extra_nics_json', "TEXT NOT NULL DEFAULT '[]'");
+    },
+  },
+  {
+    version: 21,
+    name: 'v021_kvm_local_vnc_console',
+    up: async (db) => {
+      await ensureColumn(db, 'vms', 'vnc_port', 'INTEGER');
+    },
+  },
+  {
+    version: 22,
+    name: 'v022_non_suspending_instance_service_lock',
+    up: async (db) => {
+      for (const table of ['vms', 'lxc_instances']) {
+        await ensureColumn(db, table, 'service_locked', 'INTEGER NOT NULL DEFAULT 0');
+        await ensureColumn(db, table, 'service_lock_reason', 'TEXT');
+        await ensureColumn(db, table, 'service_locked_at', 'DATETIME');
+        await ensureColumn(db, table, 'service_locked_by', 'INTEGER');
+      }
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

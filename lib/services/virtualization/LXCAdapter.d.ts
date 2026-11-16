@@ -72,6 +72,9 @@ export declare class LXCAdapter implements VirtualizationAdapter {
         byNode?: Record<number, string[]>;
     }>;
     private dispatchNodeContainerAction;
+    private inspectHostContainer;
+    private assertContainerRuntimeState;
+    private assertContainerDestroyed;
     performLifecycleAction(refId: number, action: LifecycleAction, options?: {
         reason?: string;
         actorId?: number;
@@ -93,9 +96,16 @@ export declare class LXCAdapter implements VirtualizationAdapter {
         ipAddress?: string | null;
         gateway?: string | null;
         ipv6Address?: string | null;
+        macAddress?: string | null;
         bandwidthQuotaGb?: number;
         notes?: string;
     }, applyToHost?: boolean): Promise<UnifiedInstanceRecord>;
+    cloneStoppedLxcInstance(refId: number, newName: string): Promise<{
+        instance: UnifiedInstanceRecord;
+        sourceName: string;
+        networkDetached: true;
+        guestIdentityResetRequired: true;
+    }>;
     reinstallLxcInstance(refId: number, templateSlug: string, newRootPassword?: string): Promise<{
         instance: UnifiedInstanceRecord;
         rootPassword: string;
