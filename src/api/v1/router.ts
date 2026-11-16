@@ -1258,6 +1258,32 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   );
 
   router.post(
+    '/lxc/expirations/sweep',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const result = await ctx.lxcAdapter.sweepExpiredInstances();
+        // Notify each affected owner in-panel. Notification failures never
+        // mask the sweep result.
+        for (const item of result.suspended) {
+          await ctx.monitoringService
+            .createNotification({
+              userId: item.ownerUserId,
+              type: 'warning',
+              title: 'VPS expired and suspended',
+              message: `Your LXC VPS "${item.containerName}" expired on ${item.expiresAt} and was suspended automatically. Renew it to restore service.`,
+              data: { lxcId: item.lxcId, expiresAt: item.expiresAt },
+            })
+            .catch(() => undefined);
+        }
+        res.json({ success: true, ...result });
+      } catch (err: any) {
+        res.status(err.statusCode || 500).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
     '/lxc/:id/transfer-owner',
     requireRole(['admin', 'subadmin']),
     async (req: Request, res: Response) => {

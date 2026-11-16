@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 23 VPS expiration sweeper (2026-10-30)
+
+- Added the missing expiration enforcement for VPS lifecycle: `vps_expiration` rows (with `expires_at`, `auto_suspend_enabled`, `warned_at`) were written by provisioning/renew flows but nothing ever evaluated them. `LXCAdapter.sweepExpiredInstances()` now finds LXC instances whose expiry has passed with auto-suspend enabled and suspends them through the **normal lifecycle path** — host-verified stop, `suspended` flag, suspension reason/history — stamping `warned_at` on first evaluation. Instances that are already suspended, not running/frozen, or whose host refuses the stop are skipped honestly, with the skip reason recorded on the expiration row's `notes`.
+- Exposed via `POST /api/v1/lxc/expirations/sweep` (admin/subadmin): runs the sweep and creates an in-panel warning notification for each affected owner. A background loop (`startExpirationLoop`, 5-minute interval, wired in `context.ts` alongside the monitoring/backup loops and honoring the same `TGVPANEL_DISABLE_BACKGROUND_POLLER` / `HKVM_DISABLE_BACKGROUND_POLLER` guard) performs the sweep automatically.
+- T38 provisions a dedicated local LXC instance, inserts a past expiry, and verifies: auto-suspend disabled is left untouched (`evaluated: 0`); with auto-suspend enabled the sweep suspends the instance (`suspended = 1`, reason `VPS expired…`, status `stopped`), stamps `warned_at`, returns the suspension summary, and the owner receives the in-panel notification. Host container calls are stubbed for determinism (T34 mock pattern).
+- Full suite: **38/38 acceptance suites passing**.
+
 ## Unreleased — Phase 22 webhook delivery retries (2026-10-30)
 
 - Webhook deliveries now retry with bounded attempts and backoff, addressing the documented "retries NOT IMPLEMENTED" gap for outbound webhooks. `MonitoringService.postWebhookNonBlocking` delivers a POST, and a delivery that receives a non-2xx response or fails at the network level is retried up to **3 total attempts** (1 initial + 2 retries) with linear backoff (2s, 4s). Delivery stays non-blocking: the dispatch promise settles after the attempt decision and retries continue in the background.

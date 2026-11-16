@@ -3967,6 +3967,100 @@ exec "$@"
       }
     });
 
+    // Phase 23: VPS expiration sweeper — expired LXC instances with
+    // auto-suspend enabled are suspended through the normal lifecycle path,
+    // warned_at is stamped, and owners receive an in-panel notification.
+    await runStep('T38: Expiration sweeper suspends expired LXC VPSes and notifies owners', async () => {
+      // Provision a dedicated local LXC instance for the sweep (T14's migration
+      // removes the shared e2e containers before this point).
+      const createRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 't38-expiry-ctr',
+        hostname: 't38-expiry-ctr.hkvm.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 5,
+        bridge: 'lxcbr0',
+        ipv4Address: '10.88.10.99/24',
+        ipv4Gateway: '10.88.10.1',
+        autostart: true,
+        nesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(createRes.status, 201, `LXC provisioning failed: ${createRes.text}`);
+      const lxcId = createRes.json.instance.refId;
+      const lxcOwner = (await ctx.db.get(`SELECT user_id FROM lxc_instances WHERE id = ?`, [lxcId])).user_id;
+      assert.strictEqual(createRes.json.instance.status, 'running');
+
+      // Host container operations are stubbed so the sweep's host-verified
+      // suspension is deterministic (same pattern as the T34 clone mocks).
+      const cm = ctx.nodeManager.localRuntime.containerManager;
+      const origStop = cm.stopContainer;
+      const origInspect = cm.inspectContainer;
+      cm.stopContainer = async () => {};
+      cm.inspectContainer = async () => ({ state: 'stopped' });
+
+      try {
+        await ctx.db.run(
+          `INSERT INTO vps_expiration (lxc_id, expires_at, expiration_days, auto_suspend_enabled)
+           VALUES (?, datetime('now', '-1 day'), 30, 0)`,
+          [lxcId]
+        );
+
+        // Negative first: auto-suspend disabled must leave the instance untouched.
+        const sweepOff = await adminClient.request(
+          'POST',
+          '/api/v1/lxc/expirations/sweep',
+          {},
+          { 'X-Forwarded-For': '198.51.100.54' }
+        );
+        assert.strictEqual(sweepOff.status, 200, `Sweep failed: ${sweepOff.text}`);
+        assert.strictEqual(sweepOff.json.evaluated, 0, 'Disabled auto-suspend must not be evaluated');
+        const notSuspended = await ctx.db.get(`SELECT suspended FROM lxc_instances WHERE id = ?`, [lxcId]);
+        assert.strictEqual(Number(notSuspended.suspended), 0, 'Instance must remain unsuspended');
+
+        // Enable auto-suspend and sweep again — the instance must be suspended.
+        await ctx.db.run(`UPDATE vps_expiration SET auto_suspend_enabled = 1 WHERE lxc_id = ?`, [lxcId]);
+        const sweepOn = await adminClient.request(
+          'POST',
+          '/api/v1/lxc/expirations/sweep',
+          {},
+          { 'X-Forwarded-For': '198.51.100.55' }
+        );
+        assert.strictEqual(sweepOn.status, 200, `Sweep failed: ${sweepOn.text}`);
+        assert.strictEqual(sweepOn.json.evaluated, 1, 'Expired instance must be evaluated');
+        assert.strictEqual(sweepOn.json.suspended.length, 1, 'Expired instance must be suspended');
+        assert.strictEqual(sweepOn.json.suspended[0].lxcId, lxcId);
+        assert.strictEqual(sweepOn.json.suspended[0].ownerUserId, lxcOwner);
+
+        const suspendedRow = await ctx.db.get(
+          `SELECT suspended, suspended_reason, status FROM lxc_instances WHERE id = ?`,
+          [lxcId]
+        );
+        assert.strictEqual(Number(suspendedRow.suspended), 1, 'Instance must be marked suspended');
+        assert.match(suspendedRow.suspended_reason, /VPS expired/i, 'Suspension reason must record expiry');
+        assert.strictEqual(suspendedRow.status, 'stopped', 'Suspended instance status must be stopped');
+
+        const expRow = await ctx.db.get(`SELECT warned_at FROM vps_expiration WHERE lxc_id = ?`, [lxcId]);
+        assert.ok(expRow.warned_at, 'warned_at must be stamped on evaluation');
+
+        const notification = await ctx.db.get(
+          `SELECT type, title FROM notifications WHERE user_id = ? AND type = 'warning' ORDER BY id DESC LIMIT 1`,
+          [lxcOwner]
+        );
+        assert.ok(notification, 'Owner must receive an in-panel expiration notification');
+        assert.match(notification.title, /expired and suspended/i);
+      } finally {
+        cm.stopContainer = origStop;
+        cm.inspectContainer = origInspect;
+        await ctx.db.run(`DELETE FROM vps_expiration WHERE lxc_id = ?`, [lxcId]);
+        await ctx.db.run(`DELETE FROM notifications WHERE user_id = ? AND title LIKE 'VPS expired%'`, [lxcOwner]);
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [lxcId]).catch(() => undefined);
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');
@@ -6183,6 +6277,7 @@ fi
     if (app && app.getHkvmV3Context()) {
       app.getHkvmV3Context().monitoringService.stopBackgroundLoop();
       app.getHkvmV3Context().backupManager.stopScheduleLoop();
+      app.getHkvmV3Context().lxcAdapter.stopExpirationLoop();
       await app.getHkvmV3Context().db.close().catch(() => {});
     }
     if (app && app.server) {

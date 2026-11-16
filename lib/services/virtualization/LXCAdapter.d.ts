@@ -114,6 +114,34 @@ export declare class LXCAdapter implements VirtualizationAdapter {
     getDecryptedRootPassword(refId: number): Promise<string>;
     injectSshKey(refId: number, publicKey: string): Promise<void>;
     renewExpiration(refId: number, additionalDays: number): Promise<UnifiedInstanceRecord>;
+    /**
+     * Expiration sweeper: finds LXC instances whose `vps_expiration.expires_at` has
+     * passed with `auto_suspend_enabled = 1` and suspends them through the normal
+     * lifecycle path (host-verified stop, `suspended` flag, suspension history).
+     * `warned_at` is stamped on first evaluation. Instances that are already
+     * suspended, not running/frozen, or whose host refuses the stop are skipped
+     * honestly (the skip reason is recorded on the expiration row's `notes`).
+     * Returns a summary so callers (manual route or background loop) can notify
+     * affected owners.
+     */
+    sweepExpiredInstances(): Promise<{
+        evaluated: number;
+        suspended: Array<{
+            lxcId: number;
+            containerName: string;
+            ownerUserId: number;
+            expiresAt: string;
+        }>;
+        skipped: Array<{
+            lxcId: number;
+            reason: string;
+        }>;
+    }>;
+    private expirationTimer;
+    private expirationBootTimer;
+    /** Starts the periodic expiration sweep loop (default 5 minutes). */
+    startExpirationLoop(intervalMs?: number): void;
+    stopExpirationLoop(): void;
     transferOwnership(refId: number, newUserId: number): Promise<UnifiedInstanceRecord>;
     updateSharing(refId: number, sharedUserIds: number[]): Promise<UnifiedInstanceRecord>;
     setWhitelist(refId: number, whitelisted: boolean): Promise<void>;

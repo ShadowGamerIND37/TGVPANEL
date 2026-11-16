@@ -87,6 +87,7 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | GET | `/lxc/:id/logs` | staff | Container logs. |
 | GET/POST/DELETE | `/lxc/:id/files[/content]` | staff | Rootfs file read/write/delete (confined). |
 | POST | `/lxc/:id/clone` | staff | Stopped `lxc-copy` clone. |
+| POST | `/lxc/expirations/sweep` | admin/subadmin | Run the VPS expiration sweep: suspends expired LXC instances (auto-suspend enabled) through the normal lifecycle path and notifies owners. Also runs automatically every 5 minutes. |
 
 ### Storage
 
