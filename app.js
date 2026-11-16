@@ -465,7 +465,15 @@ app.use(
     },
   })
 );
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: '50mb',
+    verify: (req, _res, buf) => {
+      req.rawBody = buf.toString('utf8');
+    },
+  })
+);
 app.get('/js/hkvm-v3.js', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'js', 'tgvpanel-v3.js'));
 });
@@ -2005,6 +2013,10 @@ app.post('/api/admin/users', checkAuth, checkAdmin, (req, res) => {
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' });
   }
+  const allowedRoles = ['user', 'admin', 'reseller', 'subadmin', 'operator', 'readonly'];
+  if (role !== undefined && !allowedRoles.includes(String(role))) {
+    return res.status(400).json({ error: 'Unsupported account role.' });
+  }
   
   const hashedPassword = bcrypt.hashSync(password, 10);
   db.run(
@@ -2029,6 +2041,10 @@ app.put('/api/admin/users/:id', checkAuth, checkAdmin, (req, res) => {
   
   if (userId === 1 && role && role !== 'admin') {
     return res.status(400).json({ error: 'Default admin must remain an admin' });
+  }
+  const allowedRoles = ['user', 'admin', 'reseller', 'subadmin', 'operator', 'readonly'];
+  if (role !== undefined && !allowedRoles.includes(String(role))) {
+    return res.status(400).json({ error: 'Unsupported account role.' });
   }
   
   let query = 'UPDATE users SET ';

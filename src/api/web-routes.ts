@@ -87,7 +87,7 @@ export function createUnifiedWebRouter(
         ipAddress: req.ip || null,
       });
 
-      const redirectUrl = row.role === 'admin' ? '/admin/dashboard' : '/dashboard';
+      const redirectUrl = row.role === 'admin' ? '/admin/dashboard' : row.role === 'reseller' ? '/reseller/api-keys' : '/dashboard';
       return res.json({ success: true, user: sess.user, redirectUrl });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
@@ -415,7 +415,7 @@ export function createUnifiedWebRouter(
         ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM storage_pools`).catch(() => ({ cnt: 0 })),
         ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM api_keys`).catch(() => ({ cnt: 0 })),
         ctx.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM webhooks WHERE is_active = 1`).catch(() => ({ cnt: 0 })),
-        ctx.db.get<{ max_v: number }>(`SELECT MAX(version) AS max_v FROM schema_migrations`).catch(() => ({ max_v: 15 })),
+        ctx.db.get<{ max_v: number }>(`SELECT MAX(version) AS max_v FROM schema_migrations`).catch(() => ({ max_v: 18 })),
       ]);
 
       const licenseStats = {
@@ -427,7 +427,7 @@ export function createUnifiedWebRouter(
         poolsCount: Number(poolRow?.cnt || 0),
         apiKeysCount: Number(keyRow?.cnt || 0),
         webhooksCount: Number(hookRow?.cnt || 0),
-        schemaVersion: `v${String(migVerRow?.max_v || 15).padStart(3, '0')}`,
+        schemaVersion: `v${String(migVerRow?.max_v || 18).padStart(3, '0')}`,
         nodeJsVersion: process.version,
         platformArch: `${process.platform} / ${process.arch}`,
         uptimeSec: Math.floor(process.uptime()),
@@ -485,6 +485,24 @@ export function createUnifiedWebRouter(
       section: 'security',
       user: res.locals.user || (req as any).session?.user,
       twoFactorEnabled: Boolean(dbUser?.two_factor_enabled),
+    });
+  });
+
+  router.get('/reseller/api-keys', requirePrincipal, requireRole(['reseller']), async (req: Request, res: Response) => {
+    res.render('users/unified-user-page', {
+      title: 'Reseller API Keys - TGVPANEL',
+      currentPage: 'reseller-api-keys',
+      section: 'reseller-api-keys',
+      user: res.locals.user || (req as any).session?.user,
+    });
+  });
+
+  router.get('/reseller/customers', requirePrincipal, requireRole(['reseller']), async (req: Request, res: Response) => {
+    res.render('users/unified-user-page', {
+      title: 'Reseller Customers - TGVPANEL',
+      currentPage: 'reseller-customers',
+      section: 'reseller-customers',
+      user: res.locals.user || (req as any).session?.user,
     });
   });
 

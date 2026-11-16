@@ -60,6 +60,7 @@ const {
   computeTotpCode,
   verifyTotpCode,
 } = require('../lib/security/crypto-vault');
+const { signResellerRequest } = require('../lib/security/reseller-api-auth');
 const { UnifiedDatabase, resolveAndMigrateDatabasePath } = require('../lib/db/database');
 const { runMigrations } = require('../lib/db/migrations');
 const { importHvmDatabase } = require('../lib/db/hvm-importer');
@@ -167,7 +168,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
-    await runStep('T01: Transactional SQLite backup & migrations v001..v016 preserve legacy data & cascade VM FKs', async () => {
+    await runStep('T01: Transactional SQLite backup & migrations v001..v018 preserve legacy data & cascade VM FKs', async () => {
       const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
       const v2Raw = new sqlite3.Database(v2ScratchPath);
       const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
@@ -190,7 +191,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       `);
 
       const migRes = await runMigrations(v2Db);
-      assert.ok(migRes.applied.length >= 16, 'Expected v001..v016 migrations to apply');
+      assert.ok(migRes.applied.length >= 18, 'Expected all v001..v018 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
 
       // Verify v009 upgraded vm_logs & vm_snapshots to ON DELETE CASCADE while preserving rows,
@@ -204,6 +205,12 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
       const lxcCols = await v2Db.all(`PRAGMA table_info(lxc_instances)`);
       assert.ok(lxcCols.some((c) => c.name === 'kvm_nesting'), 'Expected kvm_nesting column on lxc_instances');
+
+      const resellerCustomerColumns = await v2Db.all(`PRAGMA table_info(reseller_customers)`);
+      assert.ok(resellerCustomerColumns.some((column) => column.name === 'reseller_user_id'), 'Expected reseller customer ownership column from v018');
+      assert.ok(!resellerCustomerColumns.some((column) => column.name === 'deleted_at'), 'Customer records should not be retained after a requested deletion.');
+      await v2Db.run(`INSERT INTO reseller_customers (reseller_user_id, display_name, email) VALUES (1, 'Legacy Contact', 'contact@example.org')`);
+      await assert.rejects(() => v2Db.run(`INSERT INTO reseller_customers (reseller_user_id, display_name, email) VALUES (1, 'Duplicate Contact', 'CONTACT@example.org')`), /UNIQUE constraint failed/i);
 
       const adminUser = await v2Db.get(`SELECT * FROM users WHERE username = 'admin'`);
       assert.ok(adminUser, 'Legacy admin user preserved');
@@ -1753,6 +1760,231 @@ exec "$@"
       } finally {
         await ctx.db.run(`UPDATE vms SET status = ?, pid = ? WHERE vm_id = ?`, [oldStatus.status, oldStatus.pid, vm.vm_id]);
       }
+    });
+
+    await runStep('T33: Reseller HMAC API keys enforce scopes, replay protection, rotation, rate/IP limits and admin revocation', async () => {
+      const bcrypt = require('bcryptjs');
+      const inserted = await ctx.db.run(
+        `INSERT INTO users (username, password, email, role, is_active) VALUES ('api_reseller', ?, 'api-reseller@example.org', 'reseller', 1)`,
+        [bcrypt.hashSync('ResellerPass!234', 10)]
+      );
+      const resellerId = inserted.lastID;
+      const reseller = new SessionClient(baseUrl);
+      const login = await reseller.request('POST', '/api/login', { username: 'api_reseller', password: 'ResellerPass!234' });
+      assert.strictEqual(login.status, 200, `Reseller login failed: ${login.text}`);
+      const portal = await reseller.request('GET', '/reseller/api-keys');
+      assert.strictEqual(portal.status, 200);
+      assert.ok(portal.text.includes('Reseller API Keys'));
+      const customerPortal = await reseller.request('GET', '/reseller/customers');
+      assert.strictEqual(customerPortal.status, 200);
+      assert.ok(customerPortal.text.includes('Reseller Customer Directory'));
+      assert.ok(customerPortal.text.includes('do not grant access to any VPS or resources'));
+      const roleSetup = await adminClient.request('GET', '/admin/users/create');
+      assert.strictEqual(roleSetup.status, 200);
+      assert.ok(roleSetup.text.includes('value="reseller"'), 'Admin user creation should offer the reseller role');
+      const adminUsersPage = await adminClient.request('GET', '/admin/users');
+      assert.strictEqual(adminUsersPage.status, 200);
+      assert.ok(adminUsersPage.text.includes('toggleResellerAccount'), 'Admin user list should expose reseller suspend controls');
+      assert.ok(adminUsersPage.text.includes('Reseller resources'), 'Admin user list should include resource summary columns');
+
+      const created = await reseller.request('POST', '/api/v1/reseller/api-keys', {
+        name: 'read-only automation',
+        description: 'Acceptance-test credentials',
+        permissions: ['vps.read', 'stats.read', 'resources.read', 'customers.read', 'customers.create', 'customers.update', 'customers.delete'],
+        rateLimitPerMinute: 100,
+        ipAllowlist: [],
+      });
+      assert.strictEqual(created.status, 201, `Reseller key creation failed: ${created.text}`);
+      assert.ok(created.json.apiKey.startsWith('tgvpk_'));
+      assert.strictEqual(created.json.secretShownOnce, true);
+      assert.ok(created.json.apiSecret);
+      const keyRow = await ctx.db.get(`SELECT * FROM reseller_api_keys WHERE id = ?`, [created.json.id]);
+      assert.ok(keyRow.secret_enc.startsWith('enc:v1:'), 'HMAC secret must be encrypted at rest');
+      assert.notStrictEqual(keyRow.secret_enc, created.json.apiSecret);
+      assert.strictEqual(keyRow.secret_hash, hashApiKey(created.json.apiSecret));
+      assert.strictEqual(keyRow.key_hash, hashApiKey(created.json.apiKey));
+
+      const list = await reseller.request('GET', '/api/v1/reseller/api-keys');
+      assert.strictEqual(list.status, 200);
+      assert.strictEqual(list.json.apiKeys.length, 1);
+      assert.ok(!JSON.stringify(list.json).includes(created.json.apiSecret), 'Key listing must never reveal the secret');
+      assert.ok(!JSON.stringify(list.json).includes(created.json.apiKey), 'Key listing must never reveal the raw key');
+
+      async function signedRequest(method, pathWithQuery, apiKey, apiSecret, body, options = {}) {
+        const rawBody = body === undefined ? undefined : JSON.stringify(body);
+        const headers = signResellerRequest({
+          apiKey,
+          apiSecret,
+          method,
+          pathWithQuery,
+          body: rawBody,
+          timestamp: options.timestamp,
+          nonce: options.nonce,
+        });
+        if (options.bodyOverride !== undefined) {
+          const client = new SessionClient(baseUrl);
+          return client.request(method, pathWithQuery, options.bodyOverride, headers);
+        }
+        return new SessionClient(baseUrl).request(method, pathWithQuery, rawBody, headers);
+      }
+
+      const statsPath = '/api/v1/reseller/stats';
+      const stats = await signedRequest('GET', statsPath, created.json.apiKey, created.json.apiSecret);
+      assert.strictEqual(stats.status, 200, `Signed stats request failed: ${stats.text}`);
+      assert.ok(Number.isInteger(stats.json.stats.totalVps));
+      const resourceSummary = await signedRequest('GET', '/api/v1/reseller/resources', created.json.apiKey, created.json.apiSecret);
+      assert.strictEqual(resourceSummary.status, 200, `Signed resource summary failed: ${resourceSummary.text}`);
+      assert.strictEqual(resourceSummary.json.resources.allocated.vps, 0);
+      assert.strictEqual(resourceSummary.json.resources.limitsAvailable, false, 'Do not invent reseller quotas before allocation models exist');
+      assert.strictEqual(resourceSummary.json.resources.telemetry.cpuPercent, null, 'Unavailable telemetry must be null, not simulated as zero');
+
+      const customerPath = '/api/v1/reseller/customers';
+      const customerCreate = await signedRequest('POST', customerPath, created.json.apiKey, created.json.apiSecret, {
+        displayName: 'Acme Customer', email: 'BILLING@EXAMPLE.ORG', externalReference: 'crm-42', notes: 'Acceptance contact',
+      });
+      assert.strictEqual(customerCreate.status, 201, `Customer creation failed: ${customerCreate.text}`);
+      const customerId = customerCreate.json.customer.id;
+      assert.strictEqual(customerCreate.json.customer.email, 'billing@example.org');
+      const storedCustomerNotes = await ctx.db.get(`SELECT notes_enc FROM reseller_customers WHERE id = ?`, [customerId]);
+      assert.ok(storedCustomerNotes.notes_enc.startsWith('enc:v1:'), 'Customer notes must be encrypted at rest');
+      assert.ok(!storedCustomerNotes.notes_enc.includes('Acceptance contact'));
+      const customerDuplicate = await signedRequest('POST', customerPath, created.json.apiKey, created.json.apiSecret, {
+        displayName: 'Duplicate', email: 'Billing@example.org',
+      });
+      assert.strictEqual(customerDuplicate.status, 409, 'Email duplicates must be unique within one reseller account');
+      const customerSearchPath = `${customerPath}?search=acme&limit=10&offset=0`;
+      const customerList = await signedRequest('GET', customerSearchPath, created.json.apiKey, created.json.apiSecret);
+      assert.strictEqual(customerList.status, 200);
+      assert.strictEqual(customerList.json.pagination.total, 1);
+      const customerReadPath = `${customerPath}/${customerId}`;
+      assert.strictEqual((await signedRequest('GET', customerReadPath, created.json.apiKey, created.json.apiSecret)).status, 200);
+      const customerUpdate = await signedRequest('PUT', customerReadPath, created.json.apiKey, created.json.apiSecret, { displayName: 'Acme Updated', status: 'suspended' });
+      assert.strictEqual(customerUpdate.status, 200, `Customer update failed: ${customerUpdate.text}`);
+      assert.strictEqual(customerUpdate.json.customer.status, 'suspended');
+      assert.strictEqual(customerUpdate.json.customer.email, 'billing@example.org', 'Partial updates must preserve omitted fields');
+      assert.strictEqual(customerUpdate.json.customer.notes, 'Acceptance contact', 'Encrypted notes should be decrypted only for the owning reseller response');
+      assert.strictEqual((await signedRequest('PUT', customerReadPath, created.json.apiKey, created.json.apiSecret, { status: 'deleted' })).status, 400);
+
+      const secondResellerInsert = await ctx.db.run(
+        `INSERT INTO users (username, password, email, role, is_active) VALUES ('api_reseller_two', ?, 'api-reseller-two@example.org', 'reseller', 1)`,
+        [bcrypt.hashSync('ResellerPass!234', 10)]
+      );
+      const secondReseller = new SessionClient(baseUrl);
+      assert.strictEqual((await secondReseller.request('POST', '/api/login', { username: 'api_reseller_two', password: 'ResellerPass!234' })).status, 200);
+      assert.strictEqual((await secondReseller.request('GET', '/reseller/customers')).status, 200);
+      const secondCustomerKey = await secondReseller.request('POST', '/api/v1/reseller/api-keys', { name: 'customer reader', permissions: ['customers.read'] });
+      assert.strictEqual(secondCustomerKey.status, 201, `Second reseller customer key creation failed: ${secondCustomerKey.text}`);
+      const foreignCustomerRead = await signedRequest('GET', customerReadPath, secondCustomerKey.json.apiKey, secondCustomerKey.json.apiSecret);
+      assert.strictEqual(foreignCustomerRead.status, 404, 'A reseller must not read another reseller customer');
+      const secondCustomerList = await signedRequest('GET', customerPath, secondCustomerKey.json.apiKey, secondCustomerKey.json.apiSecret);
+      assert.strictEqual(secondCustomerList.json.pagination.total, 0, 'Customer list must be isolated to the authenticated reseller');
+
+      const customerDelete = await signedRequest('DELETE', customerReadPath, created.json.apiKey, created.json.apiSecret);
+      assert.strictEqual(customerDelete.status, 200);
+      assert.strictEqual(customerDelete.json.deleted, true);
+      assert.strictEqual((await signedRequest('GET', customerReadPath, created.json.apiKey, created.json.apiSecret)).status, 404);
+      assert.ok(!(await ctx.db.get(`SELECT id FROM reseller_customers WHERE id = ?`, [customerId])), 'Delete must remove the contact record');
+      assert.strictEqual((await signedRequest('POST', customerPath, created.json.apiKey, created.json.apiSecret, { displayName: 'Recreated', email: 'billing@example.org' })).status, 201, 'Deleted emails may be reused by their owner');
+
+      const vpsListPath = '/api/v1/reseller/vps?limit=10&offset=0&engine=kvm';
+      const vpsList = await signedRequest('GET', vpsListPath, created.json.apiKey, created.json.apiSecret);
+      assert.strictEqual(vpsList.status, 200, `Signed paginated VPS list failed: ${vpsList.text}`);
+      assert.ok(Array.isArray(vpsList.json.vps));
+      assert.strictEqual(vpsList.json.pagination.limit, 10);
+      assert.strictEqual(vpsList.json.pagination.offset, 0);
+      assert.ok(Number.isInteger(vpsList.json.pagination.total));
+      assert.strictEqual((await signedRequest('GET', '/api/v1/reseller/vps?limit=0', created.json.apiKey, created.json.apiSecret)).status, 400, 'Invalid pagination must be rejected');
+      assert.strictEqual((await signedRequest('GET', '/api/v1/reseller/vps?engine=xen', created.json.apiKey, created.json.apiSecret)).status, 400, 'Unsupported engines must not be accepted as filters');
+
+      const replayNonce = crypto.randomBytes(16).toString('hex');
+      const replayHeaders = signResellerRequest({ apiKey: created.json.apiKey, apiSecret: created.json.apiSecret, method: 'GET', pathWithQuery: statsPath, nonce: replayNonce });
+      const replayFirst = await new SessionClient(baseUrl).request('GET', statsPath, undefined, replayHeaders);
+      assert.strictEqual(replayFirst.status, 200);
+      const replaySecond = await new SessionClient(baseUrl).request('GET', statsPath, undefined, replayHeaders);
+      assert.strictEqual(replaySecond.status, 401, 'A previously used nonce must be rejected');
+
+      const stale = await signedRequest('GET', statsPath, created.json.apiKey, created.json.apiSecret, undefined, { timestamp: Math.floor(Date.now() / 1000) - 600 });
+      assert.strictEqual(stale.status, 401, 'Old request timestamps must be rejected');
+
+      const limitedScopePath = `/api/v1/reseller/vps/999999/start?engine=kvm`;
+      const scopeDenied = await signedRequest('POST', limitedScopePath, created.json.apiKey, created.json.apiSecret, {});
+      assert.strictEqual(scopeDenied.status, 403, 'A read-only key must not call lifecycle mutations');
+
+      const badBodyHeaders = signResellerRequest({ apiKey: created.json.apiKey, apiSecret: created.json.apiSecret, method: 'POST', pathWithQuery: limitedScopePath, body: '{"action":"start"}' });
+      const badBody = await new SessionClient(baseUrl).request('POST', limitedScopePath, '{"action":"stop"}', badBodyHeaders);
+      assert.strictEqual(badBody.status, 401, 'Signature must bind the exact raw request body');
+
+      const otherUser = new SessionClient(baseUrl);
+      const bobLogin = await otherUser.request('POST', '/api/login', { username: 'bob_user', password: 'BobPass!123' });
+      assert.strictEqual(bobLogin.status, 200);
+      assert.strictEqual((await otherUser.request('GET', '/api/v1/reseller/api-keys')).status, 403, 'Non-resellers cannot access reseller key management');
+      assert.strictEqual((await reseller.request('GET', '/api/v1/reseller/admin/accounts')).status, 403, 'Resellers cannot access admin reseller account oversight');
+
+      const ipRestricted = await reseller.request('POST', '/api/v1/reseller/api-keys', {
+        name: 'IP restricted test', permissions: ['stats.read'], ipAllowlist: ['192.0.2.77'], rateLimitPerMinute: 10,
+      });
+      assert.strictEqual(ipRestricted.status, 201);
+      const ipDenied = await signedRequest('GET', statsPath, ipRestricted.json.apiKey, ipRestricted.json.apiSecret);
+      assert.strictEqual(ipDenied.status, 403, 'Requests outside a key IP allowlist must be rejected');
+
+      const rateKey = await reseller.request('POST', '/api/v1/reseller/api-keys', {
+        name: 'Rate limited test', permissions: ['stats.read'], rateLimitPerMinute: 1,
+      });
+      assert.strictEqual(rateKey.status, 201);
+      assert.strictEqual((await signedRequest('GET', statsPath, rateKey.json.apiKey, rateKey.json.apiSecret)).status, 200);
+      assert.strictEqual((await signedRequest('GET', statsPath, rateKey.json.apiKey, rateKey.json.apiSecret)).status, 429, 'Per-key rate limits must be enforced');
+
+      const adminPage = await adminClient.request('GET', '/admin/api-keys');
+      assert.strictEqual(adminPage.status, 200);
+      assert.ok(adminPage.text.includes('Reseller HMAC API Keys'), 'Admin key page should include reseller oversight controls');
+      const adminList = await adminClient.request('GET', '/api/v1/reseller/admin/api-keys');
+      assert.strictEqual(adminList.status, 200, `Admin key inspection failed: ${adminList.text}`);
+      assert.ok(adminList.json.apiKeys.some((key) => key.id === created.json.id && key.userId === resellerId));
+      assert.ok(!JSON.stringify(adminList.json).includes(created.json.apiSecret), 'Admin oversight must not reveal secrets');
+      const disabledByAdmin = await adminClient.request('POST', `/api/v1/reseller/admin/api-keys/${created.json.id}/disable`, {});
+      assert.strictEqual(disabledByAdmin.status, 200);
+      assert.strictEqual((await signedRequest('GET', statsPath, created.json.apiKey, created.json.apiSecret)).status, 401);
+      const adminRevoked = await adminClient.request('DELETE', `/api/v1/reseller/admin/api-keys/${ipRestricted.json.id}`);
+      assert.strictEqual(adminRevoked.status, 200, 'Admin must be able to permanently revoke a reseller key');
+      assert.strictEqual((await signedRequest('GET', statsPath, ipRestricted.json.apiKey, ipRestricted.json.apiSecret)).status, 401);
+
+      const enabledByOwner = await reseller.request('POST', `/api/v1/reseller/api-keys/${created.json.id}/enable`, {});
+      assert.strictEqual(enabledByOwner.status, 200);
+      const rotated = await reseller.request('POST', `/api/v1/reseller/api-keys/${created.json.id}/rotate`, {});
+      assert.strictEqual(rotated.status, 200, `Secret rotation failed: ${rotated.text}`);
+      assert.notStrictEqual(rotated.json.apiKey, created.json.apiKey);
+      assert.notStrictEqual(rotated.json.apiSecret, created.json.apiSecret);
+      assert.strictEqual((await signedRequest('GET', statsPath, created.json.apiKey, created.json.apiSecret)).status, 401, 'Old credentials must be invalid after rotation');
+      assert.strictEqual((await signedRequest('GET', statsPath, rotated.json.apiKey, rotated.json.apiSecret)).status, 200);
+
+      const resellerAccounts = await adminClient.request('GET', '/api/v1/reseller/admin/accounts');
+      assert.strictEqual(resellerAccounts.status, 200, `Admin reseller account listing failed: ${resellerAccounts.text}`);
+      const resellerAccount = resellerAccounts.json.accounts.find((account) => account.id === resellerId);
+      assert.ok(resellerAccount && resellerAccount.isActive);
+      assert.deepStrictEqual(resellerAccount.usage, { totalVps: 0, cpuCores: 0, ramMb: 0, diskGb: 0 });
+      assert.strictEqual((await adminClient.request('POST', '/api/v1/reseller/admin/accounts/not-an-id/suspend', {})).status, 400);
+      const suspendedAccount = await adminClient.request('POST', `/api/v1/reseller/admin/accounts/${resellerId}/suspend`, {});
+      assert.strictEqual(suspendedAccount.status, 200, `Admin reseller suspension failed: ${suspendedAccount.text}`);
+      assert.strictEqual(suspendedAccount.json.keysDisabled, true);
+      assert.strictEqual((await signedRequest('GET', statsPath, rotated.json.apiKey, rotated.json.apiSecret)).status, 401, 'Suspended reseller keys must stop working immediately');
+      const resumedAccount = await adminClient.request('POST', `/api/v1/reseller/admin/accounts/${resellerId}/unsuspend`, {});
+      assert.strictEqual(resumedAccount.status, 200);
+      assert.strictEqual((await signedRequest('GET', statsPath, rotated.json.apiKey, rotated.json.apiSecret)).status, 401, 'Unsuspending an account must not silently re-enable credentials');
+      const explicitlyEnabled = await reseller.request('POST', `/api/v1/reseller/api-keys/${created.json.id}/enable`, {});
+      assert.strictEqual(explicitlyEnabled.status, 200);
+      assert.strictEqual((await signedRequest('GET', statsPath, rotated.json.apiKey, rotated.json.apiSecret)).status, 200);
+
+      const ownedInstance = await ctx.db.get(`SELECT vm_id FROM vms WHERE owner_id = 1 ORDER BY vm_id LIMIT 1`);
+      if (ownedInstance) {
+        const instancePath = `/api/v1/reseller/vps/${ownedInstance.vm_id}?engine=kvm`;
+        const isolated = await signedRequest('GET', instancePath, rotated.json.apiKey, rotated.json.apiSecret);
+        assert.strictEqual(isolated.status, 404, 'Reseller must not read another owner’s VM');
+      }
+
+      const logRows = await ctx.db.get(`SELECT COUNT(*) AS count FROM reseller_api_requests WHERE api_key_id = ?`, [created.json.id]);
+      assert.ok(logRows.count >= 5, 'Successful and failed HMAC requests should be logged');
+      await reseller.request('DELETE', `/api/v1/reseller/api-keys/${created.json.id}`);
+      await reseller.request('DELETE', `/api/v1/reseller/api-keys/${rateKey.json.id}`);
     });
 
     // 15. LXC Snapshots, SHA-256 Archive Backup + Clean Restore, 7-Stage Offline Migration (+ Rollback) & Local/Remote WebSocket PTY Console

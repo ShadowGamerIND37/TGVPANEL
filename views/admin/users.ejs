@@ -103,6 +103,7 @@
 
 <script>
 let allUsers = [];
+let resellerAccounts = new Map();
 
 // Load user Discord avatar
 async function loadUserAvatar(userId) {
@@ -141,6 +142,16 @@ async function loadUsers() {
     const res = await fetch('/api/admin/users');
     if (!res.ok) throw new Error('Failed to load users');
     allUsers = await res.json();
+    resellerAccounts = new Map();
+    try {
+      const accountResponse = await fetch('/api/v1/reseller/admin/accounts');
+      if (accountResponse.ok) {
+        const accountData = await accountResponse.json();
+        resellerAccounts = new Map((accountData.accounts || []).map(account => [Number(account.id), account]));
+      }
+    } catch (accountError) {
+      console.warn('Could not load reseller account summaries', accountError);
+    }
     
     // Update stats
     const total = allUsers.length;
@@ -197,6 +208,7 @@ function renderUsers() {
           <th>Email</th>
           <th>Role</th>
           <th>Status</th>
+          <th>Reseller resources</th>
           <th>Created</th>
           <th>Actions</th>
         </tr>
@@ -228,6 +240,9 @@ function renderUsers() {
               </span>
             </td>
             <td style="font-size: 11px; color: var(--text-muted);">
+              ${u.role === 'reseller' && resellerAccounts.has(Number(u.id)) ? (() => { const account = resellerAccounts.get(Number(u.id)); return `${account.usage.totalVps} VPS · ${account.usage.cpuCores} CPU · ${account.usage.ramMb} MB RAM · ${account.usage.diskGb} GB`; })() : '—'}
+            </td>
+            <td style="font-size: 11px; color: var(--text-muted);">
               ${u.created_at ? new Date(u.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'}
             </td>
             <td>
@@ -235,6 +250,7 @@ function renderUsers() {
                 <a href="/admin/users/${u.id}/edit" class="btn btn-primary btn-sm" style="text-decoration: none; display: inline-flex; align-items: center; gap: 4px;">
                   <i class="fas fa-edit"></i> Edit
                 </a>
+                ${u.role === 'reseller' ? `<button class="btn btn-secondary btn-sm" onclick="toggleResellerAccount(${u.id}, ${u.is_active ? 'true' : 'false'})" title="Suspending disables all reseller API keys">${u.is_active ? 'Suspend reseller' : 'Unsuspend reseller'}</button>` : ''}
                 <button class="btn btn-secondary btn-sm" onclick="impersonateUser(${u.id}, '${escHtml(u.username)}')" title="Impersonate user session (audited)">
                   <i class="fas fa-user-secret"></i> Impersonate
                 </button>
@@ -252,6 +268,19 @@ function renderUsers() {
       loadUserAvatar(u.id);
     });
   }, 200);
+}
+
+async function toggleResellerAccount(id, isActive) {
+  const action = isActive ? 'suspend' : 'unsuspend';
+  const consequence = isActive ? 'This immediately disables the reseller account and all its API keys.' : 'The reseller account will be restored, but its API keys will remain disabled until re-enabled.';
+  if (!confirm(`${action === 'suspend' ? 'Suspend' : 'Unsuspend'} this reseller? ${consequence}`)) return;
+  try {
+    await hkvmApi(`/api/v1/reseller/admin/accounts/${id}/${action}`, { method: 'POST', body: '{}' });
+    showToast(`Reseller ${action}ed`, 'success');
+    await loadUsers();
+  } catch (error) {
+    showToast(error.message || `Unable to ${action} reseller`, 'error');
+  }
 }
 
 async function impersonateUser(id, username) {

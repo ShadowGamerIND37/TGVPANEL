@@ -43,7 +43,7 @@ TGVPANEL is a single platform for managing both virtual machines and containers,
 | **Migration** | 7-stage offline snapshot-transfer with automatic rollback ([details](#vps-migration-model)) |
 | **Monitoring** | Live and historical node/VPS metrics, alert rules, notifications, webhooks |
 | **Multi-node** | Node registry, circuit breakers, health sync, live API key rotation |
-| **API** | Versioned REST API at `/api/v1/*` with scoped personal access tokens |
+| **API** | Versioned REST API at `/api/v1/*` with scoped personal access tokens and HMAC-signed reseller keys |
 | **UI** | 23-section admin panel plus user portal, dark/light themes |
 
 ### Scheduled Backups (V4)
@@ -53,6 +53,10 @@ Administrators can configure per-instance hourly, daily, or weekly archive jobs 
 ### Scheduled Snapshots (V4)
 
 Per-instance hourly, daily, or weekly snapshot schedules are available in **Admin → Snapshots** and through `GET /api/v1/snapshot-schedules`, `PUT /api/v1/snapshot-schedules/:engine/:id`, and `DELETE /api/v1/snapshot-schedules/:engine/:id`. Owners can manage their own schedules through the API; shared access alone is not sufficient. Retention prunes only snapshots created by that schedule, leaving manual snapshots untouched. Runs record status/errors, audit completion or failure, and notify the owner. Removing a schedule does not delete existing snapshots. KVM snapshots are disk-level QCOW2 operations and are attempted only while the VM is stopped; they are not guest-consistent and are not risk-free backups. First execution is queued one selected interval after saving.
+
+### Reseller API keys (initial scope)
+
+Admins can assign the `reseller` role when creating an account. Resellers manage keys from **Reseller API Keys** in the account sidebar or `/api/v1/reseller/api-keys`. Keys use a one-time-displayed HMAC-SHA256 key/secret pair, durable nonce replay prevention, five-minute timestamp checks, granular key scopes, exact IP allowlists, per-key request limits, request/audit logs, rotation and immediate revoke/disable. Administrators can inspect metadata and disable/revoke keys without seeing secrets. Signed data endpoints expose only VPS records owned by that reseller, supported start/stop/restart actions, actual stats/resource telemetry, and reseller-owned CRM customer records at `/reseller/customers`. These contact records are scoped to the reseller, are hard-deleted on request, and are not login accounts or a customer-to-VPS relationship; plans, quota allocation and billing are not implemented. See [Reseller API signing and endpoint guide](docs/API_RESELLER.md).
 
 ### Security
 
@@ -118,7 +122,7 @@ The installer will:
 2. Ask you to choose a mode: **Unified (KVM + LXC)**, **KVM only**, **LXC only**, or **Standalone remote node agent**.
 3. Build the TypeScript sources.
 4. Create `.tgvpanel-secret` (`0600`).
-5. Back up `data/tgvpanel.db`, then run migrations (`v001`..`v016`).
+5. Back up `data/tgvpanel.db`, then run migrations (`v001`..`v018`).
 6. Write systemd service units (`tgvpanel.service` / `tgvpanel-node-agent.service`).
 
 To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB backup included).
@@ -128,7 +132,7 @@ To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB
 ```bash
 npm install            # see note below if building offline
 npm run build          # compile src/**/*.ts -> lib/**/*.js
-npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v016
+npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v018
 npm start              # panel on 0.0.0.0:8080
 ```
 
@@ -224,7 +228,7 @@ TGVPANEL/
 ├── src/
 │   ├── context.ts          # Runtime bootstrap, authenticated WS multiplexer
 │   ├── security/           # crypto-vault (.tgvpanel-secret, AES-GCM, TOTP, CSRF), RBAC middleware
-│   ├── db/                 # SQLite wrapper, migrations v001..v016, legacy DB importer, CLIs
+│   ├── db/                 # SQLite wrapper, migrations v001..v018, legacy DB importer, CLIs
 │   ├── node-agent/         # Standalone and local agent (auth, command runner, containers,
 │   │                       #   consoles, snapshots, transfers, health and host stats)
 │   ├── services/
@@ -274,7 +278,7 @@ Runs 20 end-to-end suites from `tests/run-all.js` against an isolated temporary 
 
 | Coverage |
 |---|
-| Migrations (`v001`..`v016`) & automatic legacy DB / secret-vault file migration |
+| Migrations (`v001`..`v018`) & automatic legacy DB / secret-vault file migration |
 | AES-256-GCM tamper defense (`.tgvpanel-secret`) |
 | Legacy import and login rehash |
 | CSRF and PAT scopes |

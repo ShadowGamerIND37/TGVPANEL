@@ -101,6 +101,67 @@
       </div>
       <% } %>
 
+      <% if (section === 'reseller-customers') { %>
+      <h2 style="margin:0 0 8px;color:var(--text-primary);">Reseller Customer Directory</h2>
+      <p style="margin:0 0 16px;color:var(--text-muted);font-size:13px;">Manage your own customer contact records. These CRM records are not login accounts and do not grant access to any VPS or resources.</p>
+      <div class="u3-card">
+        <form id="resellerCustomerForm" onsubmit="saveResellerCustomer(event)" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+          <input id="rcId" type="hidden">
+          <div class="u3-field"><label>Customer name</label><input id="rcName" maxlength="120" required></div>
+          <div class="u3-field"><label>Email</label><input id="rcEmail" type="email" maxlength="254" required></div>
+          <div class="u3-field"><label>External reference (optional)</label><input id="rcExternal" maxlength="100"></div>
+          <div class="u3-field"><label>Contact record status</label><select id="rcStatus"><option value="active">Active</option><option value="suspended">Suspended</option></select></div>
+          <div class="u3-field" style="grid-column:1/-1;"><label>Notes (encrypted at rest; not a credential store)</label><textarea id="rcNotes" maxlength="1000" rows="3" style="width:100%;padding:9px 11px;border-radius:8px;border:1px solid var(--border-color);background:var(--bg-secondary,rgba(255,255,255,.03));color:var(--text-primary);"></textarea></div>
+          <div style="display:flex;gap:8px;align-items:flex-end;"><button class="btn btn-primary" type="submit" id="rcSave">Create customer record</button><button class="btn btn-outline" type="button" id="rcCancel" onclick="resetResellerCustomerForm()" style="display:none;">Cancel edit</button></div>
+        </form>
+      </div>
+      <div class="u3-card">
+        <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;"><input id="rcSearch" placeholder="Search name, email, reference" maxlength="100" onkeydown="if(event.key==='Enter'){event.preventDefault();resellerCustomerOffset=0;loadResellerCustomers();}" style="flex:1;min-width:220px;padding:9px 11px;border-radius:8px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text-primary);"><button class="btn btn-outline" onclick="resellerCustomerOffset=0;loadResellerCustomers()">Search</button><span id="rcCount" style="font-size:12px;color:var(--text-muted);"></span><button class="btn btn-outline" onclick="changeResellerCustomerPage(-1)">Previous</button><button class="btn btn-outline" onclick="changeResellerCustomerPage(1)">Next</button></div>
+        <div style="overflow-x:auto;"><table class="u3-table"><thead><tr><th>Name</th><th>Email</th><th>Reference</th><th>Status</th><th>Updated</th><th>Actions</th></tr></thead><tbody id="resellerCustomersBody"></tbody></table></div>
+      </div>
+      <% } %>
+
+      <% if (section === 'reseller-api-keys') { %>
+      <h2 style="margin:0 0 8px;color:var(--text-primary);">Reseller API Keys</h2>
+      <p style="margin:0 0 16px;color:var(--text-muted);font-size:13px;">Generate HMAC-signed automation credentials. The API key and secret are shown once at creation or rotation; store them securely.</p>
+      <div class="u3-card">
+        <form onsubmit="createResellerApiKey(event)" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+          <div class="u3-field"><label>Key Name</label><input id="rKeyName" maxlength="80" required placeholder="Provisioning bot"></div>
+          <div class="u3-field"><label>Description</label><input id="rKeyDescription" maxlength="500" placeholder="CI automation"></div>
+          <div class="u3-field"><label>Requests per minute</label><input id="rKeyRate" type="number" min="1" max="6000" value="60"></div>
+          <div class="u3-field"><label>Expires (optional)</label><input id="rKeyExpiry" type="datetime-local"></div>
+          <div class="u3-field" style="grid-column:1/-1;"><label>Exact source IP allowlist (optional, comma-separated; no CIDR/wildcards)</label><input id="rKeyIps" placeholder="203.0.113.10, 2001:db8::10"></div>
+          <div class="u3-field" style="grid-column:1/-1;"><label>Permissions (select only what this key needs)</label>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px;">
+              <label><input type="checkbox" data-reseller-scope value="vps.read" checked> VPS read</label>
+              <label><input type="checkbox" data-reseller-scope value="vps.start"> VPS start</label>
+              <label><input type="checkbox" data-reseller-scope value="vps.stop"> VPS stop</label>
+              <label><input type="checkbox" data-reseller-scope value="vps.restart"> VPS restart</label>
+              <label><input type="checkbox" data-reseller-scope value="stats.read" checked> Statistics read</label>
+              <label><input type="checkbox" data-reseller-scope value="resources.read"> Resource usage read</label>
+              <label><input type="checkbox" data-reseller-scope value="customers.read"> Customer records read</label>
+              <label><input type="checkbox" data-reseller-scope value="customers.create"> Customer records create</label>
+              <label><input type="checkbox" data-reseller-scope value="customers.update"> Customer records update</label>
+              <label><input type="checkbox" data-reseller-scope value="customers.delete"> Customer records delete</label>
+              <label><input type="checkbox" data-reseller-scope value="api_keys.read"> API key metadata read</label>
+              <label><input type="checkbox" data-reseller-scope value="api_keys.create"> Create/update/rotate keys</label>
+              <label><input type="checkbox" data-reseller-scope value="api_keys.revoke"> Revoke keys</label>
+            </div>
+          </div>
+          <div style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit">Generate HMAC Key Pair</button></div>
+        </form>
+        <pre id="resellerKeyOnce" style="display:none;white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;background:rgba(0,0,0,.3);border-radius:8px;color:#10b981;font-size:12px;"></pre>
+      </div>
+      <div class="u3-card" style="overflow-x:auto;">
+        <table class="u3-table"><thead><tr><th>Key</th><th>Name</th><th>Permissions</th><th>Rate/min</th><th>Last Used</th><th>Expires</th><th>State</th><th>Actions</th></tr></thead><tbody id="resellerKeysBody"></tbody></table>
+      </div>
+      <div class="u3-card" style="overflow-x:auto;">
+        <h3 style="margin-top:0;color:var(--text-primary);">Selected Key Request Log</h3>
+        <div id="resellerKeyUsageSummary" style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Select Usage on a key to review requests.</div>
+        <table class="u3-table"><thead><tr><th>Time</th><th>Method</th><th>Path</th><th>Source IP</th><th>Status</th></tr></thead><tbody id="resellerKeyUsageBody"></tbody></table>
+      </div>
+      <% } %>
+
     </div>
     <%- include('../partials/admin/footer') %>
   </div>
@@ -248,10 +309,179 @@ async function revokeUserKey(id) {
   loadUserKeys();
 }
 
+async function loadResellerApiKeys() {
+  const data = await hkvmApi('/api/v1/reseller/api-keys');
+  document.getElementById('resellerKeysBody').innerHTML = (data.apiKeys || []).length
+    ? data.apiKeys.map(k => `<tr>
+        <td><code>${hkvmEsc(k.keyPrefix)}…</code></td><td>${hkvmEsc(k.name)}</td>
+        <td><code>${hkvmEsc(Array.isArray(k.permissions) ? k.permissions.join(', ') : k.permissions)}</code></td>
+        <td>${hkvmEsc(k.rateLimitPerMinute)}</td><td>${hkvmEsc(k.lastUsedAt || 'Never')}</td>
+        <td>${hkvmEsc(k.expiresAt || 'Never')}</td><td>${k.isActive ? 'Enabled' : 'Disabled'}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-outline" onclick="loadResellerKeyUsage(${k.id})">Usage</button>
+          <button class="btn btn-outline" onclick="rotateResellerApiKey(${k.id})">Rotate</button>
+          ${k.isActive ? `<button class="btn btn-outline" onclick="setResellerKeyState(${k.id},'disable')">Disable</button>` : `<button class="btn btn-outline" onclick="setResellerKeyState(${k.id},'enable')">Enable</button>`}
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="revokeResellerApiKey(${k.id})">Revoke</button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="8" style="color:var(--text-muted);">No reseller API keys configured.</td></tr>';
+}
+
+async function createResellerApiKey(e) {
+  e.preventDefault();
+  const permissions = [...document.querySelectorAll('[data-reseller-scope]:checked')].map(el => el.value);
+  const ipAllowlist = document.getElementById('rKeyIps').value.split(',').map(ip => ip.trim()).filter(Boolean);
+  try {
+    const data = await hkvmApi('/api/v1/reseller/api-keys', {
+      method: 'POST',
+      body: {
+        name: document.getElementById('rKeyName').value,
+        description: document.getElementById('rKeyDescription').value,
+        permissions,
+        ipAllowlist,
+        rateLimitPerMinute: Number(document.getElementById('rKeyRate').value),
+        expiresAt: document.getElementById('rKeyExpiry').value ? new Date(document.getElementById('rKeyExpiry').value).toISOString() : null,
+      }
+    });
+    const output = document.getElementById('resellerKeyOnce');
+    output.style.display = 'block';
+    output.textContent = `SAVE THESE CREDENTIALS NOW — the secret is shown once.\nAPI key: ${data.apiKey}\nAPI secret: ${data.apiSecret}\nPermissions: ${data.permissions.join(', ')}\nCanonical request and code examples: docs/API_RESELLER.md`;
+    await loadResellerApiKeys();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function rotateResellerApiKey(id) {
+  if (!confirm('Rotate both the API key and signing secret? The old credential pair becomes invalid immediately.')) return;
+  try {
+    const data = await hkvmApi(`/api/v1/reseller/api-keys/${id}/rotate`, { method: 'POST' });
+    const output = document.getElementById('resellerKeyOnce');
+    output.style.display = 'block';
+    output.textContent = `SAVE THE NEW CREDENTIALS NOW — the secret is shown once.\nAPI key: ${data.apiKey}\nAPI secret: ${data.apiSecret}`;
+    await loadResellerApiKeys();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function setResellerKeyState(id, action) {
+  try {
+    await hkvmApi(`/api/v1/reseller/api-keys/${id}/${action}`, { method: 'POST' });
+    await loadResellerApiKeys();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function revokeResellerApiKey(id) {
+  if (!confirm('Permanently revoke this API key?')) return;
+  try {
+    await hkvmApi(`/api/v1/reseller/api-keys/${id}`, { method: 'DELETE' });
+    await loadResellerApiKeys();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function loadResellerKeyUsage(id) {
+  try {
+    const data = await hkvmApi(`/api/v1/reseller/api-keys/${id}/usage?limit=50`);
+    const summary = data.usage || {};
+    document.getElementById('resellerKeyUsageSummary').textContent = `Total: ${summary.total || 0} · Last 24 hours: ${summary.last_24h || 0} · Succeeded: ${summary.succeeded || 0} · Failed: ${summary.failed || 0}`;
+    document.getElementById('resellerKeyUsageBody').innerHTML = data.requests.length
+      ? data.requests.map(r => `<tr><td>${hkvmEsc(r.created_at)}</td><td>${hkvmEsc(r.method)}</td><td><code>${hkvmEsc(r.path)}</code></td><td>${hkvmEsc(r.ip_address || '')}</td><td>${hkvmEsc(r.status_code)}</td></tr>`).join('')
+      : '<tr><td colspan="5" style="color:var(--text-muted);">No request records for this key.</td></tr>';
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+let resellerCustomerOffset = 0;
+const resellerCustomerPageSize = 50;
+
+async function loadResellerCustomers() {
+  const query = new URLSearchParams({ limit: String(resellerCustomerPageSize), offset: String(resellerCustomerOffset) });
+  const search = document.getElementById('rcSearch')?.value.trim();
+  if (search) query.set('search', search);
+  try {
+    const data = await hkvmApi(`/api/v1/reseller/customers?${query.toString()}`);
+    const body = document.getElementById('resellerCustomersBody');
+    document.getElementById('rcCount').textContent = `${data.pagination.total} customer records`;
+    body.innerHTML = data.customers.length
+      ? data.customers.map(customer => `<tr>
+          <td>${hkvmEsc(customer.displayName)}</td>
+          <td>${hkvmEsc(customer.email)}</td>
+          <td>${hkvmEsc(customer.externalReference || '—')}</td>
+          <td><span class="u3-pill ${customer.status === 'active' ? 'running' : 'suspended'}">${hkvmEsc(customer.status)}</span></td>
+          <td>${hkvmEsc(customer.updatedAt || '')}</td>
+          <td><div style="display:flex;gap:6px;"><button class="btn btn-outline" onclick="editResellerCustomer(${customer.id})">Edit</button><button class="btn btn-outline" style="color:#ef4444;" onclick="deleteResellerCustomer(${customer.id})">Delete</button></div></td>
+        </tr>`).join('')
+      : '<tr><td colspan="6" style="color:var(--text-muted);">No customer records found.</td></tr>';
+  } catch (err) {
+    hkvmToast(err.message, 'error');
+  }
+}
+
+async function changeResellerCustomerPage(direction) {
+  const next = resellerCustomerOffset + direction * resellerCustomerPageSize;
+  if (next < 0) return;
+  resellerCustomerOffset = next;
+  await loadResellerCustomers();
+  const total = Number(document.getElementById('rcCount').textContent.split(' ')[0]);
+  if (resellerCustomerOffset >= total && total > 0) {
+    resellerCustomerOffset = Math.max(0, Math.floor((total - 1) / resellerCustomerPageSize) * resellerCustomerPageSize);
+    await loadResellerCustomers();
+  }
+}
+
+async function saveResellerCustomer(event) {
+  event.preventDefault();
+  const id = document.getElementById('rcId').value;
+  const body = {
+    displayName: document.getElementById('rcName').value,
+    email: document.getElementById('rcEmail').value,
+    externalReference: document.getElementById('rcExternal').value || null,
+    notes: document.getElementById('rcNotes').value || null,
+    status: document.getElementById('rcStatus').value,
+  };
+  try {
+    await hkvmApi(id ? `/api/v1/reseller/customers/${id}` : '/api/v1/reseller/customers', { method: id ? 'PUT' : 'POST', body });
+    hkvmToast(id ? 'Customer record updated' : 'Customer record created');
+    resetResellerCustomerForm();
+    resellerCustomerOffset = 0;
+    await loadResellerCustomers();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function editResellerCustomer(id) {
+  try {
+    const data = await hkvmApi(`/api/v1/reseller/customers/${id}`);
+    const customer = data.customer;
+    document.getElementById('rcId').value = customer.id;
+    document.getElementById('rcName').value = customer.displayName;
+    document.getElementById('rcEmail').value = customer.email;
+    document.getElementById('rcExternal').value = customer.externalReference || '';
+    document.getElementById('rcNotes').value = customer.notes || '';
+    document.getElementById('rcStatus').value = customer.status;
+    document.getElementById('rcSave').textContent = 'Save customer changes';
+    document.getElementById('rcCancel').style.display = '';
+    document.getElementById('rcName').focus();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+function resetResellerCustomerForm() {
+  document.getElementById('resellerCustomerForm').reset();
+  document.getElementById('rcId').value = '';
+  document.getElementById('rcSave').textContent = 'Create customer record';
+  document.getElementById('rcCancel').style.display = 'none';
+}
+
+async function deleteResellerCustomer(id) {
+  if (!confirm('Permanently delete this CRM contact record? No panel login or VPS will be affected.')) return;
+  try {
+    await hkvmApi(`/api/v1/reseller/customers/${id}`, { method: 'DELETE' });
+    hkvmToast('Customer record deleted');
+    await loadResellerCustomers();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   if (USER_SECTION === 'instances') loadMyInstances();
   if (USER_SECTION === 'ports') loadUserPorts();
   if (USER_SECTION === 'security') loadUserKeys();
+  if (USER_SECTION === 'reseller-api-keys') loadResellerApiKeys();
+  if (USER_SECTION === 'reseller-customers') loadResellerCustomers();
 });
 </script>
 </body>
