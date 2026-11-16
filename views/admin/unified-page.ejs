@@ -1840,6 +1840,7 @@
         <h3>Add Firewall Rule</h3>
         <form onsubmit="submitFwRule(event)" class="v3-form-grid">
           <div class="v3-field"><label>Node</label><select id="fwNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select></div>
+          <div class="v3-field"><label>Target VPS (Optional)</label><select id="fwInstance"><option value="">(node-wide)</option></select></div>
           <div class="v3-field"><label>Direction</label><select id="fwDir"><option value="in">Ingress (IN)</option><option value="out">Egress (OUT)</option></select></div>
           <div class="v3-field"><label>Action</label><select id="fwAct"><option value="ACCEPT">ACCEPT</option><option value="DROP">DROP</option><option value="REJECT">REJECT</option></select></div>
           <div class="v3-field"><label>Protocol</label><select id="fwProto"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option><option value="all">ALL</option></select></div>
@@ -1851,7 +1852,7 @@
       </div>
       <div class="v3-card v3-table-wrap">
         <table class="v3-table">
-          <thead><tr><th>ID</th><th>Node</th><th>Direction</th><th>Action</th><th>Proto</th><th>Source</th><th>Port</th><th>Comment</th><th>Delete</th></tr></thead>
+          <thead><tr><th>ID</th><th>Node</th><th>Target VPS</th><th>Direction</th><th>Action</th><th>Proto</th><th>Source</th><th>Port</th><th>Comment</th><th>Delete</th></tr></thead>
           <tbody id="fwBody"></tbody>
         </table>
       </div>
@@ -4780,13 +4781,23 @@ async function loadFirewall() {
   const data = await hkvmApi('/api/v1/network/firewall');
   document.getElementById('fwBody').innerHTML = data.rules.length
     ? data.rules.map(r => `<tr>
-        <td>#${r.id}</td><td>${hkvmEsc(r.node_name || '#' + r.node_id)}</td><td>${hkvmEsc(r.direction.toUpperCase())}</td>
+        <td>#${r.id}</td><td>${hkvmEsc(r.node_name || '#' + r.node_id)}</td><td>${r.instance_type ? `<code>[${hkvmEsc(r.instance_type.toUpperCase())}] #${r.instance_ref_id}</code>` : '<span style="color:var(--text-muted);">node-wide</span>'}</td><td>${hkvmEsc(r.direction.toUpperCase())}</td>
         <td><span class="v3-pill ${r.action === 'ACCEPT' ? 'running' : 'warning'}">${hkvmEsc(r.action)}</span></td>
         <td>${hkvmEsc(r.protocol)}</td><td><code>${hkvmEsc(r.source_cidr || 'any')}</code></td>
         <td><code>${hkvmEsc(r.dest_port || 'any')}</code></td><td>${hkvmEsc(r.comment || '')}</td>
         <td><button class="btn btn-outline" onclick="delFw(${r.id})">Delete</button></td>
       </tr>`).join('')
-    : '<tr><td colspan="9" style="color:var(--text-muted);">No firewall rules configured.</td></tr>';
+    : '<tr><td colspan="10" style="color:var(--text-muted);">No firewall rules configured.</td></tr>';
+}
+
+async function populateFirewallInstanceSelect() {
+  const sel = document.getElementById('fwInstance');
+  if (!sel) return;
+  try {
+    const data = await hkvmApi('/api/v1/instances');
+    sel.innerHTML = '<option value="">(node-wide)</option>' + data.instances.map(i =>
+      `<option value="${i.engine}:${i.refId}">[${i.engine.toUpperCase()}] ${hkvmEsc(i.name)} (#${i.refId})</option>`).join('');
+  } catch (err) { /* leave the node-wide-only option */ }
 }
 
 async function submitFwRule(e) {
@@ -4794,15 +4805,24 @@ async function submitFwRule(e) {
   try {
     await hkvmApi('/api/v1/network/firewall', {
       method: 'POST',
-      body: {
-        nodeId: Number(document.getElementById('fwNode').value),
-        direction: document.getElementById('fwDir').value,
-        action: document.getElementById('fwAct').value,
-        protocol: document.getElementById('fwProto').value,
-        sourceCidr: document.getElementById('fwSrc').value || null,
-        destPort: document.getElementById('fwPort').value || null,
-        comment: document.getElementById('fwComment').value
-      }
+      body: (() => {
+        const fwInstVal = document.getElementById('fwInstance').value;
+        const body = {
+          nodeId: Number(document.getElementById('fwNode').value),
+          direction: document.getElementById('fwDir').value,
+          action: document.getElementById('fwAct').value,
+          protocol: document.getElementById('fwProto').value,
+          sourceCidr: document.getElementById('fwSrc').value || null,
+          destPort: document.getElementById('fwPort').value || null,
+          comment: document.getElementById('fwComment').value,
+        };
+        if (fwInstVal) {
+          const [instanceType, instanceRefId] = fwInstVal.split(':');
+          body.instanceType = instanceType;
+          body.instanceRefId = Number(instanceRefId);
+        }
+        return body;
+      })()
     });
     loadFirewall();
   } catch (err) { hkvmToast(err.message, 'error'); }
@@ -5919,7 +5939,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (CURRENT_SECTION === 'lxc-templates') loadLxcTemplates();
   if (CURRENT_SECTION === 'networking') loadNetworking();
   if (CURRENT_SECTION === 'ports') loadPorts();
-  if (CURRENT_SECTION === 'firewall') loadFirewall();
+  if (CURRENT_SECTION === 'firewall') { await populateFirewallInstanceSelect(); loadFirewall(); }
   if (CURRENT_SECTION === 'snapshots') { await populateInstanceDropdown('snapInstSelect'); loadAdminSnapshots(); loadSnapshotSchedules(); loadSelectedSnapshotSchedule(); }
   if (CURRENT_SECTION === 'backups') { await populateInstanceDropdown('bkpInstSelect'); loadBackups(); loadBackupSchedules(); loadSelectedBackupSchedule(); }
   if (CURRENT_SECTION === 'migrations') { await populateInstanceDropdown('migLxcSelect', 'lxc'); loadMigrations(); }

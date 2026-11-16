@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 24 per-VPS firewall policy (2026-10-30)
+
+- The `firewall_rules` schema already carried `instance_type`/`instance_ref_id` columns and the API accepted them, but enforcement ignored them — every rule was applied node-wide. Per-VPS firewall policy is now real: rules scoped to an instance are enforced against that instance's **concrete IPs** (resolved from `ip_allocations` + `instances.primary_ip`) on the host — local `iptables` per IP, or the node agent for remote nodes (agent now accepts `instanceIps` and rejects invalid IPs before touching `iptables`).
+- `NetworkManager.createFirewallRule` validates that a target instance exists, inherits the instance's node when `nodeId` is omitted, and reports the enforcement outcome honestly on the rule (`applied`); rules persist even when the host refuses the apply so the policy can be applied later. Added `listInstanceFirewallRules` and new routes `GET /api/v1/instances/:engine/:id/firewall-rules` (authorized staff) and `POST /api/v1/instances/:engine/:id/firewall-rules` (admin/subadmin).
+- Admin firewall page: the add-rule form now has a **Target VPS** selector (node-wide by default) and the rules table shows each rule's target.
+- T39: provisions a local LXC, creates an instance-scoped rule (asserts scoping, honest `applied` boolean, per-instance + global listings), rejects unknown-instance and invalid-engine creates, verifies the agent rejects an invalid instance IP and accepts a valid one with honest `applied`, and verifies deletion removes the rule from both listings. Full suite: **39/39 acceptance suites passing**.
+
 ## Unreleased — Phase 23 VPS expiration sweeper (2026-10-30)
 
 - Added the missing expiration enforcement for VPS lifecycle: `vps_expiration` rows (with `expires_at`, `auto_suspend_enabled`, `warned_at`) were written by provisioning/renew flows but nothing ever evaluated them. `LXCAdapter.sweepExpiredInstances()` now finds LXC instances whose expiry has passed with auto-suspend enabled and suspends them through the **normal lifecycle path** — host-verified stop, `suspended` flag, suspension reason/history — stamping `warned_at` on first evaluation. Instances that are already suspended, not running/frozen, or whose host refuses the stop are skipped honestly, with the skip reason recorded on the expiration row's `notes`.

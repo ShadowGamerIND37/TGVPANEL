@@ -176,6 +176,8 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
   let httpsAgentServer = null;
   let app = null;
   let remoteNodeId = null;
+  let agentApiKey = null;
+  let agentHmacSecret = null;
   const installedLxcShims = [];
   const rootOwnedCleanupDirs = [];
 
@@ -595,6 +597,8 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       assert.strictEqual(regRes.status, 201, `Node register failed: ${regRes.text}`);
       remoteNodeId = regRes.json.node.id;
       const { apiKey, hmacSecret } = regRes.json.bootstrapCredentials;
+      agentApiKey = apiKey;
+      agentHmacSecret = hmacSecret;
 
       const agentInst = createNodeAgentServer({
         host: '127.0.0.1',
@@ -4058,6 +4062,117 @@ exec "$@"
         await ctx.db.run(`DELETE FROM notifications WHERE user_id = ? AND title LIKE 'VPS expired%'`, [lxcOwner]);
         await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcId]).catch(() => undefined);
         await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [lxcId]).catch(() => undefined);
+      }
+    });
+
+    // Phase 24: Per-VPS firewall policy — rules scoped to an instance are
+    // enforced against that instance's concrete IPs (local iptables or the
+    // node agent), with honest applied reporting and validation.
+    await runStep('T39: Per-VPS firewall rules are instance-scoped, validated and enforced', async () => {
+      // Provision a dedicated local LXC instance to scope rules against.
+      const createRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 't39-fw-ctr',
+        hostname: 't39-fw-ctr.hkvm.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 5,
+        bridge: 'lxcbr0',
+        ipv4Address: '10.88.10.98/24',
+        ipv4Gateway: '10.88.10.1',
+        autostart: true,
+        nesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(createRes.status, 201, `LXC provisioning failed: ${createRes.text}`);
+      const lxcId = createRes.json.instance.refId;
+
+      try {
+        // Create a per-VPS ingress rule scoped to the instance.
+        const ruleRes = await adminClient.request(
+          'POST',
+          `/api/v1/instances/lxc/${lxcId}/firewall-rules`,
+          { direction: 'in', action: 'ACCEPT', protocol: 'tcp', destPort: '443', sourceCidr: '0.0.0.0/0', comment: 'Allow HTTPS' },
+          { 'X-Forwarded-For': '198.51.100.56' }
+        );
+        assert.strictEqual(ruleRes.status, 201, `Per-VPS rule failed: ${ruleRes.text}`);
+        const rule = ruleRes.json.rule;
+        assert.strictEqual(rule.instance_type, 'lxc', 'Rule must be scoped to the lxc instance');
+        assert.strictEqual(rule.instance_ref_id, lxcId, 'Rule must reference the instance id');
+        assert.strictEqual(typeof rule.applied, 'boolean', 'Enforcement result must be reported honestly');
+
+        // Per-instance listing and the global listing both surface the rule.
+        const instRules = await adminClient.request('GET', `/api/v1/instances/lxc/${lxcId}/firewall-rules`);
+        assert.strictEqual(instRules.status, 200, `Instance rule listing failed: ${instRules.text}`);
+        assert.ok(instRules.json.rules.some((r) => r.id === rule.id), 'Rule must appear in per-instance listing');
+        const allRules = await adminClient.request('GET', '/api/v1/network/firewall');
+        assert.strictEqual(allRules.status, 200, `Global rule listing failed: ${allRules.text}`);
+        assert.ok(allRules.json.rules.some((r) => r.id === rule.id), 'Rule must appear in global listing');
+
+        // Honest validation: unknown instance and invalid engine are rejected.
+        const badInstance = await adminClient.request(
+          'POST',
+          '/api/v1/instances/lxc/999999/firewall-rules',
+          { direction: 'in', action: 'ACCEPT', protocol: 'all' },
+          { 'X-Forwarded-For': '198.51.100.57' }
+        );
+        assert.strictEqual(badInstance.status, 400, `Unknown instance must be rejected: ${badInstance.text}`);
+        const badEngine = await adminClient.request(
+          'POST',
+          '/api/v1/instances/xyz/1/firewall-rules',
+          { direction: 'in', action: 'ACCEPT', protocol: 'all' },
+          { 'X-Forwarded-For': '198.51.100.58' }
+        );
+        assert.strictEqual(badEngine.status, 400, `Invalid engine must be rejected: ${badEngine.text}`);
+
+        // The node agent enforces instance-scoped rules per concrete IP and
+        // rejects invalid IPs before touching iptables.
+        const agentFw = (body) =>
+          new Promise((resolve, reject) => {
+            const data = JSON.stringify(body);
+            const signed = signAgentRequest({
+              nodeId: 'local-loopback-agent',
+              apiKey: agentApiKey,
+              hmacSecret: agentHmacSecret,
+              method: 'POST',
+              pathWithQuery: '/api/v1/network/firewall',
+              bodyBuffer: data,
+            });
+            const r = http.request(
+              {
+                hostname: '127.0.0.1',
+                port: AGENT_PORT,
+                path: '/api/v1/network/firewall',
+                method: 'POST',
+                headers: { ...signed, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+              },
+              (res) => {
+                let txt = '';
+                res.on('data', (c) => (txt += c));
+                res.on('end', () => resolve({ status: res.statusCode, text: txt }));
+              }
+            );
+            r.on('error', reject);
+            r.end(data);
+          });
+        const badIp = await agentFw({ mode: 'add', direction: 'in', action: 'ACCEPT', protocol: 'tcp', instanceIps: ['not-an-ip'] });
+        assert.strictEqual(badIp.status, 400, `Agent must reject invalid instance IPs: ${badIp.text}`);
+        const goodIp = await agentFw({ mode: 'add', direction: 'in', action: 'ACCEPT', protocol: 'tcp', destPort: '8443', instanceIps: ['10.88.10.98'] });
+        assert.strictEqual(goodIp.status, 200, `Agent must accept valid instance IPs: ${goodIp.text}`);
+        const goodIpJson = JSON.parse(goodIp.text);
+        assert.strictEqual(typeof goodIpJson.applied, 'boolean', 'Agent must report applied honestly');
+
+        // Delete the rule and confirm it disappears from both listings.
+        const delRes = await adminClient.request('DELETE', `/api/v1/network/firewall/${rule.id}`, undefined, { 'X-Forwarded-For': '198.51.100.59' });
+        assert.strictEqual(delRes.status, 200, `Rule deletion failed: ${delRes.text}`);
+        const afterDel = await adminClient.request('GET', `/api/v1/instances/lxc/${lxcId}/firewall-rules`);
+        assert.strictEqual(afterDel.status, 200, `Instance rule listing failed after delete: ${afterDel.text}`);
+        assert.ok(!afterDel.json.rules.some((r) => r.id === rule.id), 'Deleted rule must not appear in listing');
+      } finally {
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM firewall_rules WHERE instance_type = 'lxc' AND instance_ref_id = ?`, [lxcId]).catch(() => undefined);
       }
     });
 

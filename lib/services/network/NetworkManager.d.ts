@@ -72,6 +72,8 @@ export declare class NetworkManager {
         priority?: number;
         comment?: string;
     }): Promise<any>;
+    listInstanceFirewallRules(instanceType: string, instanceRefId: number): Promise<any[]>;
+    private resolveInstanceIps;
     deleteFirewallRule(ruleId: number): Promise<void>;
     private applyFirewallRuleForNode;
 }

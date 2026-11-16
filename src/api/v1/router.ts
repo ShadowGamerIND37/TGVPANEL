@@ -2093,6 +2093,49 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // Per-VPS firewall policy: list and create firewall rules scoped to a
+  // single instance. Enforcement targets that instance's concrete IPs on the
+  // host (local iptables or the node agent), not the whole node.
+  router.get(
+    '/instances/:engine/:id/firewall-rules',
+    async (req: Request, res: Response) => {
+      try {
+        const engine = req.params.engine === 'kvm' || req.params.engine === 'lxc' ? req.params.engine : null;
+        const refId = pInt(req.params.id);
+        if (!engine || !Number.isInteger(refId) || refId < 1) {
+          return res.status(400).json({ error: 'Valid engine (kvm|lxc) and a positive instance id are required.' });
+        }
+        await ctx.instanceManager.getAuthorizedInstance(req.principal!, engine, refId, true);
+        const rules = await ctx.networkManager.listInstanceFirewallRules(engine, refId);
+        res.json({ rules });
+      } catch (err: any) {
+        res.status(err.statusCode || 500).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/instances/:engine/:id/firewall-rules',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const engine = req.params.engine === 'kvm' || req.params.engine === 'lxc' ? req.params.engine : null;
+        const refId = pInt(req.params.id);
+        if (!engine || !Number.isInteger(refId) || refId < 1) {
+          return res.status(400).json({ error: 'Valid engine (kvm|lxc) and a positive instance id are required.' });
+        }
+        const rule = await ctx.networkManager.createFirewallRule({
+          ...req.body,
+          instanceType: engine,
+          instanceRefId: refId,
+        });
+        res.status(201).json({ rule });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
   // --- Scheduled Snapshot Policies ---
   router.get('/snapshot-schedules', async (req: Request, res: Response) => {
     try {

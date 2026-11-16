@@ -88,6 +88,7 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | GET/POST/DELETE | `/lxc/:id/files[/content]` | staff | Rootfs file read/write/delete (confined). |
 | POST | `/lxc/:id/clone` | staff | Stopped `lxc-copy` clone. |
 | POST | `/lxc/expirations/sweep` | admin/subadmin | Run the VPS expiration sweep: suspends expired LXC instances (auto-suspend enabled) through the normal lifecycle path and notifies owners. Also runs automatically every 5 minutes. |
+| GET/POST | `/instances/:engine/:id/firewall-rules` | staff / admin-subadmin | Per-VPS firewall policy: list (authorized) or create rules scoped to a KVM/LXC instance; enforced against the instance's IPs on the host. |
 
 ### Storage
 
@@ -106,7 +107,7 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | GET/POST | `/network/pools` | staff/admin | List/create IP network pools. Listing returns `pools` + `ips`. |
 | POST | `/network/pools/:id/ips` | admin | Add IPs to a pool. |
 | GET/POST/DELETE | `/network/ports[/:id]` | staff | Port forwards (NAT). |
-| GET/POST/DELETE | `/network/firewall[/:id]` | staff/admin | Node firewall rules. |
+| GET/POST/DELETE | `/network/firewall[/:id]` | staff/admin | Node firewall rules. Per-VPS rules (with `instanceType`/`instanceRefId`) are enforced against the instance's IPs on the host and report honest `applied`. |
 
 ### Backups & snapshots
 

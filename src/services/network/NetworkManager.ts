@@ -1,3 +1,4 @@
+import * as net from 'net';
 import { UnifiedDatabase } from '../../db/database';
 import { isBinaryAvailable, runAllowlistedCommand } from '../../node-agent/command-runner';
 import { SafeValidators } from '../../security/middleware';
@@ -464,6 +465,20 @@ export class NetworkManager {
     if (input.destPort && !/^\d{1,5}(:\d{1,5})?$/.test(input.destPort)) {
       throw new Error('Destination port must be a valid port or range (e.g. 443 or 8000:8010).');
     }
+    if (input.instanceType && input.instanceRefId !== undefined && input.instanceRefId !== null) {
+      const target = await this.db.get<any>(
+        `SELECT id, node_id FROM instances WHERE engine = ? AND ref_id = ?`,
+        [input.instanceType, Number(input.instanceRefId)]
+      );
+      if (!target) throw new Error('Target instance does not exist.');
+      // Per-VPS rules inherit the instance's node unless explicitly overridden.
+      if (input.nodeId === undefined || input.nodeId === null) {
+        input = { ...input, nodeId: Number(target.node_id || 1) };
+      }
+    }
+    if (input.nodeId === undefined || input.nodeId === null) {
+      throw new Error('nodeId is required.');
+    }
 
     const ins = await this.db.run(
       `INSERT INTO firewall_rules
@@ -483,8 +498,41 @@ export class NetworkManager {
       ]
     );
     const created = await this.db.get<any>(`SELECT * FROM firewall_rules WHERE id = ?`, [ins.lastID]);
-    await this.applyFirewallRuleForNode('add', created).catch(() => undefined);
-    return created;
+    // Enforcement is attempted immediately; the honest result (including a
+    // refused apply on hosts without iptables or with no resolvable instance
+    // IP) is reported to the caller. The rule row persists regardless so the
+    // policy can be applied later (e.g. after the host becomes reachable).
+    const applied = await this.applyFirewallRuleForNode('add', created).catch(() => false);
+    return { ...created, applied };
+  }
+
+  // Per-VPS rules: rules scoped to an instance (instance_type + instance_ref_id)
+  // are enforced against that instance's concrete IPs instead of node-wide.
+  public async listInstanceFirewallRules(instanceType: string, instanceRefId: number) {
+    return this.db.all<any>(
+      `SELECT f.*, n.name AS node_name FROM firewall_rules f
+       LEFT JOIN nodes n ON n.id = f.node_id
+       WHERE f.instance_type = ? AND f.instance_ref_id = ?
+       ORDER BY f.priority ASC, f.id ASC`,
+      [instanceType, instanceRefId]
+    );
+  }
+
+  private async resolveInstanceIps(instanceType: string, instanceRefId: number): Promise<string[]> {
+    const rows = await this.db.all<any>(
+      `SELECT ip_address AS ip FROM ip_allocations
+        WHERE instance_type = ? AND instance_ref_id = ? AND status != 'available' AND ip_address IS NOT NULL
+       UNION
+       SELECT primary_ip AS ip FROM instances
+        WHERE engine = ? AND ref_id = ? AND primary_ip IS NOT NULL`,
+      [instanceType, instanceRefId, instanceType, instanceRefId]
+    );
+    const ips = new Set<string>();
+    for (const row of rows) {
+      const ip = String(row.ip || '').trim();
+      if (net.isIP(ip)) ips.add(ip);
+    }
+    return [...ips];
   }
 
   public async deleteFirewallRule(ruleId: number): Promise<void> {
@@ -498,6 +546,13 @@ export class NetworkManager {
   private async applyFirewallRuleForNode(mode: 'add' | 'remove', rule: any): Promise<boolean> {
     if (!rule) return false;
     const nodeId = Number(rule.node_id || 1);
+    const instanceScoped = Boolean(rule.instance_type && rule.instance_ref_id);
+    // Per-VPS rules carry the instance's concrete IPs so enforcement is scoped
+    // to that VPS rather than applied node-wide.
+    const instanceIps = instanceScoped
+      ? await this.resolveInstanceIps(String(rule.instance_type), Number(rule.instance_ref_id))
+      : [];
+    if (instanceScoped && instanceIps.length === 0) return false;
     if (await this.isRemoteNode(nodeId)) {
       const node = await this.nodeManager!.getNodeById(nodeId);
       if (!node || node.status !== 'online') return false;
@@ -512,6 +567,7 @@ export class NetworkManager {
           protocol: rule.protocol,
           sourceCidr: rule.source_cidr || null,
           destPort: rule.dest_port || null,
+          ...(instanceScoped ? { instanceIps } : {}),
         },
         5000
       );
@@ -530,6 +586,14 @@ export class NetworkManager {
       args.push('--dport', String(rule.dest_port));
     }
     args.push('-j', String(rule.action || 'ACCEPT').toUpperCase());
+    if (instanceScoped) {
+      const ipFlag = direction === 'OUTPUT' ? '-s' : '-d';
+      for (const ip of instanceIps) {
+        const out = await runAllowlistedCommand('iptables', [...args, ipFlag, ip], { timeoutMs: 5000 });
+        if (out.exitCode !== 0) return false;
+      }
+      return true;
+    }
     const out = await runAllowlistedCommand('iptables', args, { timeoutMs: 5000 });
     return out.exitCode === 0;
   }

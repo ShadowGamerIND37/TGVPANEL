@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import http from 'http';
 import https from 'https';
+import net from 'net';
 import path from 'path';
 import dotenv from 'dotenv';
 import express from 'express';
@@ -836,6 +837,17 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
       const protocol = String(req.body?.protocol || 'tcp').toLowerCase();
       const sourceCidr = req.body?.sourceCidr ? String(req.body.sourceCidr).trim() : '';
       const destPort = req.body?.destPort ? String(req.body.destPort).trim() : '';
+      // Optional per-VPS scoping: the panel resolves the target instance's
+      // IPs and the agent applies the rule against each one explicitly.
+      const rawIps = Array.isArray(req.body?.instanceIps) ? req.body.instanceIps : [];
+      const instanceIps: string[] = [];
+      for (const raw of rawIps) {
+        const ip = String(raw || '').trim();
+        if (!net.isIP(ip)) {
+          return res.status(400).json({ error: `Invalid instance IP: ${ip}` });
+        }
+        instanceIps.push(ip);
+      }
 
       if (!['ACCEPT', 'DROP', 'REJECT'].includes(action)) {
         return res.status(400).json({ error: 'Invalid firewall action.' });
@@ -865,13 +877,18 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
         args.push('--dport', destPort);
       }
       args.push('-j', action);
-
-      const fwRes = await runAllowlistedCommand('iptables', args, {
-        asRoot: true,
-        timeoutMs: 5000,
-      });
-      if (fwRes.exitCode !== 0) {
-        return res.json({ applied: false });
+      const ipFlag = direction === 'OUTPUT' ? '-s' : '-d';
+      const targets: string[][] = instanceIps.length
+        ? instanceIps.map((ip) => [...args, ipFlag, ip])
+        : [args];
+      for (const target of targets) {
+        const fwRes = await runAllowlistedCommand('iptables', target, {
+          asRoot: true,
+          timeoutMs: 5000,
+        });
+        if (fwRes.exitCode !== 0) {
+          return res.json({ applied: false });
+        }
       }
       return res.json({ applied: true });
     } catch (err: any) {
