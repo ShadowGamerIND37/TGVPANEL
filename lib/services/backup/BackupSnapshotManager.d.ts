@@ -5,7 +5,32 @@ export declare class BackupSnapshotManager {
     private db;
     private nodeManager;
     private virt;
+    private scheduleTimer;
+    private scheduleBootTimer;
+    private isRunningSchedules;
     constructor(db: UnifiedDatabase, nodeManager: NodeManager, virt: VirtualizationManager);
+    private nextRunAt;
+    startScheduleLoop(intervalMs?: number): void;
+    stopScheduleLoop(): void;
+    listBackupSchedules(filter?: {
+        engine?: 'kvm' | 'lxc';
+        refId?: number;
+    }): Promise<any[]>;
+    upsertBackupSchedule(params: {
+        engine: 'kvm' | 'lxc';
+        refId: number;
+        frequency: 'hourly' | 'daily' | 'weekly';
+        retentionCount: number;
+        actorId: number;
+        ownerUserId: number;
+    }): Promise<any>;
+    deleteBackupSchedule(engine: 'kvm' | 'lxc', refId: number, actorId: number): Promise<void>;
+    /** Execute due schedules once; each schedule is claimed transactionally to avoid duplicate runs. */
+    runDueBackupSchedules(): Promise<{
+        processed: number;
+        succeeded: number;
+        failed: number;
+    }>;
     listSnapshots(engine: 'kvm' | 'lxc', refId: number): Promise<any[]>;
     createSnapshot(params: {
         engine: 'kvm' | 'lxc';

@@ -167,7 +167,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
-    await runStep('T01: Transactional SQLite backup & migrations v001..v014 preserve legacy data & cascade VM FKs', async () => {
+    await runStep('T01: Transactional SQLite backup & migrations v001..v015 preserve legacy data & cascade VM FKs', async () => {
       const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
       const v2Raw = new sqlite3.Database(v2ScratchPath);
       const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
@@ -190,7 +190,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       `);
 
       const migRes = await runMigrations(v2Db);
-      assert.ok(migRes.applied.length >= 14, 'Expected v001..v014 migrations to apply');
+      assert.ok(migRes.applied.length >= 15, 'Expected v001..v015 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
 
       // Verify v009 upgraded vm_logs & vm_snapshots to ON DELETE CASCADE while preserving rows,
@@ -228,13 +228,15 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         CREATE TABLE settings (setting_key TEXT PRIMARY KEY, setting_value TEXT, updated_at DATETIME);
         INSERT INTO settings (setting_key, setting_value) VALUES ('panel_title', 'Acme Compute');
         INSERT INTO settings (setting_key, setting_value) VALUES ('panel_version', 'Canary');
+        CREATE TABLE backup_schedules (id INTEGER PRIMARY KEY, enabled INTEGER, frequency TEXT, retention_count INTEGER, next_run TEXT);
+        CREATE TABLE container_backups (id INTEGER PRIMARY KEY, schedule_id INTEGER, is_scheduled INTEGER);
         CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP);
       `);
-      for (let version = 1; version <= 13; version += 1) {
+      for (let version = 1; version <= 14; version += 1) {
         await customSettingsDb.run(`INSERT INTO schema_migrations (version, name, checksum) VALUES (?, ?, ?)`, [version, `fixture_${version}`, 'fixture']);
       }
       const v4SettingsMigration = await runMigrations(customSettingsDb);
-      assert.ok(v4SettingsMigration.applied.includes('v014_tgvpanel_v4_release_version_defaults'));
+      assert.ok(v4SettingsMigration.applied.includes('v015_scheduled_backup_status_and_retention_metadata'));
       assert.strictEqual((await customSettingsDb.get(`SELECT setting_value FROM settings WHERE setting_key = 'panel_title'`)).setting_value, 'Acme Compute');
       assert.strictEqual((await customSettingsDb.get(`SELECT setting_value FROM settings WHERE setting_key = 'panel_version'`)).setting_value, 'Canary');
       await customSettingsDb.close();
@@ -1606,6 +1608,64 @@ exec "$@"
         'Regression guard: .lxc-tab.active must not use white --accent-primary background'
       );
       assert.ok(detailPage.text.includes('id="pane-resources"'), 'Staff resize pane rendered');
+    });
+
+    await runStep('T31: Scheduled LXC backups run on due time, verify SHA-256, retain latest N, notify owner, and preserve manual backups', async () => {
+      const manualBefore = await ctx.db.get(`SELECT COUNT(*) AS count FROM container_backups WHERE instance_type = 'lxc' AND instance_ref_id = ? AND COALESCE(is_scheduled, 0) = 0`, [e2eUbuntuId]);
+      const invalid = await adminClient.request('PUT', `/api/v1/backup-schedules/lxc/${e2eUbuntuId}`, {
+        frequency: 'daily', retentionCount: 366,
+      });
+      assert.strictEqual(invalid.status, 400, 'Out-of-range retention should be rejected');
+
+      const configured = await adminClient.request('PUT', `/api/v1/backup-schedules/lxc/${e2eUbuntuId}`, {
+        frequency: 'daily', retentionCount: 1,
+      });
+      assert.strictEqual(configured.status, 200, `Schedule setup failed: ${configured.text}`);
+      assert.strictEqual(configured.json.schedule.last_status, 'scheduled');
+      const scheduleList = await adminClient.request('GET', `/api/v1/backup-schedules?engine=lxc&refId=${e2eUbuntuId}`);
+      assert.strictEqual(scheduleList.status, 200);
+      assert.strictEqual(scheduleList.json.schedules.length, 1);
+      const nonOwner = new SessionClient(baseUrl);
+      const nonOwnerLogin = await nonOwner.request('POST', '/api/login', { username: 'bob_user', password: 'BobPass!123' });
+      assert.strictEqual(nonOwnerLogin.status, 200);
+      const nonOwnerSchedule = await nonOwner.request('GET', `/api/v1/backup-schedules?engine=lxc&refId=${e2eUbuntuId}`);
+      assert.strictEqual(nonOwnerSchedule.status, 403, 'Non-owners cannot view/manage a backup schedule');
+      const backupAdminPage = await adminClient.request('GET', '/admin/backups');
+      assert.strictEqual(backupAdminPage.status, 200);
+      assert.ok(backupAdminPage.text.includes('Automated Backup Schedule'), 'Admin backups page should render schedule controls');
+
+      for (let run = 0; run < 3; run += 1) {
+        await ctx.db.run(`UPDATE backup_schedules SET next_run = datetime('now', '-1 minute') WHERE id = ?`, [configured.json.schedule.id]);
+        const result = await ctx.backupManager.runDueBackupSchedules();
+        assert.deepStrictEqual(result, { processed: 1, succeeded: 1, failed: 0 }, `Scheduled backup run ${run + 1} did not succeed`);
+      }
+      const completedSchedule = await ctx.db.get(`SELECT * FROM backup_schedules WHERE id = ?`, [configured.json.schedule.id]);
+      assert.strictEqual(completedSchedule.last_status, 'success');
+      assert.ok(completedSchedule.last_backup_id > 0);
+      assert.ok(completedSchedule.next_run > completedSchedule.last_run, 'Next scheduled run must advance');
+
+      const retained = await ctx.db.all(`SELECT * FROM container_backups WHERE schedule_id = ? AND is_scheduled = 1`, [configured.json.schedule.id]);
+      assert.strictEqual(retained.length, 1, 'Retention should keep exactly one scheduled backup');
+      const integrity = await ctx.backupManager.verifyBackupIntegrity(retained[0].id);
+      assert.strictEqual(integrity.valid, true, 'Retained scheduled archive must verify by SHA-256');
+      const manualAfter = await ctx.db.get(`SELECT COUNT(*) AS count FROM container_backups WHERE instance_type = 'lxc' AND instance_ref_id = ? AND COALESCE(is_scheduled, 0) = 0`, [e2eUbuntuId]);
+      assert.strictEqual(manualAfter.count, manualBefore.count, 'Scheduled retention must never prune manual backups');
+      const ownerNotices = await ctx.db.get(`SELECT COUNT(*) AS count FROM notifications WHERE user_id = 1 AND title = 'Scheduled backup completed'`);
+      assert.ok(ownerNotices.count >= 3, 'Each verified schedule run should notify the owner');
+
+      const removed = await adminClient.request('DELETE', `/api/v1/backup-schedules/lxc/${e2eUbuntuId}`);
+      assert.strictEqual(removed.status, 200);
+      await ctx.backupManager.deleteBackup(retained[0].id);
+
+      const orphan = await ctx.db.run(
+        `INSERT INTO backup_schedules (instance_type, instance_ref_id, enabled, frequency, retention_count, next_run, created_by, owner_user_id)
+         VALUES ('lxc', 999999, 1, 'daily', 1, datetime('now', '-1 minute'), 1, 1)`
+      );
+      const orphanRun = await ctx.backupManager.runDueBackupSchedules();
+      assert.deepStrictEqual(orphanRun, { processed: 1, succeeded: 0, failed: 1 });
+      const orphanStatus = await ctx.db.get(`SELECT enabled, last_status FROM backup_schedules WHERE id = ?`, [orphan.lastID]);
+      assert.strictEqual(orphanStatus.enabled, 0, 'Deleted/missing instance schedules should be disabled');
+      assert.strictEqual(orphanStatus.last_status, 'orphaned');
     });
 
     // 15. LXC Snapshots, SHA-256 Archive Backup + Clean Restore, 7-Stage Offline Migration (+ Rollback) & Local/Remote WebSocket PTY Console
@@ -4122,6 +4182,7 @@ fi
     if (agentServer) await new Promise((r) => agentServer.close(() => r()));
     if (app && app.getHkvmV3Context()) {
       app.getHkvmV3Context().monitoringService.stopBackgroundLoop();
+      app.getHkvmV3Context().backupManager.stopScheduleLoop();
       await app.getHkvmV3Context().db.close().catch(() => {});
     }
     if (app && app.server) {
