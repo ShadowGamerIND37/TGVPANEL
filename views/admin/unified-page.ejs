@@ -2152,6 +2152,13 @@
         </div>
       </div>
       <div class="v3-card">
+        <h3>Reseller HMAC API Keys</h3>
+        <p style="color:var(--text-muted);font-size:12px;">Inspect metadata and disable or revoke reseller credentials. API keys and signing secrets are never returned here.</p>
+        <div class="v3-table-wrap" style="margin-top:14px;">
+          <table class="v3-table"><thead><tr><th>Reseller</th><th>Key</th><th>Name</th><th>Permissions</th><th>Rate/min</th><th>Last Used</th><th>State</th><th>Controls</th></tr></thead><tbody id="resellerApiKeysBody"></tbody></table>
+        </div>
+      </div>
+      <div class="v3-card">
         <h3>Outbound HMAC-SHA256 Webhooks</h3>
         <form onsubmit="submitWebhook(event)" class="v3-form-grid">
           <div class="v3-field"><label>Name</label><input id="whName" required placeholder="Ops Pager"></div>
@@ -2561,13 +2568,13 @@
               <h3 class="st-panel-title">Installation &amp; Runtime Footprint</h3>
               <p class="st-panel-sub">Live verified telemetry from this Controller instance.</p>
             </div>
-            <span class="st-tag cyan"><%= ls.schemaVersion || 'v015' %> Schema</span>
+            <span class="st-tag cyan"><%= ls.schemaVersion || 'v018' %> Schema</span>
           </div>
           <div class="st-panel-body">
             <div class="lic-kv-list">
               <div class="lic-kv-row"><span class="lic-kv-k">Control Plane Edition</span><span class="lic-kv-v">TGVPANEL V4 Unified</span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Cryptographic Vault</span><span class="lic-kv-v" style="color:#34d399;">AES-256-GCM Active</span></div>
-              <div class="lic-kv-row"><span class="lic-kv-k">Database Schema</span><span class="lic-kv-v">SQLite WAL • <%= ls.schemaVersion || 'v015' %></span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Database Schema</span><span class="lic-kv-v">SQLite WAL • <%= ls.schemaVersion || 'v018' %></span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Node.js Runtime</span><span class="lic-kv-v"><%= ls.nodeJsVersion || process.version %> (<%= ls.platformArch || process.platform %>)</span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Controller Uptime</span><span class="lic-kv-v"><%= uptimeHuman %></span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Configured Storage Pools</span><span class="lic-kv-v"><%= ls.poolsCount ?? 0 %> Pools</span></div>
@@ -2590,7 +2597,7 @@
               controlPlane: 'TGVPANEL V4.0',
               engines: ['qemu-kvm', 'lxc'],
               limits: { maxNodes: 'unlimited', maxInstances: 'unlimited', apiV1: true },
-              schema: ls.schemaVersion || 'v015'
+              schema: ls.schemaVersion || 'v018'
             }, null, 2) %></div>
           </div>
         </div>
@@ -5266,20 +5273,42 @@ async function delAlert(id) {
 }
 
 async function loadApiKeysAndWebhooks() {
-  const [kData, wData] = await Promise.all([
+  const [kData, wData, resellerData] = await Promise.all([
     hkvmApi('/api/v1/api-keys?all=1'),
-    hkvmApi('/api/v1/webhooks')
+    hkvmApi('/api/v1/webhooks'),
+    hkvmApi('/api/v1/reseller/admin/api-keys')
   ]);
   document.getElementById('akBody').innerHTML = kData.apiKeys.map(k => `<tr>
     <td><code>${hkvmEsc(k.key_prefix)}...</code></td><td><strong>${hkvmEsc(k.name)}</strong></td>
     <td><code>${hkvmEsc(k.permissions)}</code></td><td>${hkvmEsc(k.last_used_at || 'Never')}</td>
     <td>${hkvmEsc(k.created_at)}</td><td><button class="btn btn-outline" onclick="delApiKey(${k.id})">Revoke</button></td>
   </tr>`).join('');
+  document.getElementById('resellerApiKeysBody').innerHTML = resellerData.apiKeys.length ? resellerData.apiKeys.map(k => `<tr>
+    <td>${hkvmEsc(k.username || '#' + k.userId)}</td><td><code>${hkvmEsc(k.keyPrefix)}…</code></td>
+    <td>${hkvmEsc(k.name)}</td><td><code>${hkvmEsc(Array.isArray(k.permissions) ? k.permissions.join(', ') : k.permissions)}</code></td>
+    <td>${hkvmEsc(k.rateLimitPerMinute)}</td><td>${hkvmEsc(k.lastUsedAt || 'Never')}</td>
+    <td>${k.isActive ? 'Enabled' : 'Disabled'}</td><td class="v3-btn-row">
+      ${k.isActive ? `<button class="btn btn-outline" onclick="adminDisableResellerKey(${k.id})">Disable</button>` : ''}
+      <button class="btn btn-outline" style="color:#ef4444;" onclick="adminRevokeResellerKey(${k.id})">Revoke</button>
+    </td>
+  </tr>`).join('') : '<tr><td colspan="8" style="color:var(--text-muted);">No reseller API keys exist.</td></tr>';
   document.getElementById('whBody').innerHTML = wData.webhooks.map(w => `<tr>
     <td><strong>${hkvmEsc(w.name)}</strong></td><td><code>${hkvmEsc(w.url)}</code></td>
     <td><code>${hkvmEsc(w.events)}</code></td><td>${w.last_status_code || '-'}</td>
     <td><button class="btn btn-outline" onclick="delWebhook(${w.id})">Delete</button></td>
   </tr>`).join('');
+}
+
+async function adminDisableResellerKey(id) {
+  if (!confirm('Disable reseller API key #' + id + '? It will stop authenticating immediately.')) return;
+  await hkvmApi(`/api/v1/reseller/admin/api-keys/${id}/disable`, { method: 'POST' });
+  await loadApiKeysAndWebhooks();
+}
+
+async function adminRevokeResellerKey(id) {
+  if (!confirm('Permanently revoke reseller API key #' + id + '? This cannot be undone.')) return;
+  await hkvmApi(`/api/v1/reseller/admin/api-keys/${id}`, { method: 'DELETE' });
+  await loadApiKeysAndWebhooks();
 }
 
 async function submitApiKey(e) {

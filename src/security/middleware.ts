@@ -9,10 +9,11 @@ import {
 export interface AuthenticatedPrincipal {
   userId: number;
   username: string;
-  role: 'admin' | 'subadmin' | 'operator' | 'user' | 'readonly';
+  role: 'admin' | 'subadmin' | 'operator' | 'user' | 'readonly' | 'reseller';
   viaApiKey?: boolean;
   apiKeyId?: number;
   apiPermissions?: string[];
+  apiScopeType?: 'reseller';
   impersonatedBy?: number;
 }
 
@@ -112,7 +113,7 @@ export function verifyCsrfMiddleware(req: Request, res: Response, next: NextFunc
   }
 
   // API key authenticated calls do not rely on ambient browser cookies
-  if (req.headers.authorization?.startsWith('Bearer ') || req.headers['x-api-key']) {
+  if (req.headers.authorization?.startsWith('Bearer ') || req.headers['x-api-key'] || req.headers['x-tgv-api-key']) {
     return next();
   }
 
@@ -266,7 +267,7 @@ export function createUnifiedAuthMiddleware(db: UnifiedDatabase) {
 
 export function normalizeRole(
   role?: string | null
-): 'admin' | 'subadmin' | 'operator' | 'user' | 'readonly' {
+): 'admin' | 'subadmin' | 'operator' | 'user' | 'readonly' | 'reseller' {
   switch ((role || '').toLowerCase()) {
     case 'admin':
       return 'admin';
@@ -276,6 +277,8 @@ export function normalizeRole(
       return 'operator';
     case 'readonly':
       return 'readonly';
+    case 'reseller':
+      return 'reseller';
     default:
       return 'user';
   }
@@ -293,7 +296,7 @@ export function requirePrincipal(req: Request, res: Response, next: NextFunction
   }
 
   // Enforce API key scope on mutations
-  if (req.principal.viaApiKey && req.method !== 'GET' && req.method !== 'HEAD') {
+  if (req.principal.viaApiKey && req.principal.apiScopeType !== 'reseller' && req.method !== 'GET' && req.method !== 'HEAD') {
     const perms = req.principal.apiPermissions || [];
     if (!perms.includes('write') && !perms.includes('admin') && !perms.includes('*')) {
       return res.status(403).json({ error: 'API key lacks write permission' });
@@ -308,7 +311,7 @@ export function requirePrincipal(req: Request, res: Response, next: NextFunction
 }
 
 export function requireRole(
-  allowedRoles: Array<'admin' | 'subadmin' | 'operator' | 'user' | 'readonly'>
+  allowedRoles: Array<'admin' | 'subadmin' | 'operator' | 'user' | 'readonly' | 'reseller'>
 ) {
   return (req: Request, res: Response, next: NextFunction) => {
     const isApiReq =

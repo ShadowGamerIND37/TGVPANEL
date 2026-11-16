@@ -3,10 +3,11 @@ import { UnifiedDatabase } from '../db/database';
 export interface AuthenticatedPrincipal {
     userId: number;
     username: string;
-    role: 'admin' | 'subadmin' | 'operator' | 'user' | 'readonly';
+    role: 'admin' | 'subadmin' | 'operator' | 'user' | 'readonly' | 'reseller';
     viaApiKey?: boolean;
     apiKeyId?: number;
     apiPermissions?: string[];
+    apiScopeType?: 'reseller';
     impersonatedBy?: number;
 }
 declare global {
@@ -41,9 +42,9 @@ export declare function verifyCsrfMiddleware(req: Request, res: Response, next: 
  * Resolves either an active Express session OR a scoped API key (`Authorization: Bearer <key>` / `X-API-Key`).
  */
 export declare function createUnifiedAuthMiddleware(db: UnifiedDatabase): (req: Request, res: Response, next: NextFunction) => Promise<void | Response<any, Record<string, any>>>;
-export declare function normalizeRole(role?: string | null): 'admin' | 'subadmin' | 'operator' | 'user' | 'readonly';
+export declare function normalizeRole(role?: string | null): 'admin' | 'subadmin' | 'operator' | 'user' | 'readonly' | 'reseller';
 export declare function requirePrincipal(req: Request, res: Response, next: NextFunction): void | Response<any, Record<string, any>>;
-export declare function requireRole(allowedRoles: Array<'admin' | 'subadmin' | 'operator' | 'user' | 'readonly'>): (req: Request, res: Response, next: NextFunction) => void | Response<any, Record<string, any>>;
+export declare function requireRole(allowedRoles: Array<'admin' | 'subadmin' | 'operator' | 'user' | 'readonly' | 'reseller'>): (req: Request, res: Response, next: NextFunction) => void | Response<any, Record<string, any>>;
 /**
  * Strict input validators preventing shell metacharacters, path traversal, and invalid identifiers.
  */

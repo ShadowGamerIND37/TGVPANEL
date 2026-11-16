@@ -122,7 +122,7 @@
             </div>
             <div class="card-body">
               <label class="form-label">User Role</label>
-              <div class="radio-cards" style="grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div class="radio-cards" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;">
                 <div class="radio-card">
                   <input type="radio" name="role" id="roleUser" value="user" onchange="updatePreview()">
                   <label for="roleUser" class="radio-card-label">
@@ -147,6 +147,15 @@
                       • System settings<br>
                       • View all VMs & resources
                     </div>
+                  </label>
+                </div>
+                <div class="radio-card">
+                  <input type="radio" name="role" id="roleReseller" value="reseller" onchange="updatePreview()">
+                  <label for="roleReseller" class="radio-card-label">
+                    <div class="radio-card-icon"><i class="fas fa-store" style="color: #10B981; font-size: 20px;"></i></div>
+                    <div class="radio-card-title">Reseller</div>
+                    <div class="radio-card-desc">Tenant-scoped VPS automation</div>
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 8px; line-height: 1.4;">Own VPS records and HMAC API keys. Customer plans, quotas and billing are not enabled yet.</div>
                   </label>
                 </div>
               </div>
@@ -328,7 +337,7 @@ function updatePreview() {
 
   // Update user info
   document.getElementById('previewUsername').textContent = username;
-  document.getElementById('previewRole').textContent = role === 'admin' ? '🔑 Administrator' : '👤 Regular User';
+  document.getElementById('previewRole').textContent = role === 'admin' ? '🔑 Administrator' : role === 'reseller' ? '🏪 Reseller' : '👤 Regular User';
   document.getElementById('previewId').textContent = currentUser?.id || '-';
   
   // Format created date
