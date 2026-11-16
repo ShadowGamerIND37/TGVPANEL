@@ -207,9 +207,17 @@ export declare function readContainerCgroupResourceStats(containerName: string, 
     swapBytes: number | null;
     source: 'cgroup-v2' | 'cgroup-v1' | null;
 };
+export interface CloudflareTunnelStatus {
+    state: 'idle' | 'queued' | 'running' | 'ready' | 'failed';
+    step: string;
+    url: string;
+    setupLog: string;
+    tunnelLog: string;
+}
 export declare class LxcContainerManager {
     private lxcBaseDir;
     private inFlightCreations;
+    private inFlightCloudflareSetups;
     private prevCpuSamples;
     constructor(lxcBaseDir?: string);
     isCreationInFlight(containerName: string): boolean;
@@ -423,6 +431,12 @@ export declare class LxcContainerManager {
      * `pveversion`, `dpkg -l | grep proxmox`, `systemctl status pveproxy`, and `https://<ip>:8006`.
      */
     injectProxmoxLxcBootstrap(containerName: string, codename: string, gpgUrl?: string | null): Promise<void>;
+    /**
+     * Installs cloudflared in a Proxmox LXC and runs a persistent Quick Tunnel to :8006.
+     * The installer is fixed panel-owned code; no user-provided shell commands are accepted.
+     */
+    startProxmoxCloudflareTunnel(containerName: string): Promise<CloudflareTunnelStatus>;
+    getProxmoxCloudflareTunnelStatus(containerName: string): CloudflareTunnelStatus;
     getContainerProcesses(containerName: string): Promise<Array<{
         pid: string;
         user: string;

@@ -835,14 +835,36 @@
                 <p class="lxc-card-sub">This container boots as Debian, then installs Proxmox VE on first boot (5-15 min). <code>neofetch</code> shows Debian by design — verify PVE with <code>pveversion</code>.</p>
               </div>
             </div>
-            <div class="lxc-kv-list">
-              <div class="lxc-kv-row"><span class="lxc-kv-k">Base Image</span><span class="lxc-kv-v">Debian (LinuxContainers.org rootfs) + Proxmox VE on top</span></div>
-              <div class="lxc-kv-row"><span class="lxc-kv-k">Web Console</span><span class="lxc-kv-v"><code>https://<%= instance.primaryIp ? instance.primaryIp.split('/')[0] : '&lt;container-ip&gt;' %>:8006</code> (login: root)</span></div>
-              <div class="lxc-kv-row"><span class="lxc-kv-k">Install Log</span><span class="lxc-kv-v"><code>/var/log/proxmox-install.log</code> (Files tab &rarr; <code>/var/log/</code>)</span></div>
-              <div class="lxc-kv-row"><span class="lxc-kv-k">Status Check</span><span class="lxc-kv-v">Run <code>pve-status</code> or <code>pveversion</code> in the PTY console</span></div>
-              <div class="lxc-kv-row"><span class="lxc-kv-k">Retry Bootstrap</span><span class="lxc-kv-v"><code>systemctl restart tgvpanel-proxmox-setup.service</code></span></div>
+              <div class="lxc-kv-list">
+                <div class="lxc-kv-row"><span class="lxc-kv-k">Base Image</span><span class="lxc-kv-v">Debian (LinuxContainers.org rootfs) + Proxmox VE on top</span></div>
+                <div class="lxc-kv-row"><span class="lxc-kv-k">Web Console</span><span class="lxc-kv-v"><code>https://<%= instance.primaryIp ? instance.primaryIp.split('/')[0] : '&lt;container-ip&gt;' %>:8006</code> (login: root)</span></div>
+                <div class="lxc-kv-row"><span class="lxc-kv-k">Install Log</span><span class="lxc-kv-v"><code>/var/log/proxmox-install.log</code> (Files tab &rarr; <code>/var/log/</code>)</span></div>
+                <div class="lxc-kv-row"><span class="lxc-kv-k">Status Check</span><span class="lxc-kv-v">Run <code>pve-status</code> or <code>pveversion</code> in the PTY console</span></div>
+                <div class="lxc-kv-row"><span class="lxc-kv-k">Retry Bootstrap</span><span class="lxc-kv-v"><code>systemctl restart tgvpanel-proxmox-setup.service</code></span></div>
+              </div>
+              <div style="margin-top:18px;padding:14px;border:1px solid rgba(249,115,22,.28);border-radius:12px;background:rgba(249,115,22,.05);">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                  <div>
+                    <h4 style="margin:0 0 4px;color:#fbbf24;font-size:14px;">Cloudflare Quick Tunnel</h4>
+                    <p class="lxc-card-sub" style="margin:0;">Install <code>cloudflared</code> and create a temporary public URL for this Proxmox Web UI (:8006).</p>
+                  </div>
+                  <button type="button" id="btnCloudflareTunnel" class="lxc-btn lxc-btn-freeze" onclick="startCloudflareTunnel()">Install Cloudflare &amp; Start Tunnel</button>
+                </div>
+                <p style="margin:10px 0 0;color:var(--text-muted);font-size:11.5px;">Anyone with the generated URL can reach the Proxmox login page. The Quick Tunnel URL is temporary and may change after restart.</p>
+                <div id="cloudflareTunnelState" role="status" aria-live="polite" style="margin-top:10px;font-size:12px;color:var(--text-secondary);">Cloudflare tunnel has not been configured yet.</div>
+                <div id="cloudflareTunnelUrlWrap" style="display:none;margin-top:10px;padding:10px 12px;border-radius:9px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25);">
+                  <div style="font-size:11px;color:var(--text-muted);margin-bottom:5px;">Your Cloudflare Quick Tunnel URL</div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+                    <a id="cloudflareTunnelUrl" href="#" target="_blank" rel="noopener noreferrer" style="font-family:monospace;color:#34d399;word-break:break-all;"></a>
+                    <button type="button" class="lxc-chip-btn" onclick="copyText(document.getElementById('cloudflareTunnelUrl').textContent, 'Cloudflare URL copied')">Copy URL</button>
+                  </div>
+                </div>
+                <details id="cloudflareTunnelDetails" style="margin-top:10px;">
+                  <summary style="cursor:pointer;color:var(--text-muted);font-size:11.5px;">Live install output &amp; cloudflared log</summary>
+                  <pre id="cloudflareTunnelLog" style="max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:8px 0 0;padding:10px;border-radius:8px;background:#090b10;color:#cbd5e1;font:11px/1.5 ui-monospace,SFMono-Regular,monospace;"></pre>
+                </details>
+              </div>
             </div>
-          </div>
           <% } %>
 
           <% if (_cfg.notes && isStaff) { %>
@@ -1156,7 +1178,77 @@
 <script>
 const LXC_ID = <%= instance.refId %>;
 const DISK_QUOTA_GB = <%= Number(instance.diskGb || 20) %>;
+const IS_PROXMOX_LXC = <%= (_osRaw.includes('proxmox') || _osRaw.includes('pve')) ? 'true' : 'false' %>;
 let __lastResetPw = '';
+let __cloudflarePollTimer = null;
+
+function renderCloudflareTunnelStatus(status) {
+  const stateEl = document.getElementById('cloudflareTunnelState');
+  const logEl = document.getElementById('cloudflareTunnelLog');
+  const button = document.getElementById('btnCloudflareTunnel');
+  const urlWrap = document.getElementById('cloudflareTunnelUrlWrap');
+  const urlEl = document.getElementById('cloudflareTunnelUrl');
+  const logDetails = document.getElementById('cloudflareTunnelDetails');
+  if (!stateEl || !button) return;
+  const state = String(status?.state || 'idle');
+  stateEl.textContent = status?.step || 'Cloudflare tunnel has not been configured yet.';
+  stateEl.style.color = state === 'failed' ? '#f87171' : state === 'ready' ? '#34d399' : 'var(--text-secondary)';
+  button.disabled = state === 'queued' || state === 'running';
+  button.textContent = button.disabled ? 'Cloudflare setup running…' : state === 'ready' ? 'Restart Cloudflare Quick Tunnel' : 'Install Cloudflare & Start Tunnel';
+  if (logDetails && button.disabled) logDetails.open = true;
+  const tunnelUrl = String(status?.url || '');
+  if (/^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(tunnelUrl)) {
+    urlEl.href = tunnelUrl;
+    urlEl.textContent = tunnelUrl;
+    urlWrap.style.display = 'block';
+  } else {
+    urlWrap.style.display = 'none';
+    urlEl.removeAttribute('href');
+    urlEl.textContent = '';
+  }
+  if (logEl) {
+    const parts = [];
+    if (status?.setupLog) parts.push('=== Installer progress ===\n' + status.setupLog);
+    if (status?.tunnelLog) parts.push('=== cloudflared log (/root/cloudflared.log) ===\n' + status.tunnelLog);
+    logEl.textContent = parts.join('\n\n') || 'Waiting for installer output…';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+}
+
+async function pollCloudflareTunnel() {
+  try {
+    const status = await hkvmApi(`/api/v1/lxc/${LXC_ID}/cloudflare-tunnel`);
+    renderCloudflareTunnelStatus(status);
+    if (status.state === 'queued' || status.state === 'running') {
+      __cloudflarePollTimer = setTimeout(pollCloudflareTunnel, 1800);
+    }
+  } catch (e) {
+    const stateEl = document.getElementById('cloudflareTunnelState');
+    if (stateEl) stateEl.textContent = e.message || 'Unable to read Cloudflare tunnel status.';
+  }
+}
+
+async function startCloudflareTunnel() {
+  if (!IS_PROXMOX_LXC) return;
+  const button = document.getElementById('btnCloudflareTunnel');
+  if (button) button.disabled = true;
+  if (__cloudflarePollTimer) clearTimeout(__cloudflarePollTimer);
+  try {
+    const status = await hkvmApi(`/api/v1/lxc/${LXC_ID}/cloudflare-tunnel`, { method: 'POST', body: {} });
+    renderCloudflareTunnelStatus(status);
+    pollCloudflareTunnel();
+  } catch (e) {
+    if (button) button.disabled = false;
+    const stateEl = document.getElementById('cloudflareTunnelState');
+    if (stateEl) {
+      stateEl.textContent = e.message || 'Could not start Cloudflare tunnel setup.';
+      stateEl.style.color = '#f87171';
+    }
+    hkvmToast(e.message || 'Could not start Cloudflare tunnel setup.', 'error');
+  }
+}
+
+if (IS_PROXMOX_LXC) pollCloudflareTunnel();
 
 function switchPane(name, btn) {
   document.querySelectorAll('.lxc-pane').forEach(p => p.classList.remove('active'));

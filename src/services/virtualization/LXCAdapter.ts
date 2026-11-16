@@ -1166,6 +1166,43 @@ export class LXCAdapter implements VirtualizationAdapter {
     );
   }
 
+  private assertProxmoxLxcRow(row: any): void {
+    const osTemplate = String(row?.os_template || '').toLowerCase();
+    if (!osTemplate.includes('proxmox') && !osTemplate.includes('pve')) {
+      throw new Error('Cloudflare Quick Tunnel is only available for Proxmox LXC images.');
+    }
+  }
+
+  public async startProxmoxCloudflareTunnel(refId: number) {
+    const row = await this.getRawLxcRow(refId);
+    if (!row) throw new Error(`LXC container #${refId} not found.`);
+    this.assertProxmoxLxcRow(row);
+    if (row.is_local) {
+      return this.nodeManager.localRuntime.containerManager.startProxmoxCloudflareTunnel(row.container_name);
+    }
+    return this.nodeManager.requestRemoteNode(
+      row.node_id,
+      'POST',
+      `/api/v1/containers/${encodeURIComponent(row.container_name)}/cloudflare-tunnel`,
+      {},
+      20_000
+    );
+  }
+
+  public async getProxmoxCloudflareTunnelStatus(refId: number) {
+    const row = await this.getRawLxcRow(refId);
+    if (!row) throw new Error(`LXC container #${refId} not found.`);
+    this.assertProxmoxLxcRow(row);
+    if (row.is_local) {
+      return this.nodeManager.localRuntime.containerManager.getProxmoxCloudflareTunnelStatus(row.container_name);
+    }
+    return this.nodeManager.requestRemoteNode(
+      row.node_id,
+      'GET',
+      `/api/v1/containers/${encodeURIComponent(row.container_name)}/cloudflare-tunnel`
+    );
+  }
+
   public async getProcesses(refId: number) {
     const row = await this.getRawLxcRow(refId);
     if (!row) throw new Error(`LXC container #${refId} not found.`);
