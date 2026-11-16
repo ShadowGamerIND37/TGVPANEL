@@ -23,6 +23,15 @@ export declare class KVMAdapter implements VirtualizationAdapter {
     getCapabilityProfile(): InstanceCapabilityProfile;
     private resolveVmDiskPath;
     private parseDiskGb;
+    /**
+     * Reads honest disk-image statistics via `qemu-img info --output=json`:
+     * `virtual-size` (the image's virtual capacity) and `disk-size` (the actual
+     * bytes allocated on disk). This replaces a bare `statSync` image-file-size
+     * reading, which does not distinguish virtual capacity from allocated usage or
+     * disclose the image format. Returns null when qemu-img is unavailable or fails
+     * (callers fall back to the previous behavior).
+     */
+    private getDiskImageStats;
     private parseDiskSizeBytes;
     private mapRowToUnified;
     listInstances(filter?: {

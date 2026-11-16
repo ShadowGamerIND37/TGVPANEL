@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Phase 12 KVM telemetry: honest disk image stats (2026-10-30)
+
+- Corrected a KVM telemetry honesty gap: `KVMAdapter.getTelemetry` previously reported `diskUsedGb` as the raw disk-image **file size** (`fs.statSync`), which does not reflect the guest's actual disk usage or capacity. Added a `getDiskImageStats(diskPath)` helper that runs `qemu-img info --output=json` (read-only, no writes) and reads the honest `virtual-size` (guest disk capacity) and `disk-size` (allocated bytes on disk) plus the image `format`.
+- `getTelemetry` now sets `diskUsedGb` to the allocated `disk-size`, `diskTotalGb` to the `virtual-size`, and a new `diskFormat` field to the image format. When `qemu-img` is unavailable or the command fails, it falls back to the previous `statSync` image-file-size behavior so telemetry never breaks on hosts without the tool. This addresses the audit's "disk usage is image-file size" note for area N; LXC telemetry was already honest (`df`/`du`).
+- Added an optional `diskFormat?: string | null` field to the `InstanceTelemetry` interface in `VirtualizationAdapter.ts`.
+- T34 extends the mocked `qemu-img` runner to return `disk-size` and asserts that after a disk resize to 30G, KVM telemetry reports `diskFormat: 'qcow2'`, `diskTotalGb: 30`, and `diskUsedGb` equal to the reported allocated disk-size (proving it comes from `qemu-img` rather than the image file).
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 11 HVM import dry-run / preflight (2026-10-30)
 
 - Added a dry-run / preflight mode for HVM database import. `dryRunHvmImport(hkvmDb, hvmDbFilePath)` opens the source database READ-ONLY and validates what an import would do WITHOUT creating a backup or writing anything: required tables present (`users`, `nodes`, `vps`), per-table row counts, password-hash format coverage (bcrypt/pbkdf2/scrypt/unrecognized), and username/email collisions against the existing HKVM database. Returns a structured preflight report (`dryRun`, `sourceTables`, `counts`, `passwordHashFormats`, `existingUserCollisions`, `warnings`, `ready`).

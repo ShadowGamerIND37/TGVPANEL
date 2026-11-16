@@ -1543,9 +1543,13 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const fakeDisk = path.join(resizeRoot, 'disk.qcow2');
       fs.writeFileSync(fakeDisk, 'test image fixture');
       let virtualSizeBytes = 20 * 1024 ** 3;
+      // Honest allocated (on-disk) size reported by qemu-img; intentionally different
+      // from the tiny fixture file so telemetry tests prove diskUsedGb comes from
+      // qemu-img disk-size rather than a statSync of the image file.
+      let diskSizeBytes = 5 * 1024 ** 3;
       const fakeQemuRunner = async (_binary, args) => {
         if (args[0] === 'info') {
-          return { exitCode: 0, stdout: JSON.stringify({ format: 'qcow2', 'virtual-size': virtualSizeBytes }), stderr: '', timedOut: false, durationMs: 0 };
+          return { exitCode: 0, stdout: JSON.stringify({ format: 'qcow2', 'virtual-size': virtualSizeBytes, 'disk-size': diskSizeBytes }), stderr: '', timedOut: false, durationMs: 0 };
         }
         if (args[0] === 'resize') {
           virtualSizeBytes = Number(args[2]);
@@ -1696,6 +1700,15 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         assert.strictEqual(resizeResponse.json.diskSize, '30G');
         assert.strictEqual(resizeResponse.json.virtualSizeBytes, 30 * 1024 ** 3);
         assert.strictEqual(resizeResponse.json.guestFilesystemResizeRequired, true, 'Guest partition/filesystem expansion must be explicitly left to the guest');
+
+        // Phase 12: KVM telemetry must report honest qemu-img disk-image stats rather than the
+        // raw image-file size. After the resize to 30G, diskTotalGb must reflect the virtual
+        // size (30), diskUsedGb the qemu-img allocated disk-size (5), and diskFormat the format.
+        const kvmDiskTel = await ctx.instanceManager.virt.kvm.getTelemetry(vm.vm_id);
+        assert.strictEqual(kvmDiskTel.diskFormat, 'qcow2', 'KVM telemetry must report the qemu-img image format');
+        assert.strictEqual(kvmDiskTel.diskTotalGb, 30, `KVM diskTotalGb must reflect qemu-img virtual-size (expected 30), got ${kvmDiskTel.diskTotalGb}`);
+        assert.strictEqual(kvmDiskTel.diskUsedGb, Number((diskSizeBytes / 1024 ** 3).toFixed(2)), `KVM diskUsedGb must reflect qemu-img allocated disk-size (expected ${Number((diskSizeBytes / 1024 ** 3).toFixed(2))}), got ${kvmDiskTel.diskUsedGb}`);
+
         const shrinkResponse = await adminClient.request(
           'POST',
           `/api/v1/instances/kvm/${vm.vm_id}/disk/resize`,

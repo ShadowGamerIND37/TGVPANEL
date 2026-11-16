@@ -55,6 +55,8 @@ export interface InstanceTelemetry {
     ramPercent: number;
     diskUsedGb: number;
     diskTotalGb: number;
+    /** Disk image format (e.g. "qcow2", "raw") when measured; null when unavailable. */
+    diskFormat?: string | null;
     /** Null when the engine does not provide a measured counter (never substitute zero). */
     netRxBytes: number | null;
     netTxBytes: number | null;

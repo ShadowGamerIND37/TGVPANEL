@@ -76,6 +76,36 @@ export class KVMAdapter implements VirtualizationAdapter {
     return parseFloat(String(diskSizeVal || '20').replace(/[^0-9.]/g, '')) || 20;
   }
 
+  /**
+   * Reads honest disk-image statistics via `qemu-img info --output=json`:
+   * `virtual-size` (the image's virtual capacity) and `disk-size` (the actual
+   * bytes allocated on disk). This replaces a bare `statSync` image-file-size
+   * reading, which does not distinguish virtual capacity from allocated usage or
+   * disclose the image format. Returns null when qemu-img is unavailable or fails
+   * (callers fall back to the previous behavior).
+   */
+  private async getDiskImageStats(
+    diskPath: string
+  ): Promise<{ virtualSizeBytes: number; diskSizeBytes: number; format: string | null } | null> {
+    const info = await this.commandRunner('qemu-img', ['info', '--output=json', diskPath], {
+      timeoutMs: 30_000,
+    });
+    if (info.exitCode !== 0 || info.timedOut) return null;
+    try {
+      const parsed = JSON.parse(info.stdout);
+      const virtualSizeBytes = Number(parsed['virtual-size']);
+      const diskSizeBytes = Number(parsed['disk-size']);
+      if (!Number.isFinite(virtualSizeBytes) || !Number.isFinite(diskSizeBytes)) return null;
+      return {
+        virtualSizeBytes,
+        diskSizeBytes,
+        format: String(parsed.format || '').toLowerCase() || null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private parseDiskSizeBytes(value: string): number | null {
     const match = String(value || '').trim().match(/^(\d+(?:\.\d+)?)\s*(B|K|KB|KIB|M|MB|MIB|G|GB|GIB|T|TB|TIB)?$/i);
     if (!match) return null;
@@ -874,11 +904,22 @@ export class KVMAdapter implements VirtualizationAdapter {
 
     const diskPath = this.resolveVmDiskPath(vm);
     let diskUsedGb = 0;
+    let diskTotalGb = this.parseDiskGb(vm.disk_size);
+    let diskFormat: string | null = null;
     if (diskPath && fs.existsSync(diskPath)) {
-      try {
-        diskUsedGb = Number((fs.statSync(diskPath).size / 1024 ** 3).toFixed(2));
-      } catch {
-        diskUsedGb = 0;
+      // Honest disk stats via qemu-img: disk-size (actual allocated bytes) for
+      // diskUsedGb and virtual-size (capacity) for diskTotalGb, plus the format.
+      const stats = await this.getDiskImageStats(diskPath);
+      if (stats) {
+        diskUsedGb = Number((stats.diskSizeBytes / 1024 ** 3).toFixed(2));
+        diskTotalGb = Number((stats.virtualSizeBytes / 1024 ** 3).toFixed(2));
+        diskFormat = stats.format;
+      } else {
+        try {
+          diskUsedGb = Number((fs.statSync(diskPath).size / 1024 ** 3).toFixed(2));
+        } catch {
+          diskUsedGb = 0;
+        }
       }
     }
 
@@ -895,7 +936,8 @@ export class KVMAdapter implements VirtualizationAdapter {
       ramTotalMb,
       ramPercent: Number(Math.min(100, (ramUsedMb / ramTotalMb) * 100).toFixed(2)),
       diskUsedGb,
-      diskTotalGb: this.parseDiskGb(vm.disk_size),
+      diskTotalGb,
+      diskFormat,
       netRxBytes: null,
       netTxBytes: null,
       measuredAt: new Date().toISOString(),
