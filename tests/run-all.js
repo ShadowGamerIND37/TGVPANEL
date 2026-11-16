@@ -3949,6 +3949,25 @@ fi
       assert.ok(fs.existsSync(installerScript), 'Cloudflare setup must write its fixed installer script into the Proxmox rootfs');
       require('child_process').execFileSync('bash', ['-n', installerScript]);
 
+      // Exercise the same repo-disabling function against fixture sources (including both APT formats).
+      const generatedInstaller = fs.readFileSync(installerScript, 'utf8');
+      const disableFn = generatedInstaller.match(/^disable_enterprise_repositories\(\) \{[\s\S]*?^\}/m);
+      assert.ok(disableFn, 'Installer must include Proxmox Enterprise repo handling');
+      const aptFixtureDir = path.join(tmpRoot, 'cloudflare-apt-fixture');
+      const aptSourceDir = path.join(aptFixtureDir, 'sources.list.d');
+      fs.mkdirSync(aptSourceDir, { recursive: true });
+      const pveListPath = path.join(aptSourceDir, 'pve-enterprise.list');
+      const pveDeb822Path = path.join(aptSourceDir, 'pve-enterprise.sources');
+      fs.writeFileSync(pveListPath, 'deb https://enterprise.proxmox.com/debian/pve bookworm pve-enterprise\ndeb http://download.proxmox.com/debian/pve bookworm pve-no-subscription\n');
+      fs.writeFileSync(pveDeb822Path, 'Types: deb\nURIs: https://enterprise.proxmox.com/debian/pve\nSuites: bookworm\nComponents: pve-enterprise\n');
+      const repoTestScript = path.join(tmpRoot, 'cloudflare-repo-test.sh');
+      fs.writeFileSync(repoTestScript, disableFn[0].replace(/\/etc\/apt/g, aptFixtureDir) + '\ndisable_enterprise_repositories\n');
+      require('child_process').execFileSync('bash', [repoTestScript]);
+      assert.ok(fs.readFileSync(pveListPath, 'utf8').includes('# TGVPANEL disabled subscription-only repo'), 'Legacy PVE enterprise list entries must be disabled');
+      assert.ok(fs.readFileSync(pveDeb822Path, 'utf8').includes('Enabled: no'), 'DEB822 PVE enterprise source stanzas must be disabled');
+      assert.ok(fs.existsSync(pveListPath + '.tgvpanel.bak'), 'Original PVE enterprise list must be backed up');
+      assert.ok(fs.existsSync(pveDeb822Path + '.tgvpanel.bak'), 'Original DEB822 PVE enterprise source must be backed up');
+
       const status = cm.getProxmoxCloudflareTunnelStatus(fakeCtName);
       assert.strictEqual(status.state, 'ready');
       assert.strictEqual(status.url, 'https://sample-tunnel.trycloudflare.com');
@@ -3959,6 +3978,9 @@ fi
       for (const required of [
         'https://pkg.cloudflare.com/cloudflare-main.gpg',
         'https://pkg.cloudflare.com/cloudflared',
+        'disable_enterprise_repositories',
+        'enterprise.proxmox.com',
+        'Enabled: no',
         'apt-get install',
         'cloudflared tunnel --url https://localhost:8006 --no-tls-verify',
         'tgvpanel-cloudflared.service',
