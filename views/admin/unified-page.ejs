@@ -770,10 +770,10 @@
           <thead>
             <tr>
               <th><input type="checkbox" id="chkAll" onclick="document.querySelectorAll('.inst-chk').forEach(c=>c.checked=this.checked)"></th>
-              <th>Engine</th><th>Name</th><th>Owner</th><th>Node</th><th>Specs</th><th>IP</th><th>Status</th><th>Actions</th>
+              <th>Engine</th><th>Name</th><th>Owner</th><th>Node</th><th>Specs</th><th>IP</th><th>Status</th><th>Traffic</th><th>Actions</th>
             </tr>
           </thead>
-          <tbody id="instTableBody"><tr><td colspan="9">Loading instances...</td></tr></tbody>
+          <tbody id="instTableBody"><tr><td colspan="10">Loading instances...</td></tr></tbody>
         </table>
       </div>
       <% } %>
@@ -2755,6 +2755,31 @@ async function instAction(engine, id, action) {
   }
 }
 
+function formatTrafficBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let val = bytes;
+  let idx = 0;
+  while (val >= 1024 && idx < units.length - 1) { val /= 1024; idx++; }
+  return val.toFixed(idx === 0 ? 0 : 1) + ' ' + units[idx];
+}
+
+async function fillInstanceTraffic(tbody) {
+  const cells = [...tbody.querySelectorAll('.inst-traffic')];
+  await Promise.all(cells.map(async (cell) => {
+    const engine = cell.getAttribute('data-engine');
+    const ref = cell.getAttribute('data-ref');
+    try {
+      const data = await hkvmApi(`/api/v1/instances/${engine}/${ref}/traffic`);
+      const t = data.traffic;
+      cell.textContent = `↓${formatTrafficBytes(t.rxBytes)} ↑${formatTrafficBytes(t.txBytes)}`;
+      cell.title = `Cumulative since accounting started${t.lastSampledAt ? ' (last sampled ' + t.lastSampledAt + ')' : ''}`;
+    } catch (err) {
+      cell.textContent = '—';
+    }
+  }));
+}
+
 async function loadUnifiedInstances() {
   const engine = document.getElementById('instEngineFilter').value;
   const search = document.getElementById('instSearch').value;
@@ -2789,6 +2814,7 @@ async function loadUnifiedInstances() {
       <td>${i.cpuCores} vCPU • ${i.ramMb} MB • ${i.diskGb} GB</td>
       <td><code>${hkvmEsc(i.primaryIp || '-')}</code></td>
       <td><span class="v3-pill ${i.status}">${hkvmEsc(i.status)}</span></td>
+      <td class="inst-traffic" data-engine="${i.engine}" data-ref="${i.refId}" style="font-size:11px;color:var(--text-muted);">—</td>
       <td class="v3-btn-row">
         <a class="btn btn-primary" href="${manageHref}">Manage</a>
         <button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'start')" ${i.serviceLocked ? 'disabled title="Administrative service lock is active"' : ''}>Start</button>
@@ -2802,8 +2828,9 @@ async function loadUnifiedInstances() {
         <button class="btn btn-outline" style="color:#ef4444;" onclick="instAction('${i.engine}',${i.refId},'delete')">Delete</button>
       </td>
     </tr>`;
-  }).join('');
+  }).join('');  fillInstanceTraffic(tbody);
 }
+
 
 async function bulkSelected(action) {
   const targets = Array.from(document.querySelectorAll('.inst-chk:checked')).map(c => c.value);

@@ -47,6 +47,7 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | GET | `/instances/:engine/:id` | authenticated | Instance detail (`engine` = `kvm` | `lxc`). |
 | GET | `/instances/:engine/:id/tasks` | authenticated | Persisted task history for the instance. |
 | GET | `/instances/:engine/:id/telemetry` | authenticated | Live resource telemetry. KVM disk uses honest `qemu-img` stats; unavailable RX/TX return `null` (never fabricated). |
+| GET | `/instances/:engine/:id/traffic` | authenticated | Per-instance bandwidth accounting: cumulative measured rx/tx from the `instance_traffic` ledger (Phase 26) plus period usage computed from real `metrics_history` sample deltas. Optional `?hours=` (1–168, default 24). |
 | GET | `/instances/:engine/:id/metrics` | authenticated | Metrics history for the instance. |
 | POST | `/instances/:engine/:id/action` | authenticated | Lifecycle action (`start`, `stop`, `restart`, `shutdown`, `suspend`, `unsuspend`, `freeze`, `unfreeze`, `delete`, …). Opt-in `async: true` returns a durable task id. |
 | GET | `/tasks/:taskId` | authenticated | Fetch a task by id (ownership-checked). |

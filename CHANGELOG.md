@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Phase 26 per-instance bandwidth accounting (2026-10-30)
+
+- Added the missing bandwidth accounting: per-instance network traffic is now measured and accumulated. Migration **v028** adds the `instance_traffic` cumulative ledger (rx/tx totals + last counter readings).
+- `MonitoringService.accumulateInstanceTraffic()` reads each running instance's real network counters (via a new internal `InstanceManager.collectInstanceTelemetry`, never exposed to customer routes), establishes an honest baseline on first sample, accumulates only positive deltas (counter resets from reboot/rollover never inflate or deflate the ledger), and skips instances whose telemetry cannot be read — no fabricated traffic. Runs on a 5-minute background loop (`startTrafficLoop`/`stopTrafficLoop`, wired in `context.ts` alongside the monitoring/backup/expiration loops, honoring the same disable guard).
+- `GET /api/v1/instances/:engine/:id/traffic` (authorized) returns cumulative ledger totals plus measured period usage computed from real `metrics_history` sample deltas, with honest sample counts.
+- Admin instances table: new **Traffic** column showing cumulative ↓/↑ per instance.
+- T41: baseline semantics (first sample counts no usage), delta accumulation, counter-reset safety, ledger values via the API, period usage from seeded samples, and unknown-instance/invalid-engine rejection. Full suite: **41/41 acceptance suites passing**.
+
 ## Unreleased — Phase 25 reusable VPS firewall profiles (2026-10-30)
 
 - Added reusable per-VPS firewall rule profiles (security-group style), closing the audit's "per-VPS policy profiles NOT IMPLEMENTED" gap on top of Phase 24's instance-scoped enforcement. Migration **v027** adds `firewall_profiles` and `firewall_profile_rules` (ordered rules, cascade delete).

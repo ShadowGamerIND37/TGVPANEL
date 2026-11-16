@@ -1904,6 +1904,28 @@ export const MIGRATIONS: MigrationDefinition[] = [
       );
     },
   },
+  {
+    version: 28,
+    name: 'v028_instance_traffic',
+    up: async (db) => {
+      // Cumulative per-instance bandwidth ledger. A background loop reads each
+      // instance's real network counters and accumulates the delta since the
+      // last sample, so totals are measured traffic, not estimates.
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS instance_traffic (
+          instance_type TEXT NOT NULL,
+          instance_id INTEGER NOT NULL,
+          rx_bytes INTEGER NOT NULL DEFAULT 0,
+          tx_bytes INTEGER NOT NULL DEFAULT 0,
+          last_rx_bytes INTEGER,
+          last_tx_bytes INTEGER,
+          last_sampled_at DATETIME,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (instance_type, instance_id)
+        )`
+      );
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

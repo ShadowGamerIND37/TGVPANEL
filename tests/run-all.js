@@ -4304,6 +4304,106 @@ exec "$@"
       }
     });
 
+    // Phase 26: Per-instance bandwidth accounting — a cumulative traffic
+    // ledger fed by real telemetry counters (baseline first sample, delta
+    // accumulation, honest skips) exposed via API with measured period usage.
+    await runStep('T41: Per-instance bandwidth accounting ledger, API and honest period usage', async () => {
+      const lxcCreate = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 't41-traffic-ctr',
+        hostname: 't41-traffic-ctr.hkvm.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 5,
+        bridge: 'lxcbr0',
+        ipv4Address: '10.88.10.96/24',
+        ipv4Gateway: '10.88.10.1',
+        autostart: true,
+        nesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(lxcCreate.status, 201, `LXC provisioning failed: ${lxcCreate.text}`);
+      const lxcId = lxcCreate.json.instance.refId;
+
+      // Deterministic telemetry: controlled counters for our instance, skip
+      // every other instance (their telemetry collection is not under test).
+      const im = ctx.instanceManager;
+      const origCollect = im.collectInstanceTelemetry;
+      let counters = { rx: 1000, tx: 500 };
+      im.collectInstanceTelemetry = async (engine, refId) => {
+        if (engine === 'lxc' && Number(refId) === lxcId) {
+          return { netRxBytes: counters.rx, netTxBytes: counters.tx };
+        }
+        throw new Error('not under test');
+      };
+
+      try {
+        // First accumulation establishes the baseline: no usage counted yet.
+        const acc1 = await ctx.monitoringService.accumulateInstanceTraffic();
+        assert.ok(acc1.sampled >= 1, 'At least the test instance must be sampled');
+        const ledger1 = await ctx.db.get(
+          `SELECT rx_bytes, tx_bytes, last_rx_bytes, last_tx_bytes FROM instance_traffic
+           WHERE instance_type = 'lxc' AND instance_id = ?`,
+          [lxcId]
+        );
+        assert.ok(ledger1, 'Ledger row must exist after accumulation');
+        assert.strictEqual(Number(ledger1.rx_bytes), 0, 'First sample must be a baseline (no usage counted)');
+        assert.strictEqual(Number(ledger1.tx_bytes), 0, 'First sample must be a baseline (no usage counted)');
+        assert.strictEqual(Number(ledger1.last_rx_bytes), 1000, 'Baseline must record the counter reading');
+
+        // Second accumulation with increased counters adds only the delta.
+        counters = { rx: 1500, tx: 800 };
+        await ctx.monitoringService.accumulateInstanceTraffic();
+        const ledger2 = await ctx.db.get(
+          `SELECT rx_bytes, tx_bytes FROM instance_traffic WHERE instance_type = 'lxc' AND instance_id = ?`,
+          [lxcId]
+        );
+        assert.strictEqual(Number(ledger2.rx_bytes), 500, 'Ledger must accumulate the rx delta');
+        assert.strictEqual(Number(ledger2.tx_bytes), 300, 'Ledger must accumulate the tx delta');
+
+        // Counter reset (lower reading) must not reduce the ledger.
+        counters = { rx: 100, tx: 50 };
+        await ctx.monitoringService.accumulateInstanceTraffic();
+        const ledger3 = await ctx.db.get(
+          `SELECT rx_bytes, tx_bytes FROM instance_traffic WHERE instance_type = 'lxc' AND instance_id = ?`,
+          [lxcId]
+        );
+        assert.strictEqual(Number(ledger3.rx_bytes), 500, 'Counter reset must not reduce cumulative rx');
+        assert.strictEqual(Number(ledger3.tx_bytes), 300, 'Counter reset must not reduce cumulative tx');
+
+        // Seed real metrics_history samples and verify the API reports honest
+        // cumulative totals plus measured period usage from sample deltas.
+        await ctx.db.run(
+          `INSERT INTO metrics_history
+             (target_type, target_id, cpu_percent, ram_used_mb, ram_total_mb, disk_used_gb, disk_total_gb, net_rx_bytes, net_tx_bytes, load_avg_1)
+           VALUES ('lxc', ?, 1, 1, 1, 1, 1, 200, 100, 0),
+                  ('lxc', ?, 1, 1, 1, 1, 1, 500, 260, 0)`,
+          [lxcId, lxcId]
+        );
+        const trafficRes = await adminClient.request('GET', `/api/v1/instances/lxc/${lxcId}/traffic`);
+        assert.strictEqual(trafficRes.status, 200, `Traffic API failed: ${trafficRes.text}`);
+        const traffic = trafficRes.json.traffic;
+        assert.strictEqual(Number(traffic.rxBytes), 500, 'API must report cumulative rx from the ledger');
+        assert.strictEqual(Number(traffic.txBytes), 300, 'API must report cumulative tx from the ledger');
+        assert.strictEqual(Number(traffic.periodRxBytes), 300, 'Period rx must be the sum of positive sample deltas');
+        assert.strictEqual(Number(traffic.periodTxBytes), 160, 'Period tx must be the sum of positive sample deltas');
+        assert.strictEqual(Number(traffic.sampleCount), 2, 'API must report the sample count');
+
+        // Honest validation: unknown instance and invalid engine rejected.
+        const badTraffic = await adminClient.request('GET', '/api/v1/instances/lxc/999999/traffic');
+        assert.notStrictEqual(badTraffic.status, 200, 'Unknown instance traffic must not succeed');
+        const badEngine = await adminClient.request('GET', `/api/v1/instances/xyz/${lxcId}/traffic`);
+        assert.strictEqual(badEngine.status, 400, `Invalid engine must be rejected: ${badEngine.text}`);
+      } finally {
+        im.collectInstanceTelemetry = origCollect;
+        await ctx.db.run(`DELETE FROM instance_traffic WHERE instance_type = 'lxc' AND instance_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM metrics_history WHERE target_type = 'lxc' AND target_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [lxcId]).catch(() => undefined);
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

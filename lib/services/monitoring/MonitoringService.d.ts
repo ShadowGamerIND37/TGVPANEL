@@ -11,6 +11,7 @@ export declare class MonitoringService {
     private instanceManager;
     private pollTimer;
     private isPolling;
+    private trafficTimer;
     constructor(db: UnifiedDatabase, nodeManager: NodeManager, instanceManager: InstanceManager);
     startBackgroundLoop(intervalMs?: number): void;
     stopBackgroundLoop(): void;
@@ -31,6 +32,33 @@ export declare class MonitoringService {
         netRxBytes: number | null;
         netTxBytes: number | null;
     }): Promise<void>;
+    /**
+     * Reads every instance's real network counters and accumulates the delta
+     * since the last sample into the instance_traffic ledger. Instances whose
+     * telemetry cannot be read are skipped (their ledger keeps its last value)
+     * so accounting never fabricates traffic.
+     */
+    accumulateInstanceTraffic(): Promise<{
+        sampled: number;
+        skipped: number;
+    }>;
+    /**
+     * Cumulative bandwidth totals from the ledger plus measured period usage
+     * computed from real metrics_history samples (delta between consecutive
+     * samples; honest nulls where no samples exist).
+     */
+    getInstanceTraffic(engine: 'kvm' | 'lxc', refId: number, hours?: number): Promise<{
+        rxBytes: number;
+        txBytes: number;
+        lastSampledAt: any;
+        updatedAt: any;
+        periodHours: number;
+        periodRxBytes: number;
+        periodTxBytes: number;
+        sampleCount: number;
+    }>;
+    startTrafficLoop(intervalMs?: number): void;
+    stopTrafficLoop(): void;
     private evaluateAlertRules;
     createNotification(input: {
         userId: number;

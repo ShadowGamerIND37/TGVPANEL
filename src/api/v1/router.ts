@@ -655,6 +655,20 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   });
 
+  router.get('/instances/:engine/:id/traffic', async (req: Request, res: Response) => {
+    try {
+      const engine = pStr(req.params.engine) as VirtualizationEngine;
+      const refId = pInt(req.params.id);
+      if (engine !== 'kvm' && engine !== 'lxc') return res.status(400).json({ error: 'Unsupported instance engine.' });
+      await ctx.instanceManager.getAuthorizedInstance(req.principal!, engine, refId, true);
+      const hours = req.query.hours === undefined ? 24 : Number(req.query.hours);
+      const traffic = await ctx.monitoringService.getInstanceTraffic(engine, refId, hours);
+      res.json({ traffic });
+    } catch (err: any) {
+      res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
   router.get('/instances/:engine/:id/telemetry', async (req: Request, res: Response) => {
     try {
       const engine = pStr(req.params.engine) as VirtualizationEngine;
