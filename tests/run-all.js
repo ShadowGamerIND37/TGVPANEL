@@ -2012,6 +2012,22 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         comment: 'Allow Panel HTTP',
       });
       assert.strictEqual(fwRes.status, 201, `Firewall rule failed: ${fwRes.text}`);
+
+      // Phase 14: ISO library inventory must report honest file size and SHA-256 checksum.
+      const isoDir = path.join(os.homedir(), 'vms', 'iso');
+      fs.mkdirSync(isoDir, { recursive: true });
+      const testIsoName = `tgvpanel-phase14-test-${Date.now()}.iso`;
+      const testIsoPath = path.join(isoDir, testIsoName);
+      const isoContent = 'TGVPANEL-ISO-TEST-CONTENT-1234567890';
+      fs.writeFileSync(testIsoPath, isoContent);
+      const expectedSha = crypto.createHash('sha256').update(isoContent).digest('hex');
+      const isoInv = await adminClient.request('GET', '/api/v1/iso/inventory');
+      assert.strictEqual(isoInv.status, 200, `ISO inventory failed: ${isoInv.text}`);
+      const isoEntry = isoInv.json.isoFiles.find((f) => f.filename === testIsoName);
+      assert.ok(isoEntry, `Expected ${testIsoName} in ISO inventory`);
+      assert.strictEqual(isoEntry.sizeBytes, Buffer.byteLength(isoContent), `ISO sizeBytes must reflect the real file size, got ${isoEntry.sizeBytes}`);
+      assert.strictEqual(isoEntry.sha256, expectedSha, 'ISO sha256 must reflect the real file checksum');
+      try { fs.unlinkSync(testIsoPath); } catch { /* cleanup best effort */ }
     });
 
     // 12. Backups SHA-256, Monitoring, Alerts, Audit Logs & Impersonation

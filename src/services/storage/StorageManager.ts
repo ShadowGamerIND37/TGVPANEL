@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { UnifiedDatabase } from '../../db/database';
 import { NodeManager } from '../nodes/NodeClient';
@@ -184,6 +185,37 @@ export class StorageManager {
       throw new Error('Cannot delete a storage pool that still contains active volumes.');
     }
     await this.db.run(`DELETE FROM storage_pools WHERE id = ?`, [poolId]);
+  }
+
+  /**
+   * Lists the ISO images available in the managed ISO directory with honest
+   * file size and SHA-256 checksum. The checksum is computed from the real file
+   * contents (reusing the node-agent checksum helper) so operators can verify
+   * ISO integrity; it is null only when the checksum cannot be computed.
+   */
+  public async listIsoFiles(): Promise<Array<{ filename: string; sizeBytes: number; sha256: string | null }>> {
+    const isoDir = path.join(os.homedir(), 'vms', 'iso');
+    let files: string[];
+    try {
+      files = fs.readdirSync(isoDir).filter((f) => f.toLowerCase().endsWith('.iso'));
+    } catch {
+      return [];
+    }
+    const out: Array<{ filename: string; sizeBytes: number; sha256: string | null }> = [];
+    for (const file of files.sort()) {
+      const full = path.join(isoDir, file);
+      try {
+        const stat = fs.statSync(full);
+        if (!stat.isFile()) continue;
+        const sha256 = this.nodeManager?.localRuntime?.snapshotManager
+          ? await this.nodeManager.localRuntime.snapshotManager.computeFileSha256(full).catch(() => null)
+          : null;
+        out.push({ filename: file, sizeBytes: stat.size, sha256 });
+      } catch {
+        // Skip files that disappear or cannot be stat'ed between listing and inspection.
+      }
+    }
+    return out;
   }
 
   public async verifyCapacityAvailable(

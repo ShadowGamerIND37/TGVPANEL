@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 14 ISO library inventory: honest size + SHA-256 checksum (2026-10-30)
+
+- Added a unified ISO library inventory endpoint `GET /api/v1/iso/inventory` (admin/subadmin/operator) backed by `StorageManager.listIsoFiles()`. It scans the managed ISO directory (`~/vms/iso`) and returns each `.iso` file with its **honest file size** (`sizeBytes`) and **SHA-256 checksum** (`sha256`) computed from the real file contents via the node-agent checksum helper. The checksum is `null` only when it cannot be computed, never a fabricated value.
+- This addresses the audit's "ISO checksum policy... incomplete" gap for area H. The legacy `/api/iso-list` endpoint (bare filenames, consumed by the existing VM create/detail UI) is left unchanged for backward compatibility; the new endpoint provides the richer integrity/size inventory.
+- T10 creates a known ISO fixture and asserts the inventory returns the correct `sizeBytes` and a `sha256` matching the independently computed checksum, then cleans up.
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 13 KVM snapshots: honest sizing & consumption accounting (2026-10-30)
 
 - Corrected a KVM snapshot honesty gap: `KVMAdapter.createQcow2Snapshot` previously recorded `size_gb` as the raw disk-**image-file** size (`fs.statSync`), which does not reflect the snapshot's disk capacity or actual on-disk consumption. The method now uses the injected command runner (consistent with Phase 12) and calls `getDiskImageStats` to read honest `qemu-img` figures: `size_gb` is the snapshot disk's **virtual capacity** and a new **`allocated_gb`** records the actual **on-disk consumption**. It falls back to the previous image-file-size behavior (with `allocated_gb` null) only when `qemu-img` is unavailable, so snapshot creation never breaks on hosts without the tool.

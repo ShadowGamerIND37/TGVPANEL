@@ -22,6 +22,17 @@ export declare class StorageManager {
         overcommitRatio?: number;
     }): Promise<any>;
     deletePool(poolId: number): Promise<void>;
+    /**
+     * Lists the ISO images available in the managed ISO directory with honest
+     * file size and SHA-256 checksum. The checksum is computed from the real file
+     * contents (reusing the node-agent checksum helper) so operators can verify
+     * ISO integrity; it is null only when the checksum cannot be computed.
+     */
+    listIsoFiles(): Promise<Array<{
+        filename: string;
+        sizeBytes: number;
+        sha256: string | null;
+    }>>;
     verifyCapacityAvailable(nodeId: number, engine: 'kvm' | 'lxc', requestedGb: number): Promise<{
         ok: boolean;
         reason?: string;

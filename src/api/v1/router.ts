@@ -1895,6 +1895,20 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // --- ISO Library Inventory (honest size + SHA-256 checksum) ---
+  router.get(
+    '/iso/inventory',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      try {
+        const isoFiles = await ctx.storageManager.listIsoFiles();
+        res.json({ isoFiles });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
   // --- Networking, Port Forwarding & Firewall ---
   router.get(
     '/network/pools',
