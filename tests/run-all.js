@@ -3571,6 +3571,35 @@ exec "$@"
       );
       assert.strictEqual(staleCheck.status, 400, 'Post-backup stale file must be wiped by clean restore');
 
+      // Phase 20: restore from a recorded backup copy on the remote node — the panel
+      // must download + decrypt + verify the encrypted copy, then restore from it.
+      await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/files/content`, {
+        path: '/etc/app-version.txt',
+        content: 'corrupted-again\n',
+      });
+      const copyRestore = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${lxcBkpId}/restore`,
+        { copyId: bkpCopy.json.copy.copyId }
+      );
+      assert.strictEqual(copyRestore.status, 200, `Restore from copy failed: ${copyRestore.text}`);
+      assert.strictEqual(copyRestore.json.restored, true);
+      assert.strictEqual(copyRestore.json.sourceCopyId, bkpCopy.json.copy.copyId);
+      const copyAfterVer = await adminClient.request(
+        'GET',
+        `/api/v1/lxc/${e2eUbuntuId}/files/content?path=/etc/app-version.txt`
+      );
+      assert.strictEqual(copyAfterVer.json.content.trim(), 'release-v1.0-stable', 'Restore from copy must recover the backed-up content');
+
+      // Negative: a copy id that does not belong to this backup must be rejected.
+      const badCopyRestore = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${lxcBkpId}/restore`,
+        { copyId: 999999 }
+      );
+      assert.strictEqual(badCopyRestore.status, 400, `Unknown copy must be rejected: ${badCopyRestore.text}`);
+      assert.match(badCopyRestore.json.error, /copy not found/i);
+
       // 14c. Local WebSocket LXC PTY Console (/ws/lxc/:id/console) + Unauth Rejection
       await new Promise((resolve, reject) => {
         const unauthWs = new WebSocket(`ws://127.0.0.1:${TEST_PORT}/ws/lxc/${e2eCustomId}/console`);

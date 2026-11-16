@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Phase 20 restore from a backup copy (2026-10-30)
+
+- `BackupSnapshotManager.restoreBackup` now accepts an optional `copyId` and restores an LXC container from a specific recorded copy (`backup_copies`) instead of the primary archive — previously copies created by Phase 10 were write-only and could never serve a restore. The copy must belong to the requested backup and be `completed`; unknown or foreign copy ids are rejected with a 400.
+- The restore source is generalized to honor the copy's own node, path, `encrypted` flag, and checksum: encrypted copies are downloaded, decrypted at the panel, and **checksum-verified against the copy's recorded (decrypted-content) SHA-256 before the restore proceeds**; unencrypted copies keep the existing raw-file checksum path. This also fixes two latent encrypted-archive restore paths that previously would have sent encrypted bytes to a node agent that cannot decrypt them (cross-node restore of an encrypted archive, and same-node encrypted restore on a remote container).
+- The restore route `POST /api/v1/backups/:id/restore` accepts an optional positive-integer `copyId` in the body and returns the restored `sourceCopyId`; the audit log records which copy served the restore.
+- T14 (extended) corrupts the container content again, restores from the remote-node copy created earlier in the same suite, asserts the backup content is recovered and `sourceCopyId` is reported, and asserts an unknown copy id is rejected with a 400 — all against the real remote node agent.
+- Full suite: **35/35 acceptance suites passing**.
+
 ## Unreleased — Phase 19 storage orphan image detection (report-only) (2026-10-30)
 
 - Added report-only orphan image detection for storage (roadmap area B / "robust orphan reconciliation" gap): `StorageManager.listOrphanImages()` scans **local** pool directories for disk image files (`.qcow2`, `.qcow`, `.qcow3`, `.raw`, `.img`, `.vmdk`) and reports those not referenced by any live record — KVM VM primary disks (`vms.disk_file`), secondary disks (`extra_disks_json` paths), LXC container rootfs directories (`lxc_instances.rootfs_path`, so files inside them are not flagged), and LXC OS template files (`lxc_templates.file_path`).

@@ -2338,7 +2338,18 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         bkp.instance_type as VirtualizationEngine,
         Number(bkp.instance_ref_id)
       );
-      const out = await ctx.backupManager.restoreBackup(backupId, req.principal!.userId);
+      let copyId: number | undefined;
+      if (req.body?.copyId !== undefined) {
+        copyId = Number(req.body.copyId);
+        if (!Number.isInteger(copyId) || copyId <= 0) {
+          return res.status(400).json({ error: 'copyId must be a positive integer.' });
+        }
+      }
+      const out = await ctx.backupManager.restoreBackup(
+        backupId,
+        req.principal!.userId,
+        { copyId }
+      );
       return res.json({ success: true, ...out });
     } catch (err: any) {
       return res.status(err.statusCode || 500).json({ error: err.message });

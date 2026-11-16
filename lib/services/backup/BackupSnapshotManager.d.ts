@@ -139,9 +139,35 @@ export declare class BackupSnapshotManager {
     /** Computes the SHA-256 of a stored archive, decrypting encrypted archives first. */
     private computeStoredChecksum;
     listBackupCopies(backupId: number): Promise<any[]>;
-    restoreBackup(backupId: number, actorId?: number): Promise<{
+    /**
+     * Restores an LXC container from a backup archive. By default the primary
+     * archive (`container_backups.file_path`) is used; passing `options.copyId`
+     * restores from a specific recorded copy (`backup_copies`) instead — useful
+     * when the primary archive is unavailable but a verified copy exists on
+     * another node. Encrypted archives (primary or copy) are decrypted and
+     * checksum-verified at the panel before the restore, and the copy's own
+     * `encrypted`/`checksum_sha256` metadata is honored.
+     */
+    restoreBackup(backupId: number, actorId?: number, options?: {
+        copyId?: number;
+    }): Promise<{
         restored: boolean;
         status: string;
+        sourceCopyId: number | null;
     }>;
+    /** True when the given node id refers to the panel's local host. */
+    private isNodeLocal;
+    /**
+     * Reads a local archive as base64, decrypting encrypted archives to a confined
+     * temp file first and verifying the recovered content against the expected
+     * (decrypted-content) checksum.
+     */
+    private readPlaintextArchive;
+    /**
+     * Decrypts base64-encoded encrypted archive bytes to a confined temp file and
+     * verifies the recovered content against the expected checksum.
+     */
+    private decryptBase64Archive;
+    private verifyDecryptedChecksum;
     deleteBackup(backupId: number): Promise<void>;
 }

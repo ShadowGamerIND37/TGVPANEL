@@ -112,7 +112,7 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | Method | Path | Roles | Description |
 |---|---|---|---|
 | GET/POST | `/backups` | staff | List/create backups. |
-| POST | `/backups/:id/restore` | staff | Restore a backup. |
+| POST | `/backups/:id/restore` | staff | Restore a backup. Optional body `{ copyId }` (positive integer) restores from a recorded backup copy (`backup_copies`) instead of the primary archive; encrypted copies are decrypted and checksum-verified at the panel first. |
 | POST | `/backups/:id/rehearse` | staff | Restore rehearsal (dry-run pre-check; Phase 9). |
 | POST | `/backups/:id/copy` | admin/subadmin | Copy a backup to a destination node with integrity verification (Phase 10). |
 | GET | `/backups/:id/copies` | admin/subadmin | List cross-node backup copies. |

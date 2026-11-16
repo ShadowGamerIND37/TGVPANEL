@@ -1109,10 +1109,20 @@ export class BackupSnapshotManager {
     );
   }
 
+  /**
+   * Restores an LXC container from a backup archive. By default the primary
+   * archive (`container_backups.file_path`) is used; passing `options.copyId`
+   * restores from a specific recorded copy (`backup_copies`) instead — useful
+   * when the primary archive is unavailable but a verified copy exists on
+   * another node. Encrypted archives (primary or copy) are decrypted and
+   * checksum-verified at the panel before the restore, and the copy's own
+   * `encrypted`/`checksum_sha256` metadata is honored.
+   */
   public async restoreBackup(
     backupId: number,
-    actorId?: number
-  ): Promise<{ restored: boolean; status: string }> {
+    actorId?: number,
+    options?: { copyId?: number }
+  ): Promise<{ restored: boolean; status: string; sourceCopyId: number | null }> {
     const bkp = await this.getBackupRecord(backupId);
     if (!bkp) throw new Error('Backup record not found.');
 
@@ -1123,133 +1133,265 @@ export class BackupSnapshotManager {
     const row = await this.virt.lxc.getRawLxcRow(Number(bkp.instance_ref_id));
     if (!row) throw new Error(`LXC container #${bkp.instance_ref_id} not found.`);
 
+    // Optionally restore from a specific recorded copy instead of the primary archive.
+    let copy: any | null = null;
+    if (options?.copyId !== undefined) {
+      copy = await this.db.get<any>(
+        `SELECT * FROM backup_copies WHERE id = ? AND backup_id = ?`,
+        [options.copyId, backupId]
+      );
+      if (!copy) {
+        throw Object.assign(new Error('Backup copy not found for this backup.'), { statusCode: 400 });
+      }
+      if (copy.status !== 'completed') {
+        throw Object.assign(
+          new Error(`Backup copy is not completed (status: ${copy.status}).`),
+          { statusCode: 400 }
+        );
+      }
+    }
+
+    const sourceNodeId = copy ? Number(copy.target_node_id) : Number(bkp.node_id || 1);
+    const sourceFilePath = copy ? String(copy.file_path) : String(bkp.file_path);
+    const sourceEncrypted = copy
+      ? Number(copy.encrypted || 0) === 1
+      : Number(bkp.encrypted || 0) === 1;
+    const sourceChecksum = (copy?.checksum_sha256 || bkp.checksum_sha256) || undefined;
+    const backupName = copy
+      ? `${bkp.backup_name} (copy on node ${copy.target_node_id})`
+      : bkp.backup_name;
+
+    // Locality of the archive source node (copies carry their own target node).
+    const sourceIsLocal = copy
+      ? await this.isNodeLocal(sourceNodeId)
+      : Number(bkp.is_local || 0) === 1 || sourceNodeId === 1;
+
     const backupOnDifferentNode =
-      Boolean(bkp.node_id) && Number(bkp.node_id) !== Number(row.node_id);
+      Boolean(sourceNodeId) && sourceNodeId !== Number(row.node_id);
 
     let crossNodeBase64: string | null = null;
-    if (backupOnDifferentNode) {
-      if (Number(bkp.is_local || 0) === 1 || Number(bkp.node_id) === 1) {
-        if (!fs.existsSync(bkp.file_path)) {
-          throw new Error('Backup archive file no longer exists on source node.');
-        }
-        crossNodeBase64 = fs.readFileSync(bkp.file_path).toString('base64');
-      } else {
-        const dl = await this.nodeManager.requestRemoteNode<{
-          archiveBase64: string;
-          checksumSha256: string;
-        }>(
-          Number(bkp.node_id),
-          'POST',
-          '/api/v1/backups/download',
-          {
-            filePath: bkp.file_path,
-            expectedSha256: bkp.checksum_sha256 || undefined,
-          },
-          600_000
-        );
-        crossNodeBase64 = dl.archiveBase64;
+    let stagedTemp: string | null = null;
+    const cleanupStaged = () => {
+      if (stagedTemp && fs.existsSync(stagedTemp)) {
+        try { fs.unlinkSync(stagedTemp); } catch { /* ignore */ }
       }
-    }
+    };
 
-    let postState = 'stopped';
-    if (row.is_local) {
-      let localTargetFile = String(bkp.file_path);
-      let tempLocalFile: string | null = null;
-      if (crossNodeBase64) {
-        tempLocalFile = this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(
-          path.join(
-            this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
-            `crossnode_restore_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
-          )
-        );
-        fs.mkdirSync(path.dirname(tempLocalFile), { recursive: true });
-        fs.writeFileSync(tempLocalFile, Buffer.from(crossNodeBase64, 'base64'), { mode: 0o600 });
-        localTargetFile = tempLocalFile;
-      } else if (Number(bkp.encrypted || 0) === 1) {
-        // Encrypted local archive: decrypt to a confined temp file, then restore from it.
-        // The stored checksum verifies the recovered (decrypted) content.
-        tempLocalFile = this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(
-          path.join(
-            this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
-            `restore_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
-          )
-        );
-        decryptArchive(bkp.file_path, tempLocalFile);
-        localTargetFile = tempLocalFile;
-      }
-      try {
-        const before = await this.nodeManager.localRuntime.containerManager.inspectContainer(
-          row.container_name
-        );
-        const wasRunning = before.state === 'running' || before.state === 'frozen';
-        if (wasRunning) {
-          await this.nodeManager.localRuntime.containerManager.stopContainer(
-            row.container_name,
-            false
+    try {
+      if (backupOnDifferentNode) {
+        if (sourceIsLocal) {
+          if (!fs.existsSync(sourceFilePath)) {
+            throw new Error('Backup archive file no longer exists on source node.');
+          }
+          crossNodeBase64 = await this.readPlaintextArchive(
+            sourceFilePath,
+            sourceEncrypted,
+            sourceChecksum,
+            (p) => { stagedTemp = p; }
           );
+        } else {
+          const dl = await this.nodeManager.requestRemoteNode<{
+            archiveBase64: string;
+            checksumSha256: string;
+          }>(
+            sourceNodeId,
+            'POST',
+            '/api/v1/backups/download',
+            {
+              filePath: sourceFilePath,
+              // Encrypted archives are checksummed after local decryption, so the
+              // raw-file download check cannot be applied to them.
+              expectedSha256: sourceEncrypted ? undefined : sourceChecksum,
+            },
+            600_000
+          );
+          crossNodeBase64 = sourceEncrypted
+            ? await this.decryptBase64Archive(dl.archiveBase64, sourceChecksum, (p) => { stagedTemp = p; })
+            : dl.archiveBase64;
         }
-        await this.nodeManager.localRuntime.snapshotManager.restoreTarBackup(
-          localTargetFile,
-          bkp.checksum_sha256 || undefined,
-          row.container_name
-        );
-        if (wasRunning) {
-          await this.nodeManager.localRuntime.containerManager.startContainer(row.container_name);
+      }
+
+      let postState = 'stopped';
+      if (row.is_local) {
+        let localTargetFile = String(sourceFilePath);
+        let tempLocalFile: string | null = null;
+        if (crossNodeBase64) {
+          tempLocalFile = this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(
+            path.join(
+              this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
+              `crossnode_restore_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
+            )
+          );
+          fs.mkdirSync(path.dirname(tempLocalFile), { recursive: true });
+          fs.writeFileSync(tempLocalFile, Buffer.from(crossNodeBase64, 'base64'), { mode: 0o600 });
+          localTargetFile = tempLocalFile;
+        } else if (sourceEncrypted) {
+          // Encrypted local archive: decrypt to a confined temp file, then restore from it.
+          // The stored checksum verifies the recovered (decrypted) content.
+          tempLocalFile = this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(
+            path.join(
+              this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
+              `restore_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
+            )
+          );
+          decryptArchive(sourceFilePath, tempLocalFile);
+          localTargetFile = tempLocalFile;
         }
-        const after = await this.nodeManager.localRuntime.containerManager.inspectContainer(
-          row.container_name
-        );
-        postState = after.state === 'running' ? 'running' : 'stopped';
-      } finally {
-        if (tempLocalFile && fs.existsSync(tempLocalFile)) {
-          try {
-            fs.unlinkSync(tempLocalFile);
-          } catch {
-            // ignore
+        try {
+          const before = await this.nodeManager.localRuntime.containerManager.inspectContainer(
+            row.container_name
+          );
+          const wasRunning = before.state === 'running' || before.state === 'frozen';
+          if (wasRunning) {
+            await this.nodeManager.localRuntime.containerManager.stopContainer(
+              row.container_name,
+              false
+            );
+          }
+          await this.nodeManager.localRuntime.snapshotManager.restoreTarBackup(
+            localTargetFile,
+            sourceChecksum,
+            row.container_name
+          );
+          if (wasRunning) {
+            await this.nodeManager.localRuntime.containerManager.startContainer(row.container_name);
+          }
+          const after = await this.nodeManager.localRuntime.containerManager.inspectContainer(
+            row.container_name
+          );
+          postState = after.state === 'running' ? 'running' : 'stopped';
+        } finally {
+          if (tempLocalFile && fs.existsSync(tempLocalFile)) {
+            try {
+              fs.unlinkSync(tempLocalFile);
+            } catch {
+              // ignore
+            }
           }
         }
+      } else {
+        let restoreBody: Record<string, unknown>;
+        if (crossNodeBase64) {
+          restoreBody = {
+            archiveBase64: crossNodeBase64,
+            expectedSha256: sourceChecksum || undefined,
+          };
+        } else if (sourceEncrypted) {
+          // Same-node encrypted archive on a remote container: the agent cannot
+          // decrypt, so fetch + decrypt + verify locally, then send plaintext.
+          const dl = await this.nodeManager.requestRemoteNode<{ archiveBase64: string }>(
+            row.node_id,
+            'POST',
+            '/api/v1/backups/download',
+            { filePath: sourceFilePath, expectedSha256: undefined },
+            600_000
+          );
+          restoreBody = {
+            archiveBase64: await this.decryptBase64Archive(dl.archiveBase64, sourceChecksum, (p) => { stagedTemp = p; }),
+            expectedSha256: sourceChecksum || undefined,
+          };
+        } else {
+          restoreBody = {
+            filePath: sourceFilePath,
+            expectedSha256: sourceChecksum || undefined,
+          };
+        }
+        const resp = await this.nodeManager.requestRemoteNode<{
+          success: boolean;
+          container?: { state?: string };
+        }>(
+          row.node_id,
+          'POST',
+          `/api/v1/containers/${encodeURIComponent(row.container_name)}/backups/restore`,
+          restoreBody,
+          900_000
+        );
+        postState = resp.container?.state === 'running' ? 'running' : 'stopped';
       }
-    } else {
-      const resp = await this.nodeManager.requestRemoteNode<{
-        success: boolean;
-        container?: { state?: string };
-      }>(
-        row.node_id,
-        'POST',
-        `/api/v1/containers/${encodeURIComponent(row.container_name)}/backups/restore`,
-        crossNodeBase64
-          ? {
-              archiveBase64: crossNodeBase64,
-              expectedSha256: bkp.checksum_sha256 || undefined,
-            }
-          : {
-              filePath: bkp.file_path,
-              expectedSha256: bkp.checksum_sha256 || undefined,
-            },
-        900_000
+
+      await this.db.run(
+        `UPDATE lxc_instances SET status = ?, updated_at = datetime('now') WHERE id = ?`,
+        [postState, row.id]
       );
-      postState = resp.container?.state === 'running' ? 'running' : 'stopped';
+      await this.virt.lxc.syncRegistryRow(row.id);
+      await this.db.logActivity({
+        userId: actorId,
+        action: 'lxc_backup_restored',
+        resourceType: 'lxc',
+        resourceId: String(row.id),
+        details: {
+          backupId,
+          backupName,
+          checksumSha256: sourceChecksum,
+          sourceCopyId: copy ? Number(copy.id) : null,
+        },
+      });
+
+      return { restored: true, status: postState, sourceCopyId: copy ? Number(copy.id) : null };
+    } finally {
+      cleanupStaged();
     }
-
-    await this.db.run(
-      `UPDATE lxc_instances SET status = ?, updated_at = datetime('now') WHERE id = ?`,
-      [postState, row.id]
-    );
-    await this.virt.lxc.syncRegistryRow(row.id);
-    await this.db.logActivity({
-      userId: actorId,
-      action: 'lxc_backup_restored',
-      resourceType: 'lxc',
-      resourceId: String(row.id),
-      details: {
-        backupId,
-        backupName: bkp.backup_name,
-        checksumSha256: bkp.checksum_sha256,
-      },
-    });
-
-    return { restored: true, status: postState };
   }
+
+  /** True when the given node id refers to the panel's local host. */
+  private async isNodeLocal(nodeId: number): Promise<boolean> {
+    const node = await this.db.get<any>(`SELECT is_local FROM nodes WHERE id = ?`, [nodeId]);
+    return Number(node?.is_local || 0) === 1 || Number(nodeId) === 1;
+  }
+
+  /**
+   * Reads a local archive as base64, decrypting encrypted archives to a confined
+   * temp file first and verifying the recovered content against the expected
+   * (decrypted-content) checksum.
+   */
+  private async readPlaintextArchive(
+    filePath: string,
+    encrypted: boolean,
+    expectedSha256: string | undefined,
+    onTemp: (p: string) => void
+  ): Promise<string> {
+    if (!encrypted) return fs.readFileSync(filePath).toString('base64');
+    const tmp = path.join(
+      this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
+      `restore_src_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz`
+    );
+    this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(tmp);
+    decryptArchive(filePath, tmp);
+    onTemp(tmp);
+    await this.verifyDecryptedChecksum(tmp, expectedSha256);
+    return fs.readFileSync(tmp).toString('base64');
+  }
+
+  /**
+   * Decrypts base64-encoded encrypted archive bytes to a confined temp file and
+   * verifies the recovered content against the expected checksum.
+   */
+  private async decryptBase64Archive(
+    archiveBase64: string,
+    expectedSha256: string | undefined,
+    onTemp: (p: string) => void
+  ): Promise<string> {
+    const encTmp = path.join(
+      this.nodeManager.localRuntime.snapshotManager.getBackupDir(),
+      `restore_dl_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.tar.gz.enc`
+    );
+    this.nodeManager.localRuntime.snapshotManager.resolveConfinedBackupPath(encTmp);
+    fs.writeFileSync(encTmp, Buffer.from(archiveBase64, 'base64'), { mode: 0o600 });
+    const plain = `${encTmp}.plain`;
+    decryptArchive(encTmp, plain);
+    onTemp(plain);
+    await this.verifyDecryptedChecksum(plain, expectedSha256);
+    return fs.readFileSync(plain).toString('base64');
+  }
+
+  private async verifyDecryptedChecksum(filePath: string, expectedSha256: string | undefined): Promise<void> {
+    if (!expectedSha256) return;
+    const actual = await this.nodeManager.localRuntime.snapshotManager.computeFileSha256(filePath);
+    if (actual.toLowerCase() !== String(expectedSha256).toLowerCase()) {
+      throw new Error('Backup archive checksum mismatch after decryption.');
+    }
+  }
+
 
   public async deleteBackup(backupId: number): Promise<void> {
     const bkp = await this.getBackupRecord(backupId);
