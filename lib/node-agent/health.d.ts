@@ -11,7 +11,7 @@ export interface NodeHealthReport {
     capabilities: HostCapabilities;
     warnings: string[];
 }
-export declare const AGENT_VERSION = "3.0.0";
+export declare const AGENT_VERSION = "4.0.0";
 export declare function getNodeHealthReport(forceRefresh?: boolean, options?: {
     interactiveShellEnabled?: boolean;
 }): Promise<NodeHealthReport>;

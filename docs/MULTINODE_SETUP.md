@@ -325,7 +325,7 @@ sudo journalctl -u tgvpanel-node-agent.service -n 30 --no-pager
 
 Expected output:
 ```text
-[TGVPANEL Node Agent v3.0.0] Listening on 0.0.0.0:8443
+[TGVPANEL Node Agent v4.0.0] Listening on 0.0.0.0:8443
 ```
 
 *(For quick foreground testing before using `systemd`, you can also run `cd /opt/tgvpanel && sudo npm run start:agent`.)*

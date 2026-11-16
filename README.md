@@ -9,6 +9,7 @@ Multi-node · Secure by default · Pure Node.js + TypeScript
 ![Node.js](https://img.shields.io/badge/Node.js-TypeScript-3c873a?logo=node.js&logoColor=white)
 ![SQLite](https://img.shields.io/badge/DB-SQLite%20(WAL)-003b57?logo=sqlite&logoColor=white)
 ![Virtualization](https://img.shields.io/badge/QEMU%2FKVM-%2B%20LXC-orange)
+![Release](https://img.shields.io/badge/TGVPANEL-4.0.0-blue)
 
 [Quick Start](#quick-start) ·
 [Multi-Node Setup Guide](docs/MULTINODE_SETUP.md) ·
@@ -119,7 +120,7 @@ To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB
 ```bash
 npm install            # see note below if building offline
 npm run build          # compile src/**/*.ts -> lib/**/*.js
-npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v009
+npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v014
 npm start              # panel on 0.0.0.0:8080
 ```
 
@@ -215,7 +216,7 @@ TGVPANEL/
 ├── src/
 │   ├── context.ts          # Runtime bootstrap, authenticated WS multiplexer
 │   ├── security/           # crypto-vault (.tgvpanel-secret, AES-GCM, TOTP, CSRF), RBAC middleware
-│   ├── db/                 # SQLite wrapper, migrations v001..v009, legacy DB importer, CLIs
+│   ├── db/                 # SQLite wrapper, migrations v001..v014, legacy DB importer, CLIs
 │   ├── node-agent/         # Standalone and local agent (auth, command runner, containers,
 │   │                       #   consoles, snapshots, transfers, health and host stats)
 │   ├── services/

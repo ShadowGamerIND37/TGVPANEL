@@ -479,7 +479,7 @@ export const MIGRATIONS: MigrationDefinition[] = [
           ram_total_mb INTEGER DEFAULT 0,
           disk_total_gb REAL DEFAULT 0,
           max_instances INTEGER DEFAULT 100,
-          agent_version TEXT DEFAULT '3.0.0',
+          agent_version TEXT DEFAULT '4.0.0',
           lxc_version TEXT,
           qemu_version TEXT,
           network_interfaces TEXT DEFAULT '[]',
@@ -1112,7 +1112,7 @@ export const MIGRATIONS: MigrationDefinition[] = [
 
       // 5. Ensure default unified settings exist without overwriting customized values
       const defaultV3Settings: Record<string, string> = {
-        panel_version: 'V3.0',
+        panel_version: 'V4.0',
         maintenance_mode: '0',
         maintenance_message: 'TGVPANEL is currently undergoing scheduled maintenance.',
         cpu_threshold: '90',
@@ -1611,6 +1611,25 @@ export const MIGRATIONS: MigrationDefinition[] = [
         `UPDATE lxc_templates
          SET description = 'Proxmox Virtual Environment 9 hypervisor container (Debian 13 Trixie base + first-boot PVE install, HTTPS Web UI on :8006; neofetch shows Debian by design).'
          WHERE template_key = 'proxmox-ve-9'`
+      );
+    },
+  },
+  {
+    version: 14,
+    name: 'v014_tgvpanel_v4_release_version_defaults',
+    up: async (db) => {
+      // Upgrade only panel-owned defaults; preserve operator-customized settings verbatim.
+      await db.run(
+        `UPDATE settings
+         SET setting_value = 'V4.0', updated_at = datetime('now')
+         WHERE setting_key = 'panel_version'
+           AND LOWER(TRIM(setting_value)) IN ('v3.0', '3.0', 'v3')`
+      );
+      await db.run(
+        `UPDATE settings
+         SET setting_value = 'TGVPANEL V4.0', updated_at = datetime('now')
+         WHERE setting_key = 'panel_title'
+           AND LOWER(TRIM(setting_value)) IN ('tgvpanel v3.0', 'tgvpanel v3', 'hkvm panel v2.0')`
       );
     },
   },

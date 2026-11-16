@@ -2253,7 +2253,7 @@
           <div class="nc-stat-card">
             <div class="nc-stat-top">
               <span class="nc-stat-label">Engine &amp; Policy Matrix</span>
-              <span class="v3-pill lxc" style="font-size:10px;padding:1px 7px;" id="ncAgentVer">v3.0</span>
+              <span class="v3-pill lxc" style="font-size:10px;padding:1px 7px;" id="ncAgentVer">v4.0</span>
             </div>
             <div class="nc-cap-grid">
               <div class="nc-cap-chip"><span>KVM /dev/kvm</span><span class="nc-dot off" id="ncCapKvm"></span></div>
@@ -2410,7 +2410,7 @@
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
           </span>
           <div>
-            <h2 class="st-hero-title">TGVPANEL V3 Edition &amp; License</h2>
+            <h2 class="st-hero-title">TGVPANEL V4 Edition &amp; License</h2>
             <p class="st-hero-sub">Self-hosted enterprise virtualization control plane — 100% unlocked with zero artificial node, VM, container, or API restrictions.</p>
           </div>
         </div>
@@ -2425,11 +2425,11 @@
           <div>
             <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:10px;">
               <span class="st-tag emerald"><span class="st-dot online" style="width:6px;height:6px;"></span> PERMANENTLY UNLOCKED</span>
-              <span class="st-tag cyan">V3.0 UNIFIED EDITION</span>
+              <span class="st-tag cyan">V4.0 UNIFIED EDITION</span>
               <span class="st-tag indigo">ZERO PHONE-HOME / 100% SELF-HOSTED</span>
             </div>
             <h3 style="margin:0;font-size:22px;font-weight:800;color:var(--text-primary);letter-spacing:-0.02em;">
-              <%= (licenseInfo && licenseInfo.edition) ? licenseInfo.edition : 'TGVPANEL V3 Free Unified Edition' %>
+              <%= (licenseInfo && licenseInfo.edition) ? licenseInfo.edition : 'TGVPANEL V4 Free Unified Edition' %>
             </h3>
             <p style="margin:7px 0 0;font-size:13.5px;color:var(--text-secondary);max-width:760px;line-height:1.55;">
               This TGVPANEL installation is permanently activated with full multi-node QEMU/KVM hardware virtualization, native Linux LXC system containers, 7-stage SHA-256 verified cross-node migrations, role-based access control, and REST API v1.
@@ -2529,13 +2529,13 @@
               <h3 class="st-panel-title">Installation &amp; Runtime Footprint</h3>
               <p class="st-panel-sub">Live verified telemetry from this Controller instance.</p>
             </div>
-            <span class="st-tag cyan"><%= ls.schemaVersion || 'v010' %> Schema</span>
+            <span class="st-tag cyan"><%= ls.schemaVersion || 'v014' %> Schema</span>
           </div>
           <div class="st-panel-body">
             <div class="lic-kv-list">
-              <div class="lic-kv-row"><span class="lic-kv-k">Control Plane Edition</span><span class="lic-kv-v">TGVPANEL V3 Unified</span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Control Plane Edition</span><span class="lic-kv-v">TGVPANEL V4 Unified</span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Cryptographic Vault</span><span class="lic-kv-v" style="color:#34d399;">AES-256-GCM Active</span></div>
-              <div class="lic-kv-row"><span class="lic-kv-k">Database Schema</span><span class="lic-kv-v">SQLite WAL • <%= ls.schemaVersion || 'v010' %></span></div>
+              <div class="lic-kv-row"><span class="lic-kv-k">Database Schema</span><span class="lic-kv-v">SQLite WAL • <%= ls.schemaVersion || 'v014' %></span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Node.js Runtime</span><span class="lic-kv-v"><%= ls.nodeJsVersion || process.version %> (<%= ls.platformArch || process.platform %>)</span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Controller Uptime</span><span class="lic-kv-v"><%= uptimeHuman %></span></div>
               <div class="lic-kv-row"><span class="lic-kv-k">Configured Storage Pools</span><span class="lic-kv-v"><%= ls.poolsCount ?? 0 %> Pools</span></div>
@@ -2555,10 +2555,10 @@
           <div class="st-panel-body">
             <div id="licenseJsonPre" class="v3-code" style="margin:0;max-height:260px;"><%= JSON.stringify({
               ...licenseInfo,
-              controlPlane: 'TGVPANEL V3.0',
+              controlPlane: 'TGVPANEL V4.0',
               engines: ['qemu-kvm', 'lxc'],
               limits: { maxNodes: 'unlimited', maxInstances: 'unlimited', apiV1: true },
-              schema: ls.schemaVersion || 'v010'
+              schema: ls.schemaVersion || 'v014'
             }, null, 2) %></div>
           </div>
         </div>

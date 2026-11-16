@@ -4,7 +4,7 @@ import { UnifiedDatabase } from '../../db/database';
 import { NodeManager } from '../nodes/NodeClient';
 
 /**
- * Unified Storage Pool & LXC OS Template Manager for TGVPANEL V3.
+ * Unified Storage Pool & LXC OS Template Manager for TGVPANEL V4.
  * Supports directory, RAW, QCOW2, LVM, ZFS, and Btrfs storage pools across both
  * local and remote Node Agents, plus centralized LXC OS template catalog management.
  */
