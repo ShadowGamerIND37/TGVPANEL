@@ -4176,6 +4176,134 @@ exec "$@"
       }
     });
 
+    // Phase 25: Reusable per-VPS firewall rule profiles — profiles hold an
+    // ordered rule set; applying a profile to an instance materializes
+    // instance-scoped firewall_rules rows enforced via the Phase 24 path.
+    await runStep('T40: Reusable VPS firewall profiles create, validate, apply and cascade', async () => {
+      // Create a profile with two rules.
+      const createRes = await adminClient.request(
+        'POST',
+        '/api/v1/network/firewall-profiles',
+        {
+          name: 't40-web-standard',
+          description: 'Standard web VPS policy',
+          rules: [
+            { direction: 'in', action: 'ACCEPT', protocol: 'tcp', destPort: '80', sourceCidr: '0.0.0.0/0' },
+            { direction: 'in', action: 'ACCEPT', protocol: 'tcp', destPort: '443', sourceCidr: '0.0.0.0/0' },
+          ],
+        },
+        { 'X-Forwarded-For': '198.51.100.60' }
+      );
+      assert.strictEqual(createRes.status, 201, `Profile creation failed: ${createRes.text}`);
+      const profile = createRes.json.profile;
+      assert.ok(profile.id, 'Profile must have an id');
+      assert.strictEqual(profile.rules.length, 2, 'Profile must persist both rules');
+
+      // Listing and detail expose the profile.
+      const listRes = await adminClient.request('GET', '/api/v1/network/firewall-profiles');
+      assert.strictEqual(listRes.status, 200, `Profile listing failed: ${listRes.text}`);
+      const listed = listRes.json.profiles.find((p) => p.id === profile.id);
+      assert.ok(listed, 'Profile must appear in listing');
+      assert.strictEqual(Number(listed.rule_count), 2, 'Listing must report rule count');
+      const detailRes = await adminClient.request('GET', `/api/v1/network/firewall-profiles/${profile.id}`);
+      assert.strictEqual(detailRes.status, 200, `Profile detail failed: ${detailRes.text}`);
+      assert.strictEqual(detailRes.json.profile.rules.length, 2, 'Detail must include rules');
+
+      // Validation: invalid rule input is rejected.
+      const badProfile = await adminClient.request(
+        'POST',
+        '/api/v1/network/firewall-profiles',
+        { name: 't40-bad', rules: [{ direction: 'sideways', action: 'ACCEPT', protocol: 'tcp' }] },
+        { 'X-Forwarded-For': '198.51.100.61' }
+      );
+      assert.strictEqual(badProfile.status, 400, `Invalid profile rule must be rejected: ${badProfile.text}`);
+
+      // Provision a local LXC to apply the profile to.
+      const lxcCreate = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 't40-fwprof-ctr',
+        hostname: 't40-fwprof-ctr.hkvm.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 5,
+        bridge: 'lxcbr0',
+        ipv4Address: '10.88.10.97/24',
+        ipv4Gateway: '10.88.10.1',
+        autostart: true,
+        nesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(lxcCreate.status, 201, `LXC provisioning failed: ${lxcCreate.text}`);
+      const lxcId = lxcCreate.json.instance.refId;
+
+      try {
+        // Apply the profile — both rules materialize as instance-scoped rules.
+        const applyRes = await adminClient.request(
+          'POST',
+          `/api/v1/network/firewall-profiles/${profile.id}/apply`,
+          { instanceType: 'lxc', instanceRefId: lxcId },
+          { 'X-Forwarded-For': '198.51.100.62' }
+        );
+        assert.strictEqual(applyRes.status, 200, `Profile apply failed: ${applyRes.text}`);
+        assert.strictEqual(applyRes.json.created.length, 2, 'Both profile rules must be materialized');
+        for (const created of applyRes.json.created) {
+          assert.ok(Number.isInteger(created.ruleId), 'Each applied rule must have a rule id');
+          assert.strictEqual(typeof created.applied, 'boolean', 'Enforcement result must be reported honestly');
+        }
+        const scopedRows = await ctx.db.all(
+          `SELECT id, instance_type, instance_ref_id, direction, action FROM firewall_rules
+           WHERE instance_type = 'lxc' AND instance_ref_id = ? ORDER BY id`,
+          [lxcId]
+        );
+        assert.strictEqual(scopedRows.length, 2, 'Instance must hold the two materialized rules');
+        assert.ok(scopedRows.every((r) => r.instance_type === 'lxc' && r.instance_ref_id === lxcId), 'Rules must be instance-scoped');
+
+        // Honest validation: unknown instance and unknown profile are rejected.
+        const badApply = await adminClient.request(
+          'POST',
+          `/api/v1/network/firewall-profiles/${profile.id}/apply`,
+          { instanceType: 'lxc', instanceRefId: 999999 },
+          { 'X-Forwarded-For': '198.51.100.63' }
+        );
+        assert.strictEqual(badApply.status, 400, `Apply to unknown instance must be rejected: ${badApply.text}`);
+        const badProfileApply = await adminClient.request(
+          'POST',
+          '/api/v1/network/firewall-profiles/999999/apply',
+          { instanceType: 'lxc', instanceRefId: lxcId },
+          { 'X-Forwarded-For': '198.51.100.64' }
+        );
+        assert.strictEqual(badProfileApply.status, 400, `Apply of unknown profile must be rejected: ${badProfileApply.text}`);
+
+        // Deleting the profile cascades to its rule definitions.
+        const delRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/network/firewall-profiles/${profile.id}`,
+          undefined,
+          { 'X-Forwarded-For': '198.51.100.65' }
+        );
+        assert.strictEqual(delRes.status, 200, `Profile deletion failed: ${delRes.text}`);
+        const afterDel = await adminClient.request('GET', '/api/v1/network/firewall-profiles');
+        assert.strictEqual(afterDel.status, 200, `Profile listing failed after delete: ${afterDel.text}`);
+        assert.ok(!afterDel.json.profiles.some((p) => p.id === profile.id), 'Deleted profile must not appear');
+        const orphanRules = await ctx.db.all(`SELECT id FROM firewall_profile_rules WHERE profile_id = ?`, [profile.id]);
+        assert.strictEqual(orphanRules.length, 0, 'Profile rules must cascade on delete');
+        // Materialized instance rules from the deleted profile remain enforced
+        // until explicitly removed (they are live host policy, not profile data).
+        const stillScoped = await ctx.db.all(
+          `SELECT id FROM firewall_rules WHERE instance_type = 'lxc' AND instance_ref_id = ?`,
+          [lxcId]
+        );
+        assert.strictEqual(stillScoped.length, 2, 'Materialized rules must persist after profile deletion');
+      } finally {
+        await ctx.db.run(`DELETE FROM firewall_rules WHERE instance_type = 'lxc' AND instance_ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM firewall_profile_rules WHERE profile_id = ?`, [profile.id]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM firewall_profiles WHERE id = ?`, [profile.id]).catch(() => undefined);
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

@@ -518,6 +518,142 @@ export class NetworkManager {
     );
   }
 
+  // --- Reusable per-VPS firewall rule profiles ---
+  public async listFirewallProfiles() {
+    const profiles = await this.db.all<any>(
+      `SELECT p.*, u.username AS created_by_name,
+              (SELECT COUNT(*) FROM firewall_profile_rules r WHERE r.profile_id = p.id) AS rule_count
+       FROM firewall_profiles p
+       LEFT JOIN users u ON u.id = p.created_by
+       ORDER BY p.id ASC`
+    );
+    return profiles;
+  }
+
+  public async getFirewallProfile(profileId: number) {
+    const profile = await this.db.get<any>(
+      `SELECT p.*, u.username AS created_by_name FROM firewall_profiles p
+       LEFT JOIN users u ON u.id = p.created_by WHERE p.id = ?`,
+      [profileId]
+    );
+    if (!profile) return null;
+    profile.rules = await this.db.all<any>(
+      `SELECT * FROM firewall_profile_rules WHERE profile_id = ? ORDER BY position ASC, id ASC`,
+      [profileId]
+    );
+    return profile;
+  }
+
+  private validateProfileRuleInput(rule: any, index: number): void {
+    const label = `Rule ${index + 1}`;
+    if (!['in', 'out'].includes(rule.direction)) throw new Error(`${label}: invalid direction.`);
+    if (!['ACCEPT', 'DROP', 'REJECT'].includes(rule.action)) throw new Error(`${label}: invalid action.`);
+    if (!['tcp', 'udp', 'icmp', 'all'].includes(rule.protocol)) throw new Error(`${label}: invalid protocol.`);
+    if (rule.destPort && !/^\d{1,5}(:\d{1,5})?$/.test(String(rule.destPort))) {
+      throw new Error(`${label}: destination port must be a valid port or range.`);
+    }
+    if (rule.sourceCidr && !/^[0-9a-fA-F.:/]+$/.test(String(rule.sourceCidr))) {
+      throw new Error(`${label}: invalid source CIDR.`);
+    }
+  }
+
+  public async createFirewallProfile(input: {
+    name: string;
+    description?: string | null;
+    createdBy?: number | null;
+    rules: Array<{
+      direction?: string;
+      action?: string;
+      protocol?: string;
+      sourceCidr?: string | null;
+      destPort?: string | null;
+      priority?: number;
+      comment?: string | null;
+    }>;
+  }) {
+    const name = String(input.name || '').trim();
+    if (!name || name.length > 100) throw new Error('Profile name is required (max 100 chars).');
+    const rules = Array.isArray(input.rules) ? input.rules : [];
+    rules.forEach((rule, i) => this.validateProfileRuleInput(rule, i));
+
+    const ins = await this.db.run(
+      `INSERT INTO firewall_profiles (name, description, created_by) VALUES (?, ?, ?)`,
+      [name, input.description?.slice(0, 500) || null, input.createdBy ?? null]
+    );
+    const profileId = Number(ins.lastID);
+    for (let i = 0; i < rules.length; i++) {
+      const rule = rules[i];
+      await this.db.run(
+        `INSERT INTO firewall_profile_rules
+           (profile_id, position, direction, action, protocol, source_cidr, dest_port, priority, comment)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          profileId,
+          i,
+          String(rule.direction || 'in'),
+          String(rule.action || 'ACCEPT'),
+          String(rule.protocol || 'tcp'),
+          rule.sourceCidr?.trim() || null,
+          rule.destPort?.trim() || null,
+          Number(rule.priority ?? 100),
+          rule.comment?.slice(0, 200) || null,
+        ]
+      );
+    }
+    return this.getFirewallProfile(profileId);
+  }
+
+  public async deleteFirewallProfile(profileId: number): Promise<void> {
+    await this.db.run(`DELETE FROM firewall_profile_rules WHERE profile_id = ?`, [profileId]);
+    await this.db.run(`DELETE FROM firewall_profiles WHERE id = ?`, [profileId]);
+  }
+
+  /**
+   * Materializes a profile's rules as instance-scoped firewall_rules rows for
+   * the given instance and enforces each through the normal (Phase 24) path.
+   * Returns the created rules with their honest enforcement results.
+   */
+  public async applyFirewallProfileToInstance(profileId: number, input: {
+    instanceType: string;
+    instanceRefId: number;
+    createdBy?: number | null;
+  }) {
+    const profile = await this.getFirewallProfile(profileId);
+    if (!profile) throw new Error('Firewall profile does not exist.');
+    const instanceType = input.instanceType === 'kvm' || input.instanceType === 'lxc' ? input.instanceType : null;
+    if (!instanceType) throw new Error('instanceType must be kvm or lxc.');
+    const refId = Number(input.instanceRefId);
+    if (!Number.isInteger(refId) || refId < 1) throw new Error('A positive instance id is required.');
+    const target = await this.db.get<any>(
+      `SELECT id, node_id FROM instances WHERE engine = ? AND ref_id = ?`,
+      [instanceType, refId]
+    );
+    if (!target) throw new Error('Target instance does not exist.');
+
+    const created: Array<{ ruleId: number; direction: string; action: string; applied: boolean }> = [];
+    for (const rule of profile.rules) {
+      const materialized = await this.createFirewallRule({
+        nodeId: Number(target.node_id || 1),
+        instanceType,
+        instanceRefId: refId,
+        direction: rule.direction,
+        action: rule.action,
+        protocol: rule.protocol,
+        sourceCidr: rule.source_cidr || null,
+        destPort: rule.dest_port || null,
+        priority: rule.priority,
+        comment: rule.comment || `From profile "${profile.name}"`,
+      });
+      created.push({
+        ruleId: Number(materialized.id),
+        direction: String(materialized.direction),
+        action: String(materialized.action),
+        applied: Boolean(materialized.applied),
+      });
+    }
+    return { profile: { id: profile.id, name: profile.name }, instanceType, instanceRefId: refId, created };
+  }
+
   private async resolveInstanceIps(instanceType: string, instanceRefId: number): Promise<string[]> {
     const rows = await this.db.all<any>(
       `SELECT ip_address AS ip FROM ip_allocations

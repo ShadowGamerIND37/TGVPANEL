@@ -1856,6 +1856,24 @@
           <tbody id="fwBody"></tbody>
         </table>
       </div>
+      <div class="v3-card">
+        <h3>Reusable VPS Firewall Profiles</h3>
+        <p style="margin:0 0 12px;color:var(--text-muted);font-size:12px;">Apply a profile to a VPS to materialize its rules as instance-scoped rules enforced against that VPS's IPs.</p>
+        <form onsubmit="submitFwProfile(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Profile Name</label><input id="fwpName" placeholder="web-standard"></div>
+          <div class="v3-field"><label>Description</label><input id="fwpDesc" placeholder="Optional"></div>
+          <div class="v3-field" style="grid-column:1/-1;"><label>Rules</label><div id="fwpRules"></div>
+            <button type="button" class="btn btn-outline" onclick="addFwProfileRule()" style="margin-top:8px;">+ Add rule</button>
+          </div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Profile</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Profile</th><th>Rules</th><th>Apply to VPS</th><th>Delete</th></tr></thead>
+          <tbody id="fwpBody"></tbody>
+        </table>
+      </div>
       <% } %>
 
       <!-- SECTION: SNAPSHOTS -->
@@ -2670,9 +2688,7 @@ async function manageKvmRescueIso(id) {
     }
     const isos = await hkvmApi('/api/iso-list');
     if (!Array.isArray(isos) || !isos.length) return hkvmToast('No managed ISO files found. Upload a bootable rescue ISO to ~/vms/iso first.', 'warning');
-    const filename = prompt(`Choose an ISO filename from the managed list:
-${isos.join('
-')}`);
+    const filename = prompt(`Choose an ISO filename from the managed list:\n${isos.join('\n')}`);
     if (!filename || !isos.includes(filename.trim())) return;
     if (!confirm('This configures the operator-supplied ISO for the next boot. Rescue software and bootability are not provided by TGVPANEL. Stop the VM first; start it after configuration and use its serial/VNC console.')) return;
     await hkvmApi(`/api/v1/instances/kvm/${id}/rescue`, { method: 'POST', body: { enabled: true, isoFilename: filename.trim() } });
@@ -5939,7 +5955,95 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (CURRENT_SECTION === 'lxc-templates') loadLxcTemplates();
   if (CURRENT_SECTION === 'networking') loadNetworking();
   if (CURRENT_SECTION === 'ports') loadPorts();
-  if (CURRENT_SECTION === 'firewall') { await populateFirewallInstanceSelect(); loadFirewall(); }
+  if (CURRENT_SECTION === 'firewall') {
+    await populateFirewallInstanceSelect();
+    loadFirewall();
+    loadFirewallProfiles();
+  }
+
+  function addFwProfileRule() {
+    const wrap = document.getElementById('fwpRules');
+    if (!wrap) return;
+    const row = document.createElement('div');
+    row.className = 'v3-form-grid';
+    row.style.marginBottom = '8px';
+    row.innerHTML = `
+      <div class="v3-field"><label>Direction</label><select class="fwpDir"><option value="in">Ingress (IN)</option><option value="out">Egress (OUT)</option></select></div>
+      <div class="v3-field"><label>Action</label><select class="fwpAct"><option value="ACCEPT">ACCEPT</option><option value="DROP">DROP</option><option value="REJECT">REJECT</option></select></div>
+      <div class="v3-field"><label>Protocol</label><select class="fwpProto"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option><option value="all">ALL</option></select></div>
+      <div class="v3-field"><label>Source CIDR</label><input class="fwpSrc" placeholder="0.0.0.0/0"></div>
+      <div class="v3-field"><label>Dest Port</label><input class="fwpPort" placeholder="443"></div>
+      <div class="v3-field" style="display:flex;align-items:flex-end;gap:8px;"><button type="button" class="btn btn-outline" onclick="this.closest('div').remove()">Remove</button></div>`;
+    wrap.appendChild(row);
+  }
+
+  function collectFwProfileRules() {
+    return [...document.querySelectorAll('#fwpRules .v3-form-grid')].map((row) => ({
+      direction: row.querySelector('.fwpDir').value,
+      action: row.querySelector('.fwpAct').value,
+      protocol: row.querySelector('.fwpProto').value,
+      sourceCidr: row.querySelector('.fwpSrc').value || null,
+      destPort: row.querySelector('.fwpPort').value || null,
+    }));
+  }
+
+  async function loadFirewallProfiles() {
+    const data = await hkvmApi('/api/v1/network/firewall-profiles');
+    document.getElementById('fwpBody').innerHTML = data.profiles.length
+      ? data.profiles.map(p => `<tr>
+        <td>#${p.id}</td><td><strong>${hkvmEsc(p.name)}</strong>${p.description ? '<br><span style="color:var(--text-muted);font-size:12px;">' + hkvmEsc(p.description) + '</span>' : ''}</td>
+        <td>${p.rule_count}</td>
+        <td><select class=\"fwpApplySel\" data-profile=\"${p.id}\">${''}</select>
+          <button class=\"btn btn-outline\" onclick=\"applyFwProfile(${p.id}, this)\">Apply</button></td>
+        <td><button class=\"btn btn-outline\" style=\"color:#ef4444;\" onclick=\"delFwProfile(${p.id})\">Delete</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" style="color:var(--text-muted);">No firewall profiles configured.</td></tr>';
+    const instances = await hkvmApi('/api/v1/instances').then((d) => d.instances).catch(() => []);
+    document.querySelectorAll('.fwpApplySel').forEach((sel) => {
+      sel.innerHTML = '<option value="">Select VPS…</option>' + instances.map(i =>
+        `<option value=\"${i.engine}:${i.refId}\">[${i.engine.toUpperCase()}] ${hkvmEsc(i.name)} (#${i.refId})</option>`).join('');
+    });
+  }
+
+  async function submitFwProfile(e) {
+    e.preventDefault();
+    try {
+      await hkvmApi('/api/v1/network/firewall-profiles', {
+        method: 'POST',
+        body: {
+          name: document.getElementById('fwpName').value,
+          description: document.getElementById('fwpDesc').value || null,
+          rules: collectFwProfileRules(),
+        },
+      });
+      document.getElementById('fwpName').value = '';
+      document.getElementById('fwpDesc').value = '';
+      document.getElementById('fwpRules').innerHTML = '';
+      addFwProfileRule();
+      hkvmToast('Firewall profile created');
+      loadFirewallProfiles();
+    } catch (err) { hkvmToast(err.message, 'error'); }
+  }
+
+  async function delFwProfile(id) {
+    await hkvmApi('/api/v1/network/firewall-profiles/' + id, { method: 'DELETE' });
+    loadFirewallProfiles();
+  }
+
+  async function applyFwProfile(id, btn) {
+    const sel = btn.parentElement.querySelector('.fwpApplySel');
+    const val = sel.value;
+    if (!val) { hkvmToast('Select a VPS first', 'error'); return; }
+    const [instanceType, instanceRefId] = val.split(':');
+    try {
+      const res = await hkvmApi(`/api/v1/network/firewall-profiles/${id}/apply`, {
+        method: 'POST',
+        body: { instanceType, instanceRefId: Number(instanceRefId) },
+      });
+      hkvmToast(`Applied: ${res.created.length} rule(s) materialized` + (res.created.some((r) => !r.applied) ? ' (some not applied on host)' : ''));
+      loadFirewall();
+    } catch (err) { hkvmToast(err.message, 'error'); }
+  }
   if (CURRENT_SECTION === 'snapshots') { await populateInstanceDropdown('snapInstSelect'); loadAdminSnapshots(); loadSnapshotSchedules(); loadSelectedSnapshotSchedule(); }
   if (CURRENT_SECTION === 'backups') { await populateInstanceDropdown('bkpInstSelect'); loadBackups(); loadBackupSchedules(); loadSelectedBackupSchedule(); }
   if (CURRENT_SECTION === 'migrations') { await populateInstanceDropdown('migLxcSelect', 'lxc'); loadMigrations(); }

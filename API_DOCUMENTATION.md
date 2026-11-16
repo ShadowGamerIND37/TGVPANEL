@@ -89,6 +89,8 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | POST | `/lxc/:id/clone` | staff | Stopped `lxc-copy` clone. |
 | POST | `/lxc/expirations/sweep` | admin/subadmin | Run the VPS expiration sweep: suspends expired LXC instances (auto-suspend enabled) through the normal lifecycle path and notifies owners. Also runs automatically every 5 minutes. |
 | GET/POST | `/instances/:engine/:id/firewall-rules` | staff / admin-subadmin | Per-VPS firewall policy: list (authorized) or create rules scoped to a KVM/LXC instance; enforced against the instance's IPs on the host. |
+| GET/POST/DELETE | `/network/firewall-profiles[/:id]` | admin-subadmin/operator | Reusable per-VPS firewall rule profiles (migration v027). `POST` creates a profile with an ordered rule set; `DELETE` cascades to profile rules. |
+| POST | `/network/firewall-profiles/:id/apply` | admin/subadmin | Apply a profile to an instance: materializes its rules as instance-scoped `firewall_rules` rows and enforces each against the instance's IPs; returns per-rule `applied` results. |
 
 ### Storage
 

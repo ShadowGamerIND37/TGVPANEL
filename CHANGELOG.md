@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Phase 25 reusable VPS firewall profiles (2026-10-30)
+
+- Added reusable per-VPS firewall rule profiles (security-group style), closing the audit's "per-VPS policy profiles NOT IMPLEMENTED" gap on top of Phase 24's instance-scoped enforcement. Migration **v027** adds `firewall_profiles` and `firewall_profile_rules` (ordered rules, cascade delete).
+- `NetworkManager`: `createFirewallProfile` / `listFirewallProfiles` / `getFirewallProfile` / `deleteFirewallProfile` (cascade) and `applyFirewallProfileToInstance`, which materializes a profile's rules as instance-scoped `firewall_rules` rows and enforces each through the normal Phase 24 path, returning per-rule honest `applied` results. Rule input is validated; unknown profiles/instances are rejected.
+- API: `GET/POST/DELETE /api/v1/network/firewall-profiles[/:id]` and `POST /api/v1/network/firewall-profiles/:id/apply` (admin/subadmin; operators can list/view).
+- Admin firewall page: a Profiles card with a rule builder (add/remove rule rows), a profiles table, per-profile Apply-to-VPS (instance selector) and Delete. Also fixed a pre-existing latent JS syntax error in the page's inline script (raw newlines inside a single-quoted string broke parsing of the whole script; replaced with `\n` escapes) — required for the new UI to run.
+- T40: profile creation with two rules, listing/detail with rule counts, invalid-rule rejection, apply to a provisioned local LXC (both rules materialized and instance-scoped, honest `applied`), unknown-instance/unknown-profile rejection, cascade delete, and persistence of materialized rules after profile deletion. Full suite: **40/40 acceptance suites passing**.
+
 ## Unreleased — Phase 24 per-VPS firewall policy (2026-10-30)
 
 - The `firewall_rules` schema already carried `instance_type`/`instance_ref_id` columns and the API accepted them, but enforcement ignored them — every rule was applied node-wide. Per-VPS firewall policy is now real: rules scoped to an instance are enforced against that instance's **concrete IPs** (resolved from `ip_allocations` + `instances.primary_ip`) on the host — local `iptables` per IP, or the node agent for remote nodes (agent now accepts `instanceIps` and rejects invalid IPs before touching `iptables`).

@@ -2136,6 +2136,68 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // --- Reusable per-VPS firewall rule profiles (security-group style) ---
+  router.get(
+    '/network/firewall-profiles',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const profiles = await ctx.networkManager.listFirewallProfiles();
+      res.json({ profiles });
+    }
+  );
+
+  router.get(
+    '/network/firewall-profiles/:id',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const profile = await ctx.networkManager.getFirewallProfile(pInt(req.params.id));
+      if (!profile) return res.status(404).json({ error: 'Firewall profile does not exist.' });
+      res.json({ profile });
+    }
+  );
+
+  router.post(
+    '/network/firewall-profiles',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const profile = await ctx.networkManager.createFirewallProfile({
+          ...req.body,
+          createdBy: req.principal?.userId ?? null,
+        });
+        res.status(201).json({ profile });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/network/firewall-profiles/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      const profile = await ctx.networkManager.getFirewallProfile(pInt(req.params.id));
+      if (!profile) return res.status(404).json({ error: 'Firewall profile does not exist.' });
+      await ctx.networkManager.deleteFirewallProfile(profile.id);
+      res.json({ success: true });
+    }
+  );
+
+  router.post(
+    '/network/firewall-profiles/:id/apply',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const result = await ctx.networkManager.applyFirewallProfileToInstance(pInt(req.params.id), {
+          ...req.body,
+        });
+        res.json(result);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
   // --- Scheduled Snapshot Policies ---
   router.get('/snapshot-schedules', async (req: Request, res: Response) => {
     try {
