@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 19 storage orphan image detection (report-only) (2026-10-30)
+
+- Added report-only orphan image detection for storage (roadmap area B / "robust orphan reconciliation" gap): `StorageManager.listOrphanImages()` scans **local** pool directories for disk image files (`.qcow2`, `.qcow`, `.qcow3`, `.raw`, `.img`, `.vmdk`) and reports those not referenced by any live record — KVM VM primary disks (`vms.disk_file`), secondary disks (`extra_disks_json` paths), LXC container rootfs directories (`lxc_instances.rootfs_path`, so files inside them are not flagged), and LXC OS template files (`lxc_templates.file_path`).
+- Exposed via `GET /api/v1/storage/orphans` (admin/subadmin/operator), returning `{ orphans: [{ poolId, poolName, poolPath, filePath, sizeBytes, reason }] }`. The scan is strictly **read-only**: it never deletes, moves, or modifies anything — reconciliation remains a deliberate operator action, honoring the "never auto-delete user data" rule. Remote pools are skipped (no agent-side directory listing exists); pools whose path is missing yield no entries. Malformed `extra_disks_json` is skipped rather than crashing the scan.
+- T35 creates a local pool containing an unreferenced image, a VM-referenced disk, and an image inside a referenced LXC rootfs, then asserts the orphan is reported with honest pool/size metadata, the referenced files are not reported, and no file is deleted.
+- Full suite: **35/35 acceptance suites passing**.
+
 ## Unreleased — Phase 18 KVM disk backup encryption at rest (2026-10-30)
 
 - Closed the backup encryption gap documented after Phase 7: KVM disk backups were stored as plain `tar.gz` archives, while only local LXC archives were encrypted at rest. `KVMAdapter.createDiskBackup` now encrypts the created archive with the existing AES-256-GCM `TGVENC1` machinery (`backup-crypto.ts`), stores the `<file>.enc` (0600) and removes the plaintext, and records `encrypted = 1` / `encryption_alg = 'aes-256-gcm'` on the `container_backups` row. The recorded `checksum_sha256` remains the **decrypted-content** SHA-256 and `size_bytes` the plaintext archive size, matching the local LXC path exactly.

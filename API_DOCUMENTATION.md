@@ -95,6 +95,7 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | GET | `/storage/pools` | staff | List pools. `?sync=1` re-measures capacity via `statfs`. |
 | POST | `/storage/pools` | admin | Create a storage pool. |
 | DELETE | `/storage/pools/:id` | admin | Delete a pool (refused while volumes exist). |
+| GET | `/storage/orphans` | staff | Report-only orphan image detection: scans local pool directories for disk images (qcow2/raw/img/vmdk) not referenced by any KVM VM, LXC container rootfs, or OS template. Returns `{ orphans: [{ poolId, poolName, poolPath, filePath, sizeBytes, reason }] }`; never deletes or modifies files. Remote pools are skipped. |
 | GET | `/iso/inventory` | staff | ISO library inventory with honest `sizeBytes` + SHA-256 `sha256`. |
 
 ### Networking, ports & firewall

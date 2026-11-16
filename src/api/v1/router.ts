@@ -1898,6 +1898,20 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // --- Storage Orphan Image Detection (report-only; never deletes) ---
+  router.get(
+    '/storage/orphans',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      try {
+        const orphans = await ctx.storageManager.listOrphanImages();
+        res.json({ orphans });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
   // --- ISO Library Inventory (honest size + SHA-256 checksum) ---
   router.get(
     '/iso/inventory',

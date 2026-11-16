@@ -1862,6 +1862,69 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       }
     });
 
+    // Phase 19: storage orphan image detection — report-only scan of local pool
+    // directories for unreferenced disk images. It must report the orphan, skip
+    // referenced VM disks and images inside referenced LXC rootfs dirs, and never
+    // delete anything.
+    await runStep('T35: Storage orphan image detection reports unreferenced pool images without deleting them', async () => {
+      const poolDir = path.join(tmpRoot, 'orphan-pool');
+      fs.mkdirSync(poolDir, { recursive: true });
+      const orphanImage = path.join(poolDir, 'orphan.qcow2');
+      const usedImage = path.join(poolDir, 'used.qcow2');
+      fs.writeFileSync(orphanImage, crypto.randomBytes(4096));
+      fs.writeFileSync(usedImage, crypto.randomBytes(4096));
+      // An image inside a referenced LXC rootfs directory must not be reported.
+      const rootfsDir = path.join(poolDir, 'ctr-rootfs');
+      fs.mkdirSync(rootfsDir, { recursive: true });
+      const rootfsImage = path.join(rootfsDir, 'inside.qcow2');
+      fs.writeFileSync(rootfsImage, crypto.randomBytes(1024));
+
+      await ctx.db.run(
+        `INSERT INTO storage_pools (name, node_id, engine, pool_type, path) VALUES (?, 1, 'kvm', 'dir', ?)`,
+        ['orphan-test-pool', poolDir]
+      );
+      const poolRow = await ctx.db.get(`SELECT id FROM storage_pools WHERE name = 'orphan-test-pool'`);
+      assert.ok(poolRow, 'Test pool row must be created');
+
+      const vm = await ctx.db.get(`SELECT vm_id, disk_file FROM vms LIMIT 1`);
+      const savedDiskFile = vm.disk_file;
+      await ctx.db.run(`UPDATE vms SET disk_file = ? WHERE vm_id = ?`, [usedImage, vm.vm_id]);
+      await ctx.db.run(
+        `INSERT INTO lxc_instances (user_id, node_id, container_name, hostname, os_template, rootfs_path)
+         VALUES (1, 1, 'orphan-test-ctr', 'orphan-test-ctr', 'ubuntu:22.04', ?)`,
+        [rootfsDir]
+      );
+
+      try {
+        const orphansRes = await adminClient.request(
+          'GET',
+          '/api/v1/storage/orphans',
+          {},
+          { 'X-Forwarded-For': '198.51.100.52' }
+        );
+        assert.strictEqual(orphansRes.status, 200, `Orphan scan failed: ${orphansRes.text}`);
+        const orphans = orphansRes.json.orphans;
+
+        const orphanEntry = orphans.find((o) => o.filePath === orphanImage);
+        assert.ok(orphanEntry, 'Unreferenced pool image must be reported as an orphan');
+        assert.strictEqual(orphanEntry.poolId, Number(poolRow.id));
+        assert.strictEqual(orphanEntry.poolName, 'orphan-test-pool');
+        assert.strictEqual(orphanEntry.sizeBytes, 4096);
+        assert.ok(orphanEntry.reason, 'Orphan entry must carry an explanatory reason');
+
+        assert.ok(!orphans.some((o) => o.filePath === usedImage), 'A VM-referenced disk image must not be reported');
+        assert.ok(!orphans.some((o) => o.filePath === rootfsImage), 'An image inside a referenced LXC rootfs must not be reported');
+
+        // Report-only contract: detection must never delete or modify files.
+        assert.ok(fs.existsSync(orphanImage), 'Orphan detection must not delete the reported file');
+        assert.ok(fs.existsSync(usedImage), 'Orphan detection must not touch referenced files');
+      } finally {
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE container_name = 'orphan-test-ctr'`);
+        await ctx.db.run(`UPDATE vms SET disk_file = ? WHERE vm_id = ?`, [savedDiskFile, vm.vm_id]);
+        await ctx.db.run(`DELETE FROM storage_pools WHERE id = ?`, [poolRow.id]);
+      }
+    });
+
     // 10. Rootfs Path Traversal Defense & Command Runner Allowlist
     await runStep('T09: Container rootfs traversal confinement & command-runner allowlist enforcement', async () => {
       await assert.rejects(
