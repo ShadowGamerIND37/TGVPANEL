@@ -772,6 +772,15 @@ export class LXCAdapter implements VirtualizationAdapter {
     const row = await this.getRawLxcRow(refId);
     if (!row) throw new Error(`LXC container #${refId} not found.`);
 
+    // LXC containers have no graceful guest-shutdown lifecycle; only the host can stop them.
+    // Reject instead of silently no-op'ing so callers never mistake a no-op for a shutdown.
+    if (action === 'shutdown') {
+      throw Object.assign(
+        new Error('Graceful shutdown is not supported for LXC containers; use stop.'),
+        { statusCode: 501 }
+      );
+    }
+
     const isLocal = Boolean(row.is_local);
     const cname = row.container_name;
 

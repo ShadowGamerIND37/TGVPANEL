@@ -3337,6 +3337,94 @@ app.post('/api/vms/:vm_id/stop', checkAuth, trackLegacyKvmMutation('stop'), (req
   });
 });
 
+// VM GRACEFUL SHUTDOWN (Using VM ID)
+// Distinct from stop: sends SIGTERM with a longer grace period and never escalates to SIGKILL.
+function isProcessAlive(pid) {
+  if (!pid || Number(pid) <= 0) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+app.post('/api/vms/:vm_id/shutdown', checkAuth, trackLegacyKvmMutation('shutdown'), (req, res) => {
+  const userId = req.session.userId;
+  let query = `SELECT * FROM vms WHERE vm_id = ?`;
+  let params = [req.params.vm_id];
+
+  if (req.session.role !== 'admin') {
+    query += ` AND owner_id = ?`;
+    params.push(userId);
+  }
+
+  db.get(query, params, (err, vm) => {
+    if (err || !vm) {
+      console.error(`[API Error] /api/vms/${req.params.vm_id}/shutdown: VM not found or access denied`);
+      return res.status(404).json({ error: 'VM not found or access denied' });
+    }
+
+    if (vm.status === 'stopped') {
+      console.log(`[API] VM ${vm.vm_id} already stopped`);
+      return res.json({ success: true, message: 'VM already stopped' });
+    }
+
+    try {
+      console.log(`[API] Shutting down VM ${vm.vm_id} (${vm.vm_name}) by user ${userId}`);
+      const pidFile = path.join(VM_DIR, `vm-${vm.vm_id}.pid`);
+      let pid = vmProcesses.get(vm.vm_id) || null;
+      if (!pid && fs.existsSync(pidFile)) {
+        pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+      }
+
+      const deadlineMs = Date.now() + 15000;
+      if (pid && !isWindows) {
+        try {
+          // Signal the process group (negative pid) so the whole guest tree gets SIGTERM.
+          process.kill(-pid, 'SIGTERM');
+        } catch (e) {
+          // Process may already be exiting; fall through to the wait loop.
+        }
+      } else if (pid && isWindows) {
+        try {
+          // Graceful first; taskkill without /F so the guest can exit on its own.
+          exec(`taskkill /PID ${pid}`, { shell: 'cmd' });
+        } catch (e) {}
+      }
+
+      const waitForExit = () => new Promise((resolve) => {
+        const check = () => {
+          if (!pid) return resolve();
+          if (!isProcessAlive(pid)) return resolve();
+          if (Date.now() >= deadlineMs) return resolve(false);
+          setTimeout(check, 100);
+        };
+        check();
+      });
+
+      waitForExit().then((exited) => {
+        if (exited === false) {
+          // Never force-kill during a graceful shutdown; report the failure honestly.
+          console.error(`[API Error] VM ${vm.vm_id} did not exit within the 15s grace period`);
+          return res.status(500).json({ error: 'VM did not shut down within the grace period; use Stop to force it.' });
+        }
+        vmProcesses.delete(vm.vm_id);
+        qemuStdins.delete(vm.vm_id);
+        db.run(`UPDATE vms SET status = 'stopped', pid = NULL WHERE vm_id = ?`, [vm.vm_id], () => {
+          if (hkvmV3Context) hkvmV3Context.kvmAdapter.syncRegistryRow(vm.vm_id).catch(() => undefined);
+        });
+        logVMAction(vm.vm_id, 'shutdown', 'stopped', `VM shut down gracefully`);
+        console.log(`[API Success] VM ${vm.vm_id} shut down successfully`);
+        res.json({ success: true, message: `VM ${vm.vm_name} (ID:${vm.vm_id}) shut down` });
+      });
+    } catch (error) {
+      console.error(`[API Error] Exception shutting down VM ${vm.vm_id}:`, error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
 // VM RESTART (Using VM ID)
 app.post('/api/vms/:vm_id/restart', checkAuth, trackLegacyKvmMutation('restart'), async (req, res) => {
   try {

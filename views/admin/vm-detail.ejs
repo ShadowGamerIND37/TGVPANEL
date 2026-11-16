@@ -269,6 +269,7 @@ function renderPage(vm, stats) {
         </span>
         ${isRunning
           ? `<button class="btn btn-warning btn-sm" onclick="doAction('stop')">${svg('i-stop', 12)} Stop</button>
+             <button class="btn btn-outline btn-sm" onclick="doAction('shutdown')" title="Graceful guest shutdown (SIGTERM)">${svg('i-power', 12)} Shutdown</button>
              <button class="btn btn-ghost btn-sm" onclick="doAction('restart')">${svg('i-restart', 12)} Restart</button>`
           : `<button class="btn btn-success btn-sm" onclick="doAction('start')">${svg('i-play', 12)} Start</button>`
         }
@@ -540,6 +541,7 @@ async function doAction(action) {
   const msgs = {
     start: 'Start this VM?',
     stop: 'Stop this VM? Running processes will be interrupted.',
+    shutdown: 'Shut down this VM gracefully? The guest gets time to exit cleanly.',
     restart: 'Restart this VM?'
   };
   
@@ -547,11 +549,12 @@ async function doAction(action) {
   if (!confirmed) return;
   
   try {
-    showToast(`${action.charAt(0).toUpperCase() + action.slice(1)}ing VM...`, 'info');
+    const verb = action === 'shutdown' ? { progress: 'Shutting down', success: 'shut down' } : null;
+    showToast(`${verb ? verb.progress : action.charAt(0).toUpperCase() + action.slice(1) + 'ing'} VM...`, 'info');
     const res = await fetch(`/api/vms/${vmId}/${action}`, { method: 'POST' });
     const data = await res.json();
     if (res.ok && data.success) {
-      showToast(`VM ${action}ed successfully`, 'success');
+      showToast(`VM ${verb ? verb.success : action + 'ed'} successfully`, 'success');
       setTimeout(loadVM, 1500);
     } else {
       showToast(`Failed: ${data.error || 'Unknown error'}`, 'error');

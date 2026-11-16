@@ -417,7 +417,7 @@ export class InstanceManager {
     force = false
   ): Promise<InstanceTask> {
     const allowed: LifecycleAction[] = [
-      'start', 'stop', 'restart', 'freeze', 'unfreeze', 'suspend', 'unsuspend', 'delete',
+      'start', 'shutdown', 'stop', 'restart', 'freeze', 'unfreeze', 'suspend', 'unsuspend', 'delete',
     ];
     if (!allowed.includes(action)) {
       throw Object.assign(new Error(`Invalid lifecycle action: ${action}`), { statusCode: 400 });

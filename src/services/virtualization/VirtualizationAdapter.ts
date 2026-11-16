@@ -2,6 +2,7 @@ export type VirtualizationEngine = 'kvm' | 'lxc';
 
 export type LifecycleAction =
   | 'start'
+  | 'shutdown'
   | 'stop'
   | 'restart'
   | 'freeze'

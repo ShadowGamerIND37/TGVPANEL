@@ -689,6 +689,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       const action = String(req.body?.action || '') as LifecycleAction;
       const allowed: LifecycleAction[] = [
         'start',
+        'shutdown',
         'stop',
         'restart',
         'freeze',

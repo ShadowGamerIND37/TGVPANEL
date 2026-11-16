@@ -1,5 +1,5 @@
 export type VirtualizationEngine = 'kvm' | 'lxc';
-export type LifecycleAction = 'start' | 'stop' | 'restart' | 'freeze' | 'unfreeze' | 'suspend' | 'unsuspend' | 'delete';
+export type LifecycleAction = 'start' | 'shutdown' | 'stop' | 'restart' | 'freeze' | 'unfreeze' | 'suspend' | 'unsuspend' | 'delete';
 export interface InstanceCapabilityProfile {
     engine: VirtualizationEngine;
     supportsFreeze: boolean;

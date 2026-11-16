@@ -219,7 +219,11 @@ export class KVMAdapter implements VirtualizationAdapter {
     }
   }
 
-  private async stopVmProcess(pid: number | null | undefined, force?: boolean): Promise<void> {
+  private async stopVmProcess(
+    pid: number | null | undefined,
+    force?: boolean,
+    gracefulWaitMs?: number
+  ): Promise<void> {
     const processPid = Number(pid) || 0;
     if (!processPid || !this.isProcessAlive(processPid)) {
       return;
@@ -232,14 +236,14 @@ export class KVMAdapter implements VirtualizationAdapter {
       throw error;
     }
 
-    const deadlineMs = Date.now() + (force ? 3000 : 5000);
+    const deadlineMs = Date.now() + (force ? 3000 : gracefulWaitMs ?? 5000);
     while (Date.now() < deadlineMs) {
       if (!this.isProcessAlive(processPid)) return;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     throw new Error(
-      `KVM VM process ${processPid} did not stop before the ${force ? 3000 : 5000}ms deadline.`
+      `KVM VM process ${processPid} did not stop before the ${force ? 3000 : (gracefulWaitMs ?? 5000)}ms deadline.`
     );
   }
 
@@ -746,6 +750,17 @@ export class KVMAdapter implements VirtualizationAdapter {
       }
       await this.hooks.startVmById(refId);
       await this.assertHookedVmProcessState(refId, 'running');
+    } else if (action === 'shutdown') {
+      // Graceful guest shutdown: SIGTERM with a longer grace period and no forced kill.
+      // Distinct from `stop`, which may escalate to SIGKILL when force is requested.
+      if (this.hooks.stopVmById) {
+        await this.hooks.stopVmById(refId, false);
+        await this.assertHookedVmProcessState(refId, 'stopped');
+      } else {
+        this.assertCanStopWithoutHook(vm, 'shutdown');
+        await this.stopVmProcess(vm.pid, false, 15_000);
+        await this.db.run(`UPDATE vms SET status = 'stopped', pid = NULL WHERE vm_id = ?`, [refId]);
+      }
     } else if (action === 'stop') {
       if (this.hooks.stopVmById) {
         await this.hooks.stopVmById(refId, options?.force);

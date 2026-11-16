@@ -639,6 +639,59 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       assert.strictEqual(qemuBinaryMatchesArchitecture('qemu-system-x86_64', 'x86_64'), true);
       assert.strictEqual(qemuBinaryMatchesArchitecture('qemu-system-aarch64', 'x86_64'), false);
 
+      const { buildCapabilityWarnings } = require('../lib/node-agent/health');
+      const makeCaps = (overrides = {}) => ({
+        kvmDevicePresent: true,
+        qemuSystemAvailable: true,
+        qemuImgAvailable: true,
+        kvmAvailable: true,
+        lxcCreateAvailable: true,
+        lxcStartAvailable: true,
+        lxcInfoAvailable: true,
+        lxcAvailable: true,
+        lxcfsAvailable: true,
+        lxcfsMounted: true,
+        cgroupVersion: 2,
+        storageBackends: ['dir'],
+        networkBackends: [],
+        qemuVersion: 'QEMU 8.2.0',
+        lxcVersion: '5.0.3',
+        kernelVersion: '6.8',
+        architecture: 'x86_64',
+        qemuArchitectureMismatch: false,
+        ...overrides,
+      });
+      assert.deepStrictEqual(buildCapabilityWarnings(makeCaps()), [], 'Healthy host should produce no capability warnings');
+      assert.ok(
+        buildCapabilityWarnings(makeCaps({ lxcfsAvailable: true, lxcfsMounted: false })).some(
+          (w) => w.includes('lxcfs is installed but not mounted')
+        ),
+        'LXC host with lxcfs installed but unmounted must warn about inaccurate guest telemetry'
+      );
+      assert.ok(
+        buildCapabilityWarnings(makeCaps({ lxcfsAvailable: false, lxcfsMounted: true })).some(
+          (w) => w.includes('lxcfs binary is not installed')
+        ),
+        'LXC host with an lxcfs mount but missing binary must warn about inaccurate telemetry'
+      );
+      assert.ok(
+        buildCapabilityWarnings(makeCaps({ cgroupVersion: 1 })).some(
+          (w) => w.includes('cgroup v1')
+        ),
+        'LXC host on cgroup v1 must warn that v2 delegation may be unavailable'
+      );
+      assert.ok(
+        buildCapabilityWarnings(makeCaps({ kvmDevicePresent: false })).some(
+          (w) => w.includes('/dev/kvm is unavailable')
+        ),
+        'QEMU host without /dev/kvm must warn about TCG fallback'
+      );
+      assert.deepStrictEqual(
+        buildCapabilityWarnings(makeCaps({ kvmAvailable: false, lxcAvailable: false })),
+        ['Neither QEMU/KVM nor LXC userland utilities are installed on this host. Management plane is online in controller-only mode until hypervisor packages are installed.'],
+        'Controller-only host must produce a single clear warning'
+      );
+
       const vm = await ctx.db.get(`SELECT vm_id, ipv4_address FROM vms LIMIT 1`);
       const noHookKvm = new KVMAdapter(ctx.db);
       await assert.rejects(
@@ -658,6 +711,68 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       });
       await hookedKvm.performLifecycleAction(vm.vm_id, 'restart');
       assert.deepStrictEqual(restartCalls, [`stop:${vm.vm_id}`, `start:${vm.vm_id}`]);
+
+      // Graceful KVM shutdown is distinct from stop: it must never force-kill and uses the
+      // longer grace period, and must refuse when no hook and no live PID are available.
+      const shutdownCalls = [];
+      const hookedShutdownKvm = new KVMAdapter(ctx.db, {
+        stopVmById: async (id, force) => {
+          shutdownCalls.push(`stop:${id}:${force}`);
+          await ctx.db.run(`UPDATE vms SET status = 'stopped', pid = NULL WHERE vm_id = ?`, [id]);
+        },
+      });
+      await hookedShutdownKvm.performLifecycleAction(vm.vm_id, 'shutdown');
+      assert.deepStrictEqual(shutdownCalls, [`stop:${vm.vm_id}:false`], 'Shutdown must use the hook without force');
+
+      const staleShutdownStatements = [];
+      const staleShutdownRow = {
+        vm_id: 900004,
+        status: 'running',
+        pid: null,
+        suspended: 0,
+      };
+      const staleShutdownKvm = new KVMAdapter(
+        {
+          get: async () => staleShutdownRow,
+          run: async (sql) => {
+            staleShutdownStatements.push(String(sql));
+            return { changes: 1, lastID: 0 };
+          },
+        },
+        {}
+      );
+      await assert.rejects(
+        staleShutdownKvm.performLifecycleAction(staleShutdownRow.vm_id, 'shutdown'),
+        /Cannot shutdown KVM VM #900004: status is running but no stop hook or live PID is available\./,
+        'KVM shutdown must refuse on a stale running VM with no hook and no live PID'
+      );
+      assert.strictEqual(
+        staleShutdownStatements.length,
+        0,
+        'Rejected stale-state KVM shutdown must not mutate the record'
+      );
+
+      // LXC has no graceful guest shutdown; it must reject rather than pretend to succeed.
+      const lxcShutdownRow = {
+        id: 900002,
+        node_id: 1,
+        container_name: 'shutdown-guard-lxc',
+        is_local: true,
+        suspended: 0,
+        suspension_history: '[]',
+      };
+      const lxcShutdownAdapter = new LXCAdapter(
+        {
+          get: async () => lxcShutdownRow,
+          run: async () => ({ changes: 1, lastID: 0 }),
+        },
+        {}
+      );
+      await assert.rejects(
+        lxcShutdownAdapter.performLifecycleAction(lxcShutdownRow.id, 'shutdown'),
+        (err) => err.statusCode === 501 && /not supported for LXC/.test(err.message),
+        'LXC must reject graceful shutdown instead of silently no-op'
+      );
 
       const hookedGuardRow = {
         vm_id: 900003,
