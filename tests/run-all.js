@@ -774,6 +774,171 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         'LXC must reject graceful shutdown instead of silently no-op'
       );
 
+      // Clone rollback: when a clone fails after the host artifact is created, the panel must
+      // remove the inserted records AND destroy the host container so neither is left behind.
+      const lxcCloneSourceRow = {
+        id: 900006,
+        user_id: 1,
+        node_id: 1,
+        container_name: 'clone-rollback-source',
+        hostname: 'clone-rollback-source',
+        os_template: 'ubuntu',
+        os_family: 'ubuntu',
+        arch: 'amd64',
+        cpu_cores: 1,
+        cpu_shares: 1024,
+        cpu_limit_pct: 100,
+        cpu_pinning: null,
+        ram_mb: 1024,
+        swap_mb: 0,
+        disk_gb: 20,
+        rootfs_storage_type: 'dir',
+        privileged: 0,
+        nesting: 0,
+        kvm_nesting: 0,
+        autostart: 0,
+        root_password_enc: null,
+        bridge: null,
+        ip_address: null,
+        gateway: null,
+        ipv6_address: null,
+        mac_address: null,
+        vlan_id: null,
+        status: 'stopped',
+        bandwidth_quota_gb: 0,
+        notes: '',
+        expires_at: null,
+        expiration_days: 30,
+        auto_suspend_enabled: 0,
+        last_renewed_at: null,
+        is_local: true,
+        suspended: 0,
+        suspension_history: '[]',
+      };
+      const lxcCloneRollbackStatements = [];
+      let lxcCloneDestroyed = false;
+      const lxcCloneRollbackDb = {
+        get: async (sql, params) => {
+          if (/FROM lxc_instances l/i.test(sql)) return lxcCloneSourceRow;
+          if (/SELECT id FROM lxc_instances WHERE LOWER\(container_name\)/i.test(sql)) return undefined;
+          return undefined;
+        },
+        run: async (sql, params) => {
+          lxcCloneRollbackStatements.push({ sql: String(sql), params });
+          if (/INSERT INTO lxc_instances/i.test(sql)) return { lastID: 900007, changes: 1 };
+          if (/INSERT OR REPLACE INTO vps_expiration/i.test(sql)) throw new Error('simulated expiration insert failure');
+          return { changes: 1, lastID: 0 };
+        },
+        all: async () => [],
+      };
+      const lxcCloneRollbackAdapter = new LXCAdapter(
+        lxcCloneRollbackDb,
+        {
+          localRuntime: {
+            containerManager: {
+              cloneContainer: async () => ({ name: 'clone-rollback-clone', state: 'stopped', pid: null, ips: [] }),
+              destroyContainer: async () => { lxcCloneDestroyed = true; },
+            },
+          },
+        }
+      );
+      await assert.rejects(
+        lxcCloneRollbackAdapter.cloneStoppedLxcInstance(lxcCloneSourceRow.id, 'clone-rollback-clone'),
+        /simulated expiration insert failure/,
+        'LXC clone must surface the failure instead of reporting success'
+      );
+      assert.ok(lxcCloneDestroyed, 'LXC clone rollback must destroy the created host container');
+      assert.ok(
+        lxcCloneRollbackStatements.some((s) => /DELETE FROM lxc_instances WHERE id = \?/i.test(s.sql) && Number(s.params[0]) === 900007),
+        'LXC clone rollback must remove the inserted lxc_instances row'
+      );
+      assert.ok(
+        lxcCloneRollbackStatements.some((s) => /DELETE FROM instances WHERE engine = 'lxc' AND ref_id = \?/i.test(s.sql) && Number(s.params[0]) === 900007),
+        'LXC clone rollback must remove the inserted unified registry row'
+      );
+
+      // KVM clone rollback: when the registry sync fails after the disk image is created, the
+      // adapter must remove the inserted VM/registry rows AND delete the created disk image.
+      const kvmCloneSizeBytes = 10737418240;
+      const kvmCloneSourceDisk = path.join(os.homedir(), 'vms', `tgv-clone-rollback-src-${Date.now()}.qcow2`);
+      fs.writeFileSync(kvmCloneSourceDisk, 'source-disk');
+      try {
+        const kvmCloneSourceRow = {
+          vm_id: 900010,
+          vm_name: 'clone-rollback-source-kvm',
+          hostname: 'clone-rollback-source-kvm',
+          owner_id: 1,
+          node_id: 1,
+          status: 'stopped',
+          pid: null,
+          suspended: 0,
+          network_type: 'nat',
+          extra_disks_json: '[]',
+          extra_nics_json: '[]',
+          disk_file: kvmCloneSourceDisk,
+          img_file: null,
+          http_port: 80,
+          os_type: 'ubuntu',
+          template_type: '',
+          clone_of: null,
+        };
+        const kvmCloneRollbackStatements = [];
+        let kvmCloneTargetPathValue = '';
+        const kvmCloneRollbackDb = {
+          get: async (sql, params) => {
+            if (/FROM vms WHERE vm_name = ?/i.test(sql)) return undefined;
+            if (params && params[0] === 900011 && /SELECT \* FROM vms WHERE vm_id = \?/i.test(sql)) {
+              return { vm_id: 900011, vm_name: 'clone-rollback-kvm', hostname: 'clone-rollback-kvm', owner_id: 1, node_id: 1, status: 'stopped', suspended: 0, os_type: 'KVM Guest', cpus: 1, memory: 1024, disk_size: '10G', ipv4_address: null, shared_with: '[]' };
+            }
+            return kvmCloneSourceRow;
+          },
+          run: async (sql, params) => {
+            kvmCloneRollbackStatements.push({ sql: String(sql), params });
+            if (/INSERT INTO vms/i.test(sql)) return { lastID: 900011, changes: 1 };
+            if (/INSERT INTO instances/i.test(sql)) throw new Error('simulated registry sync failure');
+            return { changes: 1, lastID: 0 };
+          },
+          all: async () => [],
+        };
+        const kvmCloneRollbackAdapter = new KVMAdapter(
+          kvmCloneRollbackDb,
+          {},
+          async (cmd, args) => {
+            if (cmd === 'qemu-img' && args[0] === 'info') {
+              const target = JSON.stringify({ format: 'qcow2', 'virtual-size': kvmCloneSizeBytes });
+              return { exitCode: 0, timedOut: false, stdout: target, stderr: '' };
+            }
+            if (cmd === 'qemu-img' && args[0] === 'convert') {
+              const targetPath = args[args.length - 1];
+              kvmCloneTargetPathValue = targetPath;
+              fs.writeFileSync(targetPath, 'clone-disk');
+              return { exitCode: 0, timedOut: false, stdout: '', stderr: '' };
+            }
+            return { exitCode: 1, timedOut: false, stdout: '', stderr: 'unexpected command' };
+          }
+        );
+        await assert.rejects(
+          kvmCloneRollbackAdapter.cloneStoppedVm(kvmCloneSourceRow.vm_id, 'clone-rollback-kvm'),
+          /simulated registry sync failure/,
+          'KVM clone must surface the registry sync failure instead of reporting success'
+        );
+        assert.ok(
+          kvmCloneRollbackStatements.some((s) => /DELETE FROM vms WHERE vm_id = \?/i.test(s.sql) && Number(s.params[0]) === 900011),
+          'KVM clone rollback must remove the inserted vms row'
+        );
+        assert.ok(
+          kvmCloneRollbackStatements.some((s) => /DELETE FROM instances WHERE engine = 'kvm' AND ref_id = \?/i.test(s.sql) && Number(s.params[0]) === 900011),
+          'KVM clone rollback must remove the inserted unified registry row'
+        );
+        assert.ok(kvmCloneTargetPathValue, 'KVM clone should have created a target disk image');
+        assert.ok(
+          !fs.existsSync(kvmCloneTargetPathValue),
+          'KVM clone rollback must delete the created disk image'
+        );
+      } finally {
+        try { fs.unlinkSync(kvmCloneSourceDisk); } catch { /* cleanup best effort */ }
+      }
+
       const hookedGuardRow = {
         vm_id: 900003,
         vm_name: 'hook-guard-vm',
