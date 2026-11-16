@@ -4479,13 +4479,21 @@ export class LxcContainerManager {
     const safeName = SafeValidators.containerName(containerName);
     const rootfs = this.getRootfsDir(safeName);
     if (!privilegedFs.existsSync(rootfs)) throw new Error(`Container "${safeName}" rootfs is missing.`);
-    const pveMarker = this.resolveConfinedRootfsPath(safeName, '/var/lib/tgvpanel-proxmox-installed');
-    if (!privilegedFs.existsSync(pveMarker)) {
-      throw new Error('Wait for the Proxmox VE first-boot install to finish before starting the Cloudflare tunnel.');
-    }
     const runtime = await this.inspectContainer(safeName);
     if (runtime.state !== 'running') {
       throw new Error('Start the Proxmox container before creating its Cloudflare tunnel.');
+    }
+    // Prefer checking the installed PVE version from inside the running guest. Some LXC
+    // storage backends expose rootfs markers differently to the host process than lxc-attach.
+    const guestPveVersion = await runAllowlistedCommand(
+      'lxc-attach',
+      [...this.lxcPathArgs(), '-n', safeName, '--', '/usr/bin/pveversion'],
+      { timeoutMs: 10_000, maxOutputBytes: 8 * 1024, asRoot: this.needsRootForStore() || undefined }
+    );
+    const guestPveVerified = guestPveVersion.exitCode === 0 && /pve-manager\//i.test(guestPveVersion.stdout);
+    const hostMarker = this.resolveConfinedRootfsPath(safeName, '/var/lib/tgvpanel-proxmox-installed');
+    if (!guestPveVerified && !privilegedFs.existsSync(hostMarker)) {
+      throw new Error('Proxmox first-boot install is not verified inside this container yet. Check `pve-status` / `pveversion`, then retry Cloudflare.');
     }
     const setupKey = safeName.toLowerCase();
     const existingStatus = this.getProxmoxCloudflareTunnelStatus(safeName);

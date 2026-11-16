@@ -3962,6 +3962,7 @@ fi
         'apt-get install',
         'cloudflared tunnel --url https://localhost:8006 --no-tls-verify',
         'tgvpanel-cloudflared.service',
+        "'/usr/bin/pveversion'",
         'trycloudflare\\\\.com',
       ]) {
         assert.ok(managerSource.includes(required), `Cloudflare flow must include ${required}`);
