@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Phase 16 network pool IP capacity accounting (2026-10-30)
+
+- Enriched `NetworkManager.listNetworkPools` with honest per-pool IP capacity: each pool now reports `ipTotal`, `ipAvailable`, and `ipUsed`, computed from real `ip_allocations` counts via a `GROUP BY pool_id` query (`ipAvailable` = rows with `status = 'available'; `ipUsed` = total − available). This replaces a listing that returned only raw pool records with no capacity summary, and the figures are derived from live data rather than a stale recorded value.
+- The existing `GET /api/v1/network/pools` route (which returns `{ pools, ips }`) now carries the capacity figures on each pool, so the honest accounting flows to the API without a breaking change.
+- T10 asserts that after adding two IPs to a pool, the listing reports `ipTotal: 2`, `ipAvailable: 2`, and `ipUsed: 0` — proving the counts come from `ip_allocations`.
+- Full suite: **34/34 acceptance suites passing**.
+
 ## Unreleased — Phase 15 required documentation (2026-10-30)
 
 - Created the four missing required documents flagged by the audit (roadmap area R / docs):

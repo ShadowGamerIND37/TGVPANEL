@@ -1991,6 +1991,14 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       assert.strictEqual(listPools.status, 200);
       assert.ok(listPools.json.ips.some((i) => i.ip_address === '10.88.10.2'));
 
+      // Phase 16: each network pool must report honest IP capacity computed from
+      // real ip_allocations counts (total/available/used), not a stale recorded value.
+      const poolWithCap = listPools.json.pools.find((pl) => pl.id === netPool.json.pool.id);
+      assert.ok(poolWithCap, 'Expected the created pool in the listing');
+      assert.strictEqual(poolWithCap.ipTotal, 2, `Pool ipTotal must reflect real ip_allocations count (expected 2), got ${poolWithCap.ipTotal}`);
+      assert.strictEqual(poolWithCap.ipAvailable, 2, `Pool ipAvailable must reflect available IPs (expected 2), got ${poolWithCap.ipAvailable}`);
+      assert.strictEqual(poolWithCap.ipUsed, 0, `Pool ipUsed must be total minus available (expected 0), got ${poolWithCap.ipUsed}`);
+
       const aliceLxc = await ctx.db.get(`SELECT id FROM lxc_instances WHERE container_name = 'ct-alice-01'`);
       const portAlloc = await adminClient.request('POST', '/api/v1/network/ports', {
         instanceType: 'lxc',

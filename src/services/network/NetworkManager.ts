@@ -26,7 +26,29 @@ export class NetworkManager {
       nodeId !== undefined
         ? `SELECT p.*, n.name AS node_name FROM network_pools p LEFT JOIN nodes n ON n.id = p.node_id WHERE p.node_id = ? ORDER BY p.id ASC`
         : `SELECT p.*, n.name AS node_name FROM network_pools p LEFT JOIN nodes n ON n.id = p.node_id ORDER BY p.id ASC`;
-    return this.db.all<any>(sql, nodeId !== undefined ? [nodeId] : []);
+    const pools = await this.db.all<any>(sql, nodeId !== undefined ? [nodeId] : []);
+
+    // Honest per-pool IP capacity, computed from real ip_allocations counts
+    // (not a recorded/stale value). ipAvailable reflects the 'available' status;
+    // ipUsed is the remainder.
+    const capacityRows = await this.db.all<any>(
+      `SELECT pool_id,
+              COUNT(*) AS ipTotal,
+              SUM(CASE WHEN status = 'available' THEN 1 ELSE 0 END) AS ipAvailable
+       FROM ip_allocations
+       GROUP BY pool_id`
+    );
+    const capacityByPool = new Map<number, { ipTotal: number; ipAvailable: number; ipUsed: number }>();
+    for (const row of capacityRows) {
+      const total = Number(row.ipTotal || 0);
+      const available = Number(row.ipAvailable || 0);
+      capacityByPool.set(Number(row.pool_id), { ipTotal: total, ipAvailable: available, ipUsed: total - available });
+    }
+
+    return pools.map((p) => {
+      const cap = capacityByPool.get(Number(p.id)) || { ipTotal: 0, ipAvailable: 0, ipUsed: 0 };
+      return { ...p, ipTotal: cap.ipTotal, ipAvailable: cap.ipAvailable, ipUsed: cap.ipUsed };
+    });
   }
 
   public async createNetworkPool(input: {
