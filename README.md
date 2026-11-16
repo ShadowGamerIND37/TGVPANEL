@@ -39,7 +39,7 @@ TGVPANEL is a single platform for managing both virtual machines and containers,
 | **Consoles** | Interactive container PTY via `node-pty` + `lxc-attach`; xterm.js served locally (no CDN); opt-in, audited admin node shell |
 | **Storage** | Pools (RAW, QCOW2, directory, LVM, ZFS, Btrfs), ISO library, LXC OS template catalog |
 | **Networking** | Bridges, NAT, IPv4/IPv6 pools, port forwards, bandwidth limits, iptables changes with rollback |
-| **Backups** | KVM QCOW2 and LXC snapshots, SHA-256 verified `tar.gz` backups, scheduled backups |
+| **Backups & snapshots** | KVM QCOW2 and LXC snapshots, SHA-256 verified `tar.gz` backups, hourly/daily/weekly schedules with per-schedule retention and owner notifications |
 | **Migration** | 7-stage offline snapshot-transfer with automatic rollback ([details](#vps-migration-model)) |
 | **Monitoring** | Live and historical node/VPS metrics, alert rules, notifications, webhooks |
 | **Multi-node** | Node registry, circuit breakers, health sync, live API key rotation |
@@ -49,6 +49,10 @@ TGVPANEL is a single platform for managing both virtual machines and containers,
 ### Scheduled Backups (V4)
 
 Administrators can configure per-instance hourly, daily, or weekly archive jobs from **Admin → Backups** or through `GET /api/v1/backup-schedules`, `PUT /api/v1/backup-schedules/:engine/:id`, and `DELETE /api/v1/backup-schedules/:engine/:id`. Instance owners may manage schedules for their own instances through the API; shared access alone does not grant schedule ownership. Each run verifies its SHA-256 before success, retains only the requested number of that schedule’s archives (manual backups are never pruned), records run/error status, writes an audit event, and notifies the instance owner. Removing a schedule leaves its existing backup files untouched. First execution is queued one selected interval after saving.
+
+### Scheduled Snapshots (V4)
+
+Per-instance hourly, daily, or weekly snapshot schedules are available in **Admin → Snapshots** and through `GET /api/v1/snapshot-schedules`, `PUT /api/v1/snapshot-schedules/:engine/:id`, and `DELETE /api/v1/snapshot-schedules/:engine/:id`. Owners can manage their own schedules through the API; shared access alone is not sufficient. Retention prunes only snapshots created by that schedule, leaving manual snapshots untouched. Runs record status/errors, audit completion or failure, and notify the owner. Removing a schedule does not delete existing snapshots. KVM snapshots are disk-level QCOW2 operations and are attempted only while the VM is stopped; they are not guest-consistent and are not risk-free backups. First execution is queued one selected interval after saving.
 
 ### Security
 
@@ -114,7 +118,7 @@ The installer will:
 2. Ask you to choose a mode: **Unified (KVM + LXC)**, **KVM only**, **LXC only**, or **Standalone remote node agent**.
 3. Build the TypeScript sources.
 4. Create `.tgvpanel-secret` (`0600`).
-5. Back up `data/tgvpanel.db`, then run migrations (`v001`..`v015`).
+5. Back up `data/tgvpanel.db`, then run migrations (`v001`..`v016`).
 6. Write systemd service units (`tgvpanel.service` / `tgvpanel-node-agent.service`).
 
 To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB backup included).
@@ -124,7 +128,7 @@ To upgrade later, run `sudo bash scripts/update.sh` (capability detection and DB
 ```bash
 npm install            # see note below if building offline
 npm run build          # compile src/**/*.ts -> lib/**/*.js
-npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v015
+npm run migrate        # back up data/tgvpanel.db, apply migrations v001..v016
 npm start              # panel on 0.0.0.0:8080
 ```
 
@@ -220,7 +224,7 @@ TGVPANEL/
 ├── src/
 │   ├── context.ts          # Runtime bootstrap, authenticated WS multiplexer
 │   ├── security/           # crypto-vault (.tgvpanel-secret, AES-GCM, TOTP, CSRF), RBAC middleware
-│   ├── db/                 # SQLite wrapper, migrations v001..v015, legacy DB importer, CLIs
+│   ├── db/                 # SQLite wrapper, migrations v001..v016, legacy DB importer, CLIs
 │   ├── node-agent/         # Standalone and local agent (auth, command runner, containers,
 │   │                       #   consoles, snapshots, transfers, health and host stats)
 │   ├── services/
@@ -270,7 +274,7 @@ Runs 20 end-to-end suites from `tests/run-all.js` against an isolated temporary 
 
 | Coverage |
 |---|
-| Migrations (`v001`..`v015`) & automatic legacy DB / secret-vault file migration |
+| Migrations (`v001`..`v016`) & automatic legacy DB / secret-vault file migration |
 | AES-256-GCM tamper defense (`.tgvpanel-secret`) |
 | Legacy import and login rehash |
 | CSRF and PAT scopes |

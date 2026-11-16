@@ -63,6 +63,12 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     keyPrefix: 'api_v1_backup_schedule',
     message: 'Too many backup schedule changes. Please retry later.',
   });
+  const snapshotScheduleLimiter = createRateLimiter({
+    windowMs: 15 * 60_000,
+    max: 30,
+    keyPrefix: 'api_v1_snapshot_schedule',
+    message: 'Too many snapshot schedule changes. Please retry later.',
+  });
 
   // --- Public / Unauthenticated Health & Password Reset Endpoints ---
   router.get('/health', async (_req: Request, res: Response) => {
@@ -229,7 +235,11 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       // Password changes have a stricter dedicated limiter below; avoid double-counting them.
-      if (req.path === '/auth/password/change' || req.path.startsWith('/backup-schedules/')) return next();
+      if (
+        req.path === '/auth/password/change' ||
+        req.path.startsWith('/backup-schedules/') ||
+        req.path.startsWith('/snapshot-schedules/')
+      ) return next();
       return apiMutationLimiter(req, res, next);
     }
     return next();
@@ -1574,6 +1584,61 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       res.json({ success: true });
     }
   );
+
+  // --- Scheduled Snapshot Policies ---
+  router.get('/snapshot-schedules', async (req: Request, res: Response) => {
+    try {
+      const rawEngine = req.query.engine ? String(req.query.engine) : '';
+      const refId = req.query.refId ? Number(req.query.refId) : undefined;
+      if (rawEngine || refId !== undefined) {
+        if ((rawEngine !== 'kvm' && rawEngine !== 'lxc') || !Number.isInteger(refId) || Number(refId) < 1) {
+          return res.status(400).json({ error: 'Specify a valid engine and positive refId together.' });
+        }
+        await ctx.instanceManager.getAuthorizedInstance(req.principal!, rawEngine, Number(refId), true);
+        const schedules = await ctx.backupManager.listSnapshotSchedules({ engine: rawEngine, refId: Number(refId) });
+        return res.json({ schedules });
+      }
+      if (!ctx.instanceManager.isStaff(req.principal!)) {
+        return res.status(403).json({ error: 'Specify an owned instance or use a staff account.' });
+      }
+      return res.json({ schedules: await ctx.backupManager.listSnapshotSchedules() });
+    } catch (err: any) {
+      return res.status(err.statusCode || 400).json({ error: err.message });
+    }
+  });
+
+  router.put('/snapshot-schedules/:engine/:id', snapshotScheduleLimiter, async (req: Request, res: Response) => {
+    try {
+      const engine = pStr(req.params.engine);
+      const refId = pInt(req.params.id);
+      if (engine !== 'kvm' && engine !== 'lxc') return res.status(400).json({ error: 'Engine must be kvm or lxc.' });
+      const instance = await ctx.instanceManager.getAuthorizedInstance(req.principal!, engine, refId, true);
+      const schedule = await ctx.backupManager.upsertSnapshotSchedule({
+        engine,
+        refId,
+        frequency: String(req.body?.frequency || '') as 'hourly' | 'daily' | 'weekly',
+        retentionCount: Number(req.body?.retentionCount),
+        actorId: req.principal!.userId,
+        ownerUserId: instance.ownerId,
+      });
+      return res.json({ schedule });
+    } catch (err: any) {
+      return res.status(err.statusCode || 400).json({ error: err.message });
+    }
+  });
+
+  router.delete('/snapshot-schedules/:engine/:id', snapshotScheduleLimiter, async (req: Request, res: Response) => {
+    try {
+      const engine = pStr(req.params.engine);
+      const refId = pInt(req.params.id);
+      if (engine !== 'kvm' && engine !== 'lxc') return res.status(400).json({ error: 'Engine must be kvm or lxc.' });
+      await ctx.instanceManager.getAuthorizedInstance(req.principal!, engine, refId, true);
+      await ctx.backupManager.deleteSnapshotSchedule(engine, refId, req.principal!.userId);
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(err.statusCode || 400).json({ error: err.message });
+    }
+  });
 
   // --- Unified Snapshots & Backups ---
   router.get('/snapshots/:engine/:id', async (req: Request, res: Response) => {

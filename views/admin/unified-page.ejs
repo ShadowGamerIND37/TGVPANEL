@@ -1862,11 +1862,27 @@
       <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Unified Instance Snapshots (QCOW2 &amp; LXC)</h2></div>
       <div class="v3-card">
         <div class="v3-form-grid">
-          <div class="v3-field"><label>Select Instance</label><select id="snapInstSelect" onchange="loadAdminSnapshots()"></select></div>
+          <div class="v3-field"><label>Select Instance</label><select id="snapInstSelect" onchange="loadAdminSnapshots(); loadSelectedSnapshotSchedule()"></select></div>
           <div class="v3-field"><label>Snapshot Name</label><input id="snapName" placeholder="pre_upgrade"></div>
           <div class="v3-field"><label>Description</label><input id="snapDesc" placeholder="Before kernel update"></div>
           <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" onclick="createAdminSnapshot()" style="width:100%;">Create Snapshot</button></div>
         </div>
+      </div>
+      <div class="v3-card">
+        <h3 style="margin:0 0 10px;color:var(--text-primary);">Automated Snapshot Schedule</h3>
+        <p style="margin:0 0 14px;color:var(--text-muted);font-size:12px;">Retention applies only to snapshots created by this schedule. KVM snapshots are disk-level and will run only while the VM is stopped; they are not guest-consistent and should not be treated as risk-free recovery points.</p>
+        <div class="v3-form-grid">
+          <div class="v3-field"><label>Frequency</label><select id="snapScheduleFrequency"><option value="hourly">Hourly</option><option value="daily" selected>Daily</option><option value="weekly">Weekly</option></select></div>
+          <div class="v3-field"><label>Keep scheduled snapshots</label><input id="snapScheduleRetention" type="number" min="1" max="365" value="7"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;gap:8px;"><button class="btn btn-primary" onclick="saveSnapshotSchedule()">Save Schedule</button><button class="btn btn-outline" onclick="removeSnapshotSchedule()">Remove</button></div>
+        </div>
+        <div id="snapshotScheduleStatus" style="margin-top:10px;font-size:12px;color:var(--text-muted);">Choose an instance to view or configure its schedule.</div>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>Instance</th><th>Frequency</th><th>Retention</th><th>Next run</th><th>Last run</th><th>Last result</th></tr></thead>
+          <tbody id="snapshotSchedulesBody"></tbody>
+        </table>
       </div>
       <div class="v3-card v3-table-wrap">
         <table class="v3-table">
@@ -4699,6 +4715,77 @@ async function loadAdminSnapshots() {
     : '<tr><td colspan="5" style="color:var(--text-muted);">No snapshots for this instance.</td></tr>';
 }
 
+async function loadSelectedSnapshotSchedule() {
+  const val = document.getElementById('snapInstSelect')?.value;
+  const status = document.getElementById('snapshotScheduleStatus');
+  if (!val || !status) return;
+  const [engine, id] = val.split(':');
+  try {
+    const data = await hkvmApi(`/api/v1/snapshot-schedules?engine=${encodeURIComponent(engine)}&refId=${encodeURIComponent(id)}`);
+    const schedule = (data.schedules || [])[0];
+    if (!schedule) {
+      document.getElementById('snapScheduleFrequency').value = 'daily';
+      document.getElementById('snapScheduleRetention').value = '7';
+      status.textContent = 'No schedule configured. Saving creates the next run one selected interval from now.';
+      return;
+    }
+    document.getElementById('snapScheduleFrequency').value = schedule.frequency;
+    document.getElementById('snapScheduleRetention').value = schedule.retention_count;
+    status.textContent = `${schedule.enabled ? 'Enabled' : 'Disabled'} · next ${schedule.next_run || 'not queued'} · last ${schedule.last_status || 'never'}${schedule.last_error ? ` · ${schedule.last_error}` : ''}`;
+  } catch (err) { status.textContent = err.message || 'Unable to load schedule.'; }
+}
+
+async function loadSnapshotSchedules() {
+  const body = document.getElementById('snapshotSchedulesBody');
+  if (!body) return;
+  try {
+    const data = await hkvmApi('/api/v1/snapshot-schedules');
+    body.innerHTML = (data.schedules || []).length
+      ? data.schedules.map(s => `<tr>
+          <td>${hkvmEsc((s.instance_type || '').toUpperCase())} · ${hkvmEsc(s.instance_name || '#' + s.instance_ref_id)}</td>
+          <td>${hkvmEsc(s.frequency)}</td><td>${hkvmEsc(s.retention_count)}</td>
+          <td>${hkvmEsc(s.next_run || '—')}</td><td>${hkvmEsc(s.last_run || '—')}</td>
+          <td><strong>${hkvmEsc(s.last_status || 'never')}</strong>${s.last_error ? `<div style="color:#f87171;max-width:420px;white-space:normal;">${hkvmEsc(s.last_error)}</div>` : ''}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="6" style="color:var(--text-muted);">No automated snapshot schedules.</td></tr>';
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="6" style="color:#f87171;">${hkvmEsc(err.message)}</td></tr>`;
+  }
+}
+
+async function saveSnapshotSchedule() {
+  const val = document.getElementById('snapInstSelect')?.value;
+  const status = document.getElementById('snapshotScheduleStatus');
+  if (!val) return hkvmToast('Select an instance first.', 'error');
+  const [engine, id] = val.split(':');
+  const retentionCount = Number(document.getElementById('snapScheduleRetention').value);
+  if (!Number.isInteger(retentionCount) || retentionCount < 1 || retentionCount > 365) {
+    return hkvmToast('Retention must be between 1 and 365.', 'error');
+  }
+  try {
+    const out = await hkvmApi(`/api/v1/snapshot-schedules/${engine}/${id}`, {
+      method: 'PUT',
+      body: { frequency: document.getElementById('snapScheduleFrequency').value, retentionCount }
+    });
+    status.textContent = `Schedule saved · next run ${out.schedule.next_run} · retains ${out.schedule.retention_count} scheduled snapshots.`;
+    await loadSnapshotSchedules();
+    hkvmToast('Automated snapshot schedule saved');
+  } catch (err) { status.textContent = err.message; hkvmToast(err.message, 'error'); }
+}
+
+async function removeSnapshotSchedule() {
+  const val = document.getElementById('snapInstSelect')?.value;
+  if (!val) return hkvmToast('Select an instance first.', 'error');
+  if (!confirm('Remove the automated schedule? Existing snapshots will be kept.')) return;
+  const [engine, id] = val.split(':');
+  try {
+    await hkvmApi(`/api/v1/snapshot-schedules/${engine}/${id}`, { method: 'DELETE' });
+    document.getElementById('snapshotScheduleStatus').textContent = 'Schedule removed. Existing snapshots are unchanged.';
+    await loadSnapshotSchedules();
+    hkvmToast('Snapshot schedule removed');
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
 async function createAdminSnapshot() {
   const val = document.getElementById('snapInstSelect').value;
   if (!val) return;
@@ -5689,7 +5776,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (CURRENT_SECTION === 'networking') loadNetworking();
   if (CURRENT_SECTION === 'ports') loadPorts();
   if (CURRENT_SECTION === 'firewall') loadFirewall();
-  if (CURRENT_SECTION === 'snapshots') { await populateInstanceDropdown('snapInstSelect'); loadAdminSnapshots(); }
+  if (CURRENT_SECTION === 'snapshots') { await populateInstanceDropdown('snapInstSelect'); loadAdminSnapshots(); loadSnapshotSchedules(); loadSelectedSnapshotSchedule(); }
   if (CURRENT_SECTION === 'backups') { await populateInstanceDropdown('bkpInstSelect'); loadBackups(); loadBackupSchedules(); loadSelectedBackupSchedule(); }
   if (CURRENT_SECTION === 'migrations') { await populateInstanceDropdown('migLxcSelect', 'lxc'); loadMigrations(); }
   if (CURRENT_SECTION === 'monitoring') loadMonitoring();

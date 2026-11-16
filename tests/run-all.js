@@ -167,7 +167,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
 
   try {
     // 1. Pre-boot migration & schema preservation test on a clean HKVM V2 baseline DB
-    await runStep('T01: Transactional SQLite backup & migrations v001..v015 preserve legacy data & cascade VM FKs', async () => {
+    await runStep('T01: Transactional SQLite backup & migrations v001..v016 preserve legacy data & cascade VM FKs', async () => {
       const v2ScratchPath = path.join(tmpRoot, 'v2_scratch.db');
       const v2Raw = new sqlite3.Database(v2ScratchPath);
       const v2Db = new UnifiedDatabase(v2Raw, v2ScratchPath);
@@ -190,7 +190,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       `);
 
       const migRes = await runMigrations(v2Db);
-      assert.ok(migRes.applied.length >= 15, 'Expected v001..v015 migrations to apply');
+      assert.ok(migRes.applied.length >= 16, 'Expected v001..v016 migrations to apply');
       assert.ok(migRes.backupPath && fs.existsSync(migRes.backupPath), 'Expected pre-migration backup');
 
       // Verify v009 upgraded vm_logs & vm_snapshots to ON DELETE CASCADE while preserving rows,
@@ -230,6 +230,9 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         INSERT INTO settings (setting_key, setting_value) VALUES ('panel_version', 'Canary');
         CREATE TABLE backup_schedules (id INTEGER PRIMARY KEY, enabled INTEGER, frequency TEXT, retention_count INTEGER, next_run TEXT);
         CREATE TABLE container_backups (id INTEGER PRIMARY KEY, schedule_id INTEGER, is_scheduled INTEGER);
+        CREATE TABLE snapshot_schedules (id INTEGER PRIMARY KEY, enabled INTEGER, frequency TEXT, retention_count INTEGER, next_run TEXT);
+        CREATE TABLE vm_snapshots (snapshot_id INTEGER PRIMARY KEY, vm_id INTEGER);
+        CREATE TABLE container_snapshots (id INTEGER PRIMARY KEY, lxc_id INTEGER);
         CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP);
       `);
       for (let version = 1; version <= 14; version += 1) {
@@ -237,6 +240,7 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       }
       const v4SettingsMigration = await runMigrations(customSettingsDb);
       assert.ok(v4SettingsMigration.applied.includes('v015_scheduled_backup_status_and_retention_metadata'));
+      assert.ok(v4SettingsMigration.applied.includes('v016_scheduled_snapshot_status_and_retention_metadata'));
       assert.strictEqual((await customSettingsDb.get(`SELECT setting_value FROM settings WHERE setting_key = 'panel_title'`)).setting_value, 'Acme Compute');
       assert.strictEqual((await customSettingsDb.get(`SELECT setting_value FROM settings WHERE setting_key = 'panel_version'`)).setting_value, 'Canary');
       await customSettingsDb.close();
@@ -1666,6 +1670,89 @@ exec "$@"
       const orphanStatus = await ctx.db.get(`SELECT enabled, last_status FROM backup_schedules WHERE id = ?`, [orphan.lastID]);
       assert.strictEqual(orphanStatus.enabled, 0, 'Deleted/missing instance schedules should be disabled');
       assert.strictEqual(orphanStatus.last_status, 'orphaned');
+    });
+
+    await runStep('T32: Scheduled LXC snapshots execute, retain only scheduled points, notify owners, and skip running KVMs', async () => {
+      const manualBefore = await ctx.db.get(
+        `SELECT COUNT(*) AS count FROM container_snapshots WHERE lxc_id = ? AND COALESCE(is_scheduled, 0) = 0`,
+        [e2eUbuntuId]
+      );
+      const invalid = await adminClient.request('PUT', `/api/v1/snapshot-schedules/lxc/${e2eUbuntuId}`, {
+        frequency: 'daily', retentionCount: 0,
+      });
+      assert.strictEqual(invalid.status, 400, 'Invalid snapshot retention must be rejected');
+
+      const configured = await adminClient.request('PUT', `/api/v1/snapshot-schedules/lxc/${e2eUbuntuId}`, {
+        frequency: 'daily', retentionCount: 1,
+      });
+      assert.strictEqual(configured.status, 200, `Snapshot schedule setup failed: ${configured.text}`);
+      assert.strictEqual(configured.json.schedule.last_status, 'scheduled');
+      const listed = await adminClient.request('GET', `/api/v1/snapshot-schedules?engine=lxc&refId=${e2eUbuntuId}`);
+      assert.strictEqual(listed.status, 200);
+      assert.strictEqual(listed.json.schedules.length, 1);
+      const snapshotPage = await adminClient.request('GET', '/admin/snapshots');
+      assert.strictEqual(snapshotPage.status, 200);
+      assert.ok(snapshotPage.text.includes('Automated Snapshot Schedule'));
+      assert.ok(snapshotPage.text.includes('not guest-consistent'));
+
+      const nonOwner = new SessionClient(baseUrl);
+      await nonOwner.request('POST', '/api/login', { username: 'bob_user', password: 'BobPass!123' });
+      const denied = await nonOwner.request('GET', `/api/v1/snapshot-schedules?engine=lxc&refId=${e2eUbuntuId}`);
+      assert.strictEqual(denied.status, 403, 'Non-owners cannot view snapshot schedules');
+
+      for (let run = 0; run < 3; run += 1) {
+        await ctx.db.run(`UPDATE snapshot_schedules SET next_run = datetime('now', '-1 minute') WHERE id = ?`, [configured.json.schedule.id]);
+        const result = await ctx.backupManager.runDueSnapshotSchedules();
+        assert.deepStrictEqual(result, { processed: 1, succeeded: 1, failed: 0 }, `Scheduled LXC snapshot run ${run + 1} failed`);
+      }
+      const completed = await ctx.db.get(`SELECT * FROM snapshot_schedules WHERE id = ?`, [configured.json.schedule.id]);
+      assert.strictEqual(completed.last_status, 'success');
+      assert.ok(completed.last_snapshot_id > 0);
+      const retained = await ctx.db.all(`SELECT * FROM container_snapshots WHERE schedule_id = ? AND is_scheduled = 1`, [configured.json.schedule.id]);
+      assert.strictEqual(retained.length, 1, 'Snapshot retention must keep exactly one scheduled snapshot');
+      const manualAfter = await ctx.db.get(
+        `SELECT COUNT(*) AS count FROM container_snapshots WHERE lxc_id = ? AND COALESCE(is_scheduled, 0) = 0`,
+        [e2eUbuntuId]
+      );
+      assert.strictEqual(manualAfter.count, manualBefore.count, 'Scheduled retention must preserve manual snapshots');
+      const notices = await ctx.db.get(`SELECT COUNT(*) AS count FROM notifications WHERE user_id = 1 AND title = 'Scheduled snapshot completed'`);
+      assert.ok(notices.count >= 3, 'Each scheduled snapshot should notify the owner');
+      const deleted = await adminClient.request('DELETE', `/api/v1/snapshot-schedules/lxc/${e2eUbuntuId}`);
+      assert.strictEqual(deleted.status, 200);
+      await ctx.backupManager.deleteSnapshot('lxc', e2eUbuntuId, retained[0].id);
+
+      const vm = await ctx.db.get(`SELECT vm_id FROM vms WHERE owner_id = 1 ORDER BY vm_id LIMIT 1`);
+      assert.ok(vm, 'A test KVM VM should exist for the stopped-VM safety check');
+      const oldStatus = await ctx.db.get(`SELECT status, pid FROM vms WHERE vm_id = ?`, [vm.vm_id]);
+      await ctx.db.run(`UPDATE vms SET status = 'running' WHERE vm_id = ?`, [vm.vm_id]);
+      try {
+        const kvmSchedule = await adminClient.request('PUT', `/api/v1/snapshot-schedules/kvm/${vm.vm_id}`, {
+          frequency: 'hourly', retentionCount: 1,
+        });
+        assert.strictEqual(kvmSchedule.status, 200, `KVM schedule setup failed: ${kvmSchedule.text}`);
+        await ctx.db.run(`UPDATE snapshot_schedules SET next_run = datetime('now', '-1 minute') WHERE id = ?`, [kvmSchedule.json.schedule.id]);
+        const skipped = await ctx.backupManager.runDueSnapshotSchedules();
+        assert.deepStrictEqual(skipped, { processed: 1, succeeded: 0, failed: 1 });
+        const status = await ctx.db.get(`SELECT last_status, last_error FROM snapshot_schedules WHERE id = ?`, [kvmSchedule.json.schedule.id]);
+        assert.strictEqual(status.last_status, 'failed');
+        assert.match(status.last_error, /require the VM to be stopped/);
+        await adminClient.request('DELETE', `/api/v1/snapshot-schedules/kvm/${vm.vm_id}`);
+
+        // Even if the database says stopped, a live QEMU PID must block disk snapshotting.
+        await ctx.db.run(`UPDATE vms SET status = 'stopped', pid = ? WHERE vm_id = ?`, [process.pid, vm.vm_id]);
+        const livePidSchedule = await adminClient.request('PUT', `/api/v1/snapshot-schedules/kvm/${vm.vm_id}`, {
+          frequency: 'hourly', retentionCount: 1,
+        });
+        assert.strictEqual(livePidSchedule.status, 200);
+        await ctx.db.run(`UPDATE snapshot_schedules SET next_run = datetime('now', '-1 minute') WHERE id = ?`, [livePidSchedule.json.schedule.id]);
+        const livePidSkipped = await ctx.backupManager.runDueSnapshotSchedules();
+        assert.deepStrictEqual(livePidSkipped, { processed: 1, succeeded: 0, failed: 1 });
+        const livePidError = await ctx.db.get(`SELECT last_error FROM snapshot_schedules WHERE id = ?`, [livePidSchedule.json.schedule.id]);
+        assert.match(livePidError.last_error, /require the VM to be stopped/);
+        await adminClient.request('DELETE', `/api/v1/snapshot-schedules/kvm/${vm.vm_id}`);
+      } finally {
+        await ctx.db.run(`UPDATE vms SET status = ?, pid = ? WHERE vm_id = ?`, [oldStatus.status, oldStatus.pid, vm.vm_id]);
+      }
     });
 
     // 15. LXC Snapshots, SHA-256 Archive Backup + Clean Restore, 7-Stage Offline Migration (+ Rollback) & Local/Remote WebSocket PTY Console
