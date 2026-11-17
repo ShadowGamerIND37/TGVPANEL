@@ -762,6 +762,7 @@
           <input id="instSearch" oninput="loadUnifiedInstances()" placeholder="Filter name, IP, owner..." style="padding:8px 12px;border-radius:8px;background:var(--bg-card);color:var(--text-primary);border:1px solid var(--border-card);">
           <button class="btn btn-outline" onclick="bulkSelected('start')">Bulk Start</button>
           <button class="btn btn-outline" onclick="bulkSelected('stop')">Bulk Stop</button>
+          <button class="btn btn-outline" onclick="runExpirationSweep()" title="Suspend expired LXC instances with auto-suspend enabled">Run Expiration Sweep</button>
           <a href="/admin/instances/create" class="btn btn-primary">+ Create Instance</a>
         </div>
       </div>
@@ -2045,6 +2046,14 @@
         <button class="btn btn-outline" onclick="triggerDbBackup()">Snapshot Controller SQLite DB</button>
       </div>
       <div class="v3-card">
+        <h3 style="margin:0 0 10px;color:var(--text-primary);">Copy Backup to Another Node</h3>
+        <p style="margin:0 0 14px;color:var(--text-muted);font-size:12px;">Copy an existing archive backup to a destination node with integrity verification. Choose the destination, then use Copy on a backup row below.</p>
+        <div class="v3-form-grid">
+          <div class="v3-field"><label>Destination Node</label><select id="bkpCopyNode"></select></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-outline" onclick="loadBackupCopyNodes()">Load Nodes</button></div>
+        </div>
+      </div>
+      <div class="v3-card">
         <div class="v3-form-grid">
           <div class="v3-field"><label>Select Instance</label><select id="bkpInstSelect" onchange="loadSelectedBackupSchedule()"></select></div>
           <div class="v3-field"><label>Backup Label</label><input id="bkpLabel" placeholder="weekly_full"></div>
@@ -2763,6 +2772,18 @@
             }, null, 2) %></div>
           </div>
         </div>
+
+        <div class="v3-card">
+          <h3 style="margin:0 0 10px;color:var(--text-primary);">Legacy HVM Database Import (Preflight)</h3>
+          <p style="margin:0 0 14px;color:var(--text-muted);font-size:12px;">Validate a legacy HVM SQLite database before importing: required tables, row counts, password-hash formats and username/email collisions. The dry-run never writes to the panel database.</p>
+          <div class="v3-form-grid">
+            <div class="v3-field" style="grid-column:1/-1;"><label>HVM database file path</label><input id="hvmDbPath" placeholder="/path/to/legacy.db"></div>
+            <div class="v3-field" style="display:flex;align-items:flex-end;gap:8px;">
+              <button class="btn btn-primary" onclick="runHvmImportDryRun()">Run Pre-Import Check</button>
+            </div>
+          </div>
+          <div id="hvmImportReport" style="margin-top:12px;font-size:12px;color:var(--text-muted);"></div>
+        </div>
       </div>
       <% } %>
 
@@ -2921,6 +2942,17 @@ async function fillInstanceTraffic(tbody) {
       cell.textContent = '—';
     }
   }));
+}
+
+async function runExpirationSweep() {
+  try {
+    const out = await hkvmApi('/api/v1/lxc/expirations/sweep', { method: 'POST' });
+    const n = Number(out.suspended?.length || 0);
+    hkvmToast(n > 0 ? `Expiration sweep: ${n} instance(s) suspended.` : 'Expiration sweep: nothing to suspend.', n > 0 ? 'warning' : 'success');
+    loadUnifiedInstances();
+  } catch (err) {
+    hkvmToast('Expiration sweep failed: ' + (err.message || err), 'error');
+  }
 }
 
 async function loadUnifiedInstances() {
@@ -5532,6 +5564,8 @@ async function loadBackups() {
         <td>${hkvmEsc(b.created_at)}</td>
         <td class="v3-btn-row">
           <button class="btn btn-outline" onclick="verifyBackup(${b.id})">Verify SHA-256</button>
+          <button class="btn btn-outline" onclick="rehearseBackup(${b.id})" title="Dry-run restore verification">Rehearse</button>
+          <button class="btn btn-outline" onclick="copyBackupToNode(${b.id})" title="Copy this backup to the selected destination node">Copy</button>
           ${b.instance_type === 'lxc' ? `<button class="btn btn-outline" onclick="restoreAdminBackup(${b.id})">Restore</button>` : ''}
           <button class="btn btn-outline" style="color:#ef4444;" onclick="delBackup(${b.id})">Delete</button>
         </td>
@@ -5645,6 +5679,44 @@ async function delBackup(id) {
 async function triggerDbBackup() {
   const out = await hkvmApi('/api/v1/database/backup', { method: 'POST' });
   hkvmToast('SQLite DB backed up: ' + out.backupPath);
+}
+
+async function loadBackupCopyNodes() {
+  try {
+    const data = await hkvmApi('/api/v1/nodes');
+    const sel = document.getElementById('bkpCopyNode');
+    if (!sel) return;
+    sel.innerHTML = (data.nodes || []).map(n =>
+      `<option value="${n.id}">${hkvmEsc(n.name)} (${hkvmEsc(n.ip_address || '#' + n.id)})</option>`
+    ).join('') || '<option value="">No nodes registered</option>';
+  } catch (err) {
+    hkvmToast('Could not load nodes: ' + (err.message || err), 'error');
+  }
+}
+
+async function rehearseBackup(id) {
+  try {
+    const out = await hkvmApi('/api/v1/backups/' + id + '/rehearse', { method: 'POST' });
+    hkvmToast('Restore rehearsal: ' + (out.ok ? 'verified OK' : 'completed with warnings'), out.ok ? 'success' : 'warning');
+  } catch (err) {
+    hkvmToast('Rehearsal failed: ' + (err.message || err), 'error');
+  }
+}
+
+async function copyBackupToNode(id) {
+  const sel = document.getElementById('bkpCopyNode');
+  const targetNodeId = sel ? Number(sel.value) : NaN;
+  if (!targetNodeId) {
+    hkvmToast('Choose a destination node first (Load Nodes)', 'warning');
+    return;
+  }
+  try {
+    const out = await hkvmApi('/api/v1/backups/' + id + '/copy', { method: 'POST', body: { targetNodeId } });
+    hkvmToast('Backup copied to node: ' + hkvmEsc(out.copy?.node_name || targetNodeId), 'success');
+    loadBackups();
+  } catch (err) {
+    hkvmToast('Copy failed: ' + (err.message || err), 'error');
+  }
 }
 
 async function loadMigrations() {
@@ -5790,6 +5862,28 @@ function renderDualSeriesSvg(containerId, points, s1Cfg, s2Cfg) {
     ${midLbl ? `<text x="${(padL + plotW / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle" fill="rgba(160,170,185,0.75)" font-size="9.5" font-family="monospace">${midLbl}</text>` : ''}
     <text x="${W - padR}" y="${H - 6}" text-anchor="end" fill="rgba(160,170,185,0.75)" font-size="9.5" font-family="monospace">${lastLbl}</text>
   </svg>`;
+}
+
+async function runHvmImportDryRun() {
+  const path = document.getElementById('hvmDbPath')?.value.trim();
+  const reportEl = document.getElementById('hvmImportReport');
+  if (!path) {
+    reportEl.textContent = 'Enter the legacy HVM database file path first.';
+    return;
+  }
+  try {
+    const out = await hkvmApi('/api/v1/database/import-hvm/dry-run', { method: 'POST', body: { hvmDbPath: path } });
+    const r = out.report || {};
+    const lines = [];
+    if (r.ok !== undefined) lines.push('Overall: ' + (r.ok ? 'READY' : 'ISSUES FOUND'));
+    if (r.tables) lines.push('Tables checked: ' + Object.keys(r.tables).length);
+    if (r.errors && r.errors.length) lines.push('Issues: ' + r.errors.slice(0, 5).join('; '));
+    reportEl.innerHTML = '<pre style="white-space:pre-wrap;margin:0;">' + hkvmEsc(lines.join('\n') || JSON.stringify(r, null, 2)) + '</pre>';
+    hkvmToast(r.ok ? 'Pre-import check: ready to import.' : 'Pre-import check found issues — review report.', r.ok ? 'success' : 'warning');
+  } catch (err) {
+    reportEl.textContent = 'Pre-import check failed: ' + (err.message || err);
+    hkvmToast('Pre-import check failed', 'error');
+  }
 }
 
 async function loadMonitoring() {
