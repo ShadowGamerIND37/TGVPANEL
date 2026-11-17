@@ -32,6 +32,7 @@ export interface CreateLxcInstanceInput {
     sshPublicKeys?: string[];
     autostart?: boolean;
     bandwidthQuotaGb?: number;
+    unlimitedBandwidth?: boolean;
     expirationDays?: number;
     autoSuspendEnabled?: boolean;
     notes?: string;
@@ -98,6 +99,7 @@ export declare class LXCAdapter implements VirtualizationAdapter {
         ipv6Address?: string | null;
         macAddress?: string | null;
         bandwidthQuotaGb?: number;
+        unlimitedBandwidth?: boolean;
         notes?: string;
     }, applyToHost?: boolean): Promise<UnifiedInstanceRecord>;
     cloneStoppedLxcInstance(refId: number, newName: string): Promise<{

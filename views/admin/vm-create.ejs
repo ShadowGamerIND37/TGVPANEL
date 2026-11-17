@@ -545,6 +545,39 @@
                 </div>
               </div>
             </div>
+
+            <!-- Bandwidth Limit -->
+            <div class="card" style="margin-top: 16px;">
+              <div class="card-header">
+                <div class="card-title">
+                  <span style="color:#10B981;display:inline-flex;"><svg width="18" height="18"><use href="#i-network"/></svg></span>
+                  Bandwidth Limit
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="form-group">
+                  <label class="form-label">Bandwidth Mode</label>
+                  <div style="display:flex; gap: 12px; margin-bottom: 12px;">
+                    <label class="form-check-label" style="display:flex; align-items:center; gap: 6px; cursor:pointer;">
+                      <input type="radio" name="bandwidth_mode" value="unlimited" id="bw_unlimited" checked onchange="toggleBandwidthMode()">
+                      Unlimited
+                    </label>
+                    <label class="form-check-label" style="display:flex; align-items:center; gap: 6px; cursor:pointer;">
+                      <input type="radio" name="bandwidth_mode" value="limited" id="bw_limited" onchange="toggleBandwidthMode()">
+                      Limited (GB/month)
+                    </label>
+                  </div>
+                  <div id="bandwidth_limited_section" style="display:none;">
+                    <div class="input-group" style="max-width: 300px;">
+                      <input type="number" class="form-control" name="bandwidth_quota_gb" id="bandwidth_quota_gb" value="100" min="1" step="1">
+                      <span class="input-group-text">GB / month</span>
+                    </div>
+                    <div class="form-hint">Monthly bandwidth quota. The VM will be flagged when usage reaches the limit.</div>
+                  </div>
+                  <div id="bandwidth_unlimited_hint" class="form-hint">No bandwidth quota is enforced for this VM.</div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -761,6 +794,19 @@ function svg(id, size = 14) {
 
 // Initialize
 async function init() {
+  function toggleBandwidthMode() {
+    const unlimited = document.getElementById('bw_unlimited').checked;
+    const limitedSection = document.getElementById('bandwidth_limited_section');
+    const unlimitedHint = document.getElementById('bandwidth_unlimited_hint');
+    if (unlimited) {
+      limitedSection.style.display = 'none';
+      unlimitedHint.style.display = 'block';
+    } else {
+      limitedSection.style.display = 'block';
+      unlimitedHint.style.display = 'none';
+    }
+  }
+
   await Promise.all([loadTemplates(), loadCPUModels(), loadNetworkTypes(), loadISOList(), loadUsers()]);
   updatePreview();
 }

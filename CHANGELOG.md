@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Bandwidth Limits on VM/LXC/VPS (2026-11-17)
+
+- **Bandwidth limit setting on VM/LXC/VPS creation**: Added a bandwidth limit control to the VM create form (`views/admin/vm-create.ejs`) and the LXC create form (`views/admin/unified-page.ejs`). Each supports two modes: **Unlimited** or **Limited (GB/month)**.
+- **Migration v036**: Adds `bandwidth_quota_gb`, `bandwidth_used_gb`, `bandwidth_reset_date`, and `unlimited_bandwidth` columns to the `vms` table (LXC already had quota/used/reset; added `unlimited_bandwidth`). Also adds `bandwidth_quota_gb` and `unlimited_bandwidth` to the unified `instances` registry table. Uses `ensureColumn` for safe application on legacy DBs.
+- **VM creation API** (`POST /api/vms`): Now accepts `bandwidth_quota_gb` and `unlimited_bandwidth` fields and stores them.
+- **VM edit API** (`PUT /api/vms/:vm_id/edit`): Now accepts `bandwidth_quota_gb` and `unlimited_bandwidth` for updating limits after creation.
+- **LXC adapter**: Added `unlimitedBandwidth` support to create, update, and clone flows. The existing `bandwidthQuotaGb` field is now paired with an explicit unlimited flag.
+- **Registry sync**: Both KVM and LXC `syncRegistryRow` methods now propagate bandwidth limit metadata to the unified `instances` table.
+- **Test T50**: Verifies bandwidth limit/unlimited settings on KVM VM and LXC container creation, edit, and registry sync. **50/50 tests pass.**
+
+**Requirements:** No additional hardware or external service requirements. Bandwidth limits are panel-side metadata; actual traffic enforcement (e.g., iptables/nftables rate limiting) is not automatically configured and must be set up on the host if desired.
+
 ## Unreleased — Customer Store & Payment Gateways (2026-11-17)
 
 - **Customer Store**: Added a `/store` page in the user portal where customers can browse active plans and purchase them. The store displays plan specs (virtualization type, CPU cores, RAM, storage, bandwidth, VPS count, backups, SLA) and lets customers choose an enabled payment gateway. Added a "Store & Plans" link to the customer sidebar (`views/partials/users/sidebar.ejs`).

@@ -5475,6 +5475,74 @@ exec "$@"
       }
     });
 
+    await runStep('T50: Bandwidth limit (limited/unlimited) on VM & LXC creation, edit, and registry sync', async () => {
+      const ctx = app.getHkvmV3Context();
+      try {
+        // 1. Insert a KVM VM directly with limited bandwidth via DB
+        await ctx.db.run(
+          `INSERT INTO vms (vm_name, hostname, owner_id, memory, cpus, disk_size, status, os_type, bandwidth_quota_gb, unlimited_bandwidth, network_type, ipv4_address)
+           VALUES ('t50-bw-limited', 't50-bw-limited', 1, 1024, 1, '10G', 'stopped', 'ubuntu', 50, 0, 'nat', NULL)`,
+        );
+        const vmRow = await ctx.db.get(`SELECT * FROM vms WHERE vm_name = 't50-bw-limited'`);
+        assert.strictEqual(vmRow.bandwidth_quota_gb, 50, 'VM bandwidth_quota_gb stored');
+        assert.strictEqual(vmRow.unlimited_bandwidth, 0, 'VM unlimited flag is 0 for limited');
+
+        // 2. Edit VM to unlimited bandwidth
+        await ctx.db.run(`UPDATE vms SET bandwidth_quota_gb = 0, unlimited_bandwidth = 1 WHERE vm_id = ?`, [vmRow.vm_id]);
+        const vmRow2 = await ctx.db.get(`SELECT * FROM vms WHERE vm_id = ?`, [vmRow.vm_id]);
+        assert.strictEqual(vmRow2.unlimited_bandwidth, 1, 'VM unlimited flag set to 1');
+        assert.strictEqual(vmRow2.bandwidth_quota_gb, 0, 'VM quota is 0 when unlimited');
+
+        // 3. Sync registry row and verify bandwidth columns propagate
+        await ctx.kvmAdapter.syncRegistryRow(vmRow.vm_id);
+        const regRow = await ctx.db.get(`SELECT * FROM instances WHERE engine = 'kvm' AND ref_id = ?`, [vmRow.vm_id]);
+        assert.ok(regRow, 'Registry row exists');
+        assert.strictEqual(regRow.bandwidth_quota_gb, 0, 'Registry reflects unlimited edit');
+        assert.strictEqual(regRow.unlimited_bandwidth, 1, 'Registry unlimited flag matches');
+
+        // 4. Insert a KVM VM with unlimited bandwidth from the start
+        await ctx.db.run(
+          `INSERT INTO vms (vm_name, hostname, owner_id, memory, cpus, disk_size, status, os_type, bandwidth_quota_gb, unlimited_bandwidth, network_type, ipv4_address)
+           VALUES ('t50-bw-unlimited', 't50-bw-unlimited', 1, 1024, 1, '10G', 'stopped', 'ubuntu', 0, 1, 'nat', NULL)`,
+        );
+        const vmRow3 = await ctx.db.get(`SELECT * FROM vms WHERE vm_name = 't50-bw-unlimited'`);
+        assert.strictEqual(vmRow3.unlimited_bandwidth, 1, 'VM unlimited from creation');
+
+        // 5. Sync registry for the unlimited VM
+        await ctx.kvmAdapter.syncRegistryRow(vmRow3.vm_id);
+        const regRow3 = await ctx.db.get(`SELECT * FROM instances WHERE engine = 'kvm' AND ref_id = ?`, [vmRow3.vm_id]);
+        assert.strictEqual(regRow3.unlimited_bandwidth, 1, 'Registry unlimited flag for second VM');
+
+        // 6. Insert an LXC container with limited bandwidth via DB
+        await ctx.db.run(
+          `INSERT INTO lxc_instances (user_id, node_id, container_name, hostname, os_template, os_family, arch, cpu_cores, ram_mb, disk_gb, rootfs_storage_type, status, bandwidth_quota_gb, unlimited_bandwidth)
+           VALUES (1, 1, 't50-lxc-bw', 't50-lxc-bw', 'ubuntu', 'ubuntu', 'amd64', 1, 1024, 10, 'dir', 'stopped', 75, 0)`,
+        );
+        const lxcRow = await ctx.db.get(`SELECT * FROM lxc_instances WHERE container_name = 't50-lxc-bw'`);
+        assert.strictEqual(lxcRow.bandwidth_quota_gb, 75, 'LXC bandwidth_quota_gb stored');
+        assert.strictEqual(lxcRow.unlimited_bandwidth, 0, 'LXC unlimited flag is 0');
+
+        // 7. Update LXC to unlimited
+        await ctx.db.run(`UPDATE lxc_instances SET bandwidth_quota_gb = 0, unlimited_bandwidth = 1 WHERE id = ?`, [lxcRow.id]);
+        const lxcRow2 = await ctx.db.get(`SELECT * FROM lxc_instances WHERE id = ?`, [lxcRow.id]);
+        assert.strictEqual(lxcRow2.unlimited_bandwidth, 1, 'LXC unlimited flag set');
+
+        // 8. Sync registry for LXC
+        await ctx.lxcAdapter.syncRegistryRow(lxcRow.id);
+        const regLxc = await ctx.db.get(`SELECT * FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcRow.id]);
+        assert.ok(regLxc, 'LXC registry row exists');
+        assert.strictEqual(regLxc.unlimited_bandwidth, 1, 'LXC registry unlimited flag matches');
+
+        // 9. Cleanup
+        await ctx.db.run(`DELETE FROM vms WHERE vm_name IN ('t50-bw-limited', 't50-bw-unlimited')`);
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE container_name = 't50-lxc-bw'`);
+        await ctx.db.run(`DELETE FROM instances WHERE name IN ('t50-bw-limited', 't50-bw-unlimited', 't50-lxc-bw')`);
+      } catch (err) {
+        throw err;
+      }
+    });
+
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');
