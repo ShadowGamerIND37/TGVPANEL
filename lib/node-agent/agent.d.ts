@@ -7,6 +7,7 @@ import { LxcSnapshotAndBackupManager } from './snapshot-manager';
 import { LxcTransferManager } from './transfer-manager';
 import { LxcContainerConsoleManager } from './container-console';
 import { AdminNodeShellManager } from './shell-manager';
+import { NodeDdosRuntime } from './ddos-agent';
 /**
  * In-process runtime combining all Node Agent managers.
  * Used BOTH by the standalone remote Node Agent daemon (`startNodeAgentServer`)
@@ -19,6 +20,7 @@ export declare class LocalNodeRuntime {
     readonly transferManager: LxcTransferManager;
     readonly consoleManager: LxcContainerConsoleManager;
     readonly shellManager: AdminNodeShellManager;
+    readonly ddosRuntime: NodeDdosRuntime;
     constructor(options?: {
         lxcBaseDir?: string;
         backupDir?: string;

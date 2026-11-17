@@ -2142,6 +2142,274 @@ export const MIGRATIONS: MigrationDefinition[] = [
         )`
       );
       await db.run(`INSERT OR IGNORE INTO ddos_settings (id) VALUES (1)`);
+    },
+  },
+  {
+    version: 34,
+    name: 'v034_ddos_enterprise',
+    up: async (db) => {
+      // Enterprise DDoS protection upgrade (Area D hardening, enterprise).
+      // Expanded detection, mitigation, profiles, multi-node, per-VPS,
+      // HTTP protection, Cloudflare integration and notifications.
+
+      // --- Enhanced settings (supersedes v033 ddos_settings) ---
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN syn_cookies INTEGER NOT NULL DEFAULT 1`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN connection_limit INTEGER NOT NULL DEFAULT 1000`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN packet_rate_limit INTEGER NOT NULL DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN per_ip_rate_limit INTEGER NOT NULL DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN emergency_mode INTEGER NOT NULL DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN max_bandwidth_mbps INTEGER NOT NULL DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN max_connections INTEGER NOT NULL DEFAULT 10000`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN ack_flood_threshold INTEGER NOT NULL DEFAULT 200`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN icmp_flood_threshold INTEGER NOT NULL DEFAULT 500`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN http_get_threshold INTEGER NOT NULL DEFAULT 300`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN http_post_threshold INTEGER NOT NULL DEFAULT 150`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN slowloris_threshold INTEGER NOT NULL DEFAULT 20`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN dns_amp_threshold INTEGER NOT NULL DEFAULT 100`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN udp_amp_threshold INTEGER NOT NULL DEFAULT 100`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN packet_rate_threshold INTEGER NOT NULL DEFAULT 5000`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN suspicious_user_agent_block INTEGER NOT NULL DEFAULT 1`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN trusted_proxies TEXT NOT NULL DEFAULT ''`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN cloudflare_enabled INTEGER NOT NULL DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN cloudflare_zone TEXT`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN cloudflare_security_level TEXT NOT NULL DEFAULT 'medium'`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN notify_attack_detected INTEGER NOT NULL DEFAULT 1`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN notify_attack_mitigated INTEGER NOT NULL DEFAULT 1`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN notify_attack_ended INTEGER NOT NULL DEFAULT 1`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN notify_critical_bandwidth INTEGER NOT NULL DEFAULT 1`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN notify_suspicious_traffic INTEGER NOT NULL DEFAULT 1`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN notify_node_failure INTEGER NOT NULL DEFAULT 1`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN notify_firewall_failure INTEGER NOT NULL DEFAULT 1`);
+      await db.run(`ALTER TABLE ddos_settings ADD COLUMN notify_engine_failure INTEGER NOT NULL DEFAULT 1`);
+
+      // --- Enhanced IP records (supersedes v033 ddos_ips) ---
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN ack_count INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN icmp_count INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN http_get_count INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN http_post_count INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN slowloris_count INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN dns_amp_count INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN udp_amp_count INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN packet_rate INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN reputation INTEGER NOT NULL DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN banned INTEGER NOT NULL DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN ban_type TEXT NOT NULL DEFAULT 'temporary'`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN ban_reason TEXT`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN ban_expires INTEGER`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN whitelisted INTEGER NOT NULL DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN attack_types TEXT`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN pps INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN bps INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN conn_rate INTEGER DEFAULT 0`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN last_attack_at INTEGER`);
+      await db.run(`ALTER TABLE ddos_ips ADD COLUMN attack_count INTEGER DEFAULT 0`);
+
+      // --- Attack history (distinct from event log) ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_attacks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ip TEXT,
+          attack_type TEXT NOT NULL,
+          severity TEXT NOT NULL DEFAULT 'medium',
+          detected_at INTEGER NOT NULL,
+          ended_at INTEGER,
+          duration_seconds INTEGER,
+          pps INTEGER DEFAULT 0,
+          bps INTEGER DEFAULT 0,
+          connections INTEGER DEFAULT 0,
+          node_id INTEGER,
+          vps_id INTEGER,
+          mitigated INTEGER DEFAULT 0,
+          mitigation_method TEXT,
+          details TEXT
+        )`
+      );
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_ddos_attacks_ip ON ddos_attacks(ip)`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_ddos_attacks_ts ON ddos_attacks(detected_at)`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_ddos_attacks_type ON ddos_attacks(attack_type)`);
+
+      // --- Active mitigations tracking ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_mitigations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ip TEXT NOT NULL,
+          method TEXT NOT NULL,
+          attack_type TEXT,
+          active INTEGER NOT NULL DEFAULT 1,
+          created_at INTEGER NOT NULL,
+          expired_at INTEGER,
+          node_id INTEGER,
+          vps_id INTEGER,
+          rule_id TEXT,
+          rolled_back INTEGER DEFAULT 0
+        )`
+      );
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_ddos_mit_ip ON ddos_mitigations(ip)`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_ddos_mit_active ON ddos_mitigations(active)`);
+
+      // --- IP whitelist (separate from per-IP record for fast lookups) ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_whitelist (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          ip TEXT NOT NULL UNIQUE,
+          reason TEXT,
+          node_id INTEGER,
+          vps_id INTEGER,
+          created_by INTEGER,
+          created_at INTEGER NOT NULL
+        )`
+      );
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_ddos_wl_ip ON ddos_whitelist(ip)`);
+
+      // --- Protection profiles ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT,
+          level TEXT NOT NULL DEFAULT 'custom',
+          syn_cookies INTEGER DEFAULT 1,
+          connection_limit INTEGER DEFAULT 1000,
+          packet_rate_limit INTEGER DEFAULT 0,
+          per_ip_rate_limit INTEGER DEFAULT 0,
+          auto_block INTEGER DEFAULT 1,
+          block_duration INTEGER DEFAULT 3600,
+          threat_threshold_medium INTEGER DEFAULT 100,
+          threat_threshold_high INTEGER DEFAULT 500,
+          threat_threshold_critical INTEGER DEFAULT 1000,
+          http_get_threshold INTEGER DEFAULT 300,
+          http_post_threshold INTEGER DEFAULT 150,
+          slowloris_threshold INTEGER DEFAULT 20,
+          dns_amp_threshold INTEGER DEFAULT 100,
+          udp_amp_threshold INTEGER DEFAULT 100,
+          packet_rate_threshold INTEGER DEFAULT 5000,
+          suspicious_ua_block INTEGER DEFAULT 1,
+          emergency_mode INTEGER DEFAULT 0,
+          protocols TEXT,
+          ports TEXT,
+          is_active INTEGER DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )`
+      );
+      await db.run(
+        `INSERT OR IGNORE INTO ddos_profiles (name, level, description, is_active) VALUES
+          ('Basic', 'basic', 'Minimal protection: SYN flood and basic connection flood detection.', 0),
+          ('Standard', 'standard', 'Balanced protection for typical hosting workloads.', 0),
+          ('Advanced', 'advanced', 'Comprehensive protection with HTTP and amplification detection.', 0),
+          ('Aggressive', 'aggressive', 'Maximum protection with aggressive thresholds and auto-blocking.', 1)`
+      );
+
+      // --- Profile-to-node / profile-to-VPS assignments ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_profile_assignments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL,
+          node_id INTEGER,
+          vps_id INTEGER,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(profile_id, node_id, vps_id)
+        )`
+      );
+
+      // --- Per-VPS protection policies ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_vps_policies (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          vps_id INTEGER NOT NULL UNIQUE,
+          instance_type TEXT NOT NULL,
+          instance_ref_id INTEGER NOT NULL,
+          node_id INTEGER,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          profile_id INTEGER,
+          tcp_protection INTEGER DEFAULT 1,
+          udp_protection INTEGER DEFAULT 1,
+          icmp_protection INTEGER DEFAULT 1,
+          connection_limit INTEGER DEFAULT 500,
+          per_ip_rate_limit INTEGER DEFAULT 0,
+          port_whitelist TEXT,
+          ip_whitelist TEXT,
+          auto_block INTEGER DEFAULT 1,
+          block_duration INTEGER DEFAULT 3600,
+          network_isolation INTEGER DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )`
+      );
+
+      // --- Node DDoS status ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_node_status (
+          node_id INTEGER PRIMARY KEY,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          profile_id INTEGER,
+          online INTEGER DEFAULT 0,
+          last_sync_at INTEGER,
+          last_error TEXT,
+          pps INTEGER DEFAULT 0,
+          bps INTEGER DEFAULT 0,
+          active_connections INTEGER DEFAULT 0,
+          blocked_ips INTEGER DEFAULT 0,
+          updated_at INTEGER
+        )`
+      );
+
+      // --- Cloudflare / external integration credentials ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_integrations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          api_key_enc TEXT,
+          api_email TEXT,
+          zone TEXT,
+          security_level TEXT DEFAULT 'medium',
+          is_active INTEGER DEFAULT 0,
+          last_sync_at INTEGER,
+          last_error TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )`
+      );
+
+      // --- Audit log for firewall/mitigation operations ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_audit_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          action TEXT NOT NULL,
+          target TEXT,
+          ip TEXT,
+          node_id INTEGER,
+          vps_id INTEGER,
+          method TEXT,
+          rule_id TEXT,
+          success INTEGER DEFAULT 1,
+          detail TEXT,
+          user_id INTEGER,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )`
+      );
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_ddos_audit_ts ON ddos_audit_log(created_at)`);
+
+      // --- Firewall rule ownership tags (for safe rollback) ---
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS ddos_firewall_rules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          rule_id TEXT NOT NULL UNIQUE,
+          ip TEXT NOT NULL,
+          protocol TEXT,
+          port TEXT,
+          action TEXT NOT NULL,
+          direction TEXT DEFAULT 'INPUT',
+          table_name TEXT DEFAULT 'filter',
+          chain TEXT DEFAULT 'INPUT',
+          node_id INTEGER,
+          vps_id INTEGER,
+          created_at INTEGER NOT NULL,
+          active INTEGER DEFAULT 1,
+          rolled_back INTEGER DEFAULT 0
+        )`
+      );
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_ddos_fw_ip ON ddos_firewall_rules(ip)`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_ddos_fw_active ON ddos_firewall_rules(active)`);
     }
   },
 ];

@@ -19,6 +19,36 @@ Status is based on code and acceptance tests, not marketing pages or historical 
 | General persistent task queue/distributed locks | PARTIALLY IMPLEMENTED | v019 persists lifecycle task status/history and serializes manager-routed synchronous/async action and bulk calls per VPS; reseller VPS lifecycle calls share the manager lock/history without changing their synchronous HTTP contract, and legacy KVM plus direct LXC mutations are covered selectively. Some non-lifecycle legacy mutations remain outside this history; workers are in-process and there is no general distributed queue or multi-controller worker. |
 
 
+
+## Enterprise DDoS Protection (Area D hardening) — Enterprise Upgrade
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| TCP SYN/ACK/connection flood detection | ✅ Integrated | ss/netstat monitoring with thresholds |
+| UDP/ICMP flood detection | ✅ Integrated | Per-IP and global detection |
+| HTTP GET/POST flood detection | ✅ Integrated | Middleware + per-IP tracking |
+| Slowloris / slow HTTP detection | ✅ Integrated | User-agent diversity scoring |
+| DNS/UDP amplification detection | ✅ Integrated | Port 53 and response-size analysis |
+| Packet rate / bandwidth / connection exhaustion | ✅ Integrated | /proc/net/snmp PPS/BPS metrics |
+| Port scanning detection | ✅ Integrated | Per-IP port count analysis |
+| nftables + iptables mitigation | ✅ Integrated | Rule ownership, locking, rollback |
+| SYN cookies, connection/packet rate limits | ✅ Integrated | sysctl + firewall controls |
+| Emergency mitigation mode | ✅ Integrated | Aggressive sysctl tuning |
+| IP reputation scoring | ✅ Integrated | Attack-count-based reputation |
+| IPv4 + IPv6 filtering | ✅ Integrated | iptables/ip6tables + nftables |
+| Temporary/permanent IP bans | ✅ Integrated | Auto expiration + manual bans |
+| IP whitelisting | ✅ Integrated | Global + per-VPS whitelists |
+| Protection profiles (Basic/Standard/Advanced/Aggressive/Custom) | ✅ Integrated | Configurable thresholds, node/VPS assignments |
+| Multi-node sync | ✅ Integrated | Node Agent integration, remote config/stats |
+| Per-VPS protection (KVM/LXC) | ✅ Integrated | Per-VPS policies, port/IP whitelists, isolation |
+| Cloudflare integration | ✅ Integrated | Encrypted credentials, security sync, analytics |
+| TGVPANEL notifications | ✅ Integrated | Attack detected/mitigated/ended, failures |
+| Audit logging | ✅ Integrated | All firewall/mitigation operations |
+| Secure API + RBAC | ✅ Integrated | Role-based access, API rate limiting |
+| Test coverage (T47) | ✅ Passing | 47/47 acceptance tests |
+
+**Requirements:** Linux host with `ss`, `netstat`, `iptables`/`nft`. Cloudflare requires API credentials and network access.
+
 ## DDoS Protection (Area D hardening) — Integrated
 
 | Feature | Status | Notes |

@@ -19,6 +19,7 @@ import { isBinaryAvailable, runAllowlistedCommand } from './command-runner';
 import { hashApiKey, signAgentRequest } from '../security/crypto-vault';
 import { SafeValidators } from '../security/middleware';
 import { decryptArchive } from '../services/backup/backup-crypto';
+import { NodeDdosRuntime, attachNodeDdosEndpoints } from './ddos-agent';
 
 /**
  * In-process runtime combining all Node Agent managers.
@@ -32,6 +33,7 @@ export class LocalNodeRuntime {
   public readonly transferManager: LxcTransferManager;
   public readonly consoleManager: LxcContainerConsoleManager;
   public readonly shellManager: AdminNodeShellManager;
+  public readonly ddosRuntime: NodeDdosRuntime;
 
   constructor(options?: {
     lxcBaseDir?: string;
@@ -58,6 +60,7 @@ export class LocalNodeRuntime {
       interactiveEnabled: options?.interactiveHostShell,
       onAuditEvent: options?.onAuditEvent,
     });
+    this.ddosRuntime = new NodeDdosRuntime();
   }
 }
 
@@ -1132,6 +1135,9 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
       res.status(400).json({ error: err.message });
     }
   });
+
+  // DDoS protection (Area D hardening) — node-side monitoring & mitigation
+  attachNodeDdosEndpoints(app, runtime.ddosRuntime);
 
   // Credential rotation
   app.post('/api/v1/credentials/rotate', (req, res) => {
