@@ -347,6 +347,63 @@ export function createUnifiedWebRouter(
   });
 
   router.get(
+    '/admin/load-balancers',
+    ...adminStaffGuard,
+    async (req: Request, res: Response) => {
+      const nodes = await ctx.nodeManager.listNodes();
+      res.render('admin/unified-page', {
+        title: 'HAProxy Load Balancers - TGVPANEL',
+        currentPage: 'load-balancers',
+        section: 'load-balancers',
+        user: res.locals.user || (req as any).session?.user,
+        nodes,
+      });
+    }
+  );
+
+  router.get(
+    '/admin/docker',
+    ...adminStaffGuard,
+    async (req: Request, res: Response) => {
+      const nodes = await ctx.nodeManager.listNodes();
+      res.render('admin/unified-page', {
+        title: 'Docker Containers - TGVPANEL',
+        currentPage: 'docker',
+        section: 'docker',
+        user: res.locals.user || (req as any).session?.user,
+        nodes,
+      });
+    }
+  );
+
+  router.get(
+    '/admin/billing',
+    ...adminStaffGuard,
+    async (req: Request, res: Response) => {
+      res.render('admin/unified-page', {
+        title: 'Billing & Invoicing - TGVPANEL',
+        currentPage: 'billing',
+        section: 'billing',
+        user: res.locals.user || (req as any).session?.user,
+      });
+    }
+  );
+
+  router.get(
+    '/admin/sessions',
+    requirePrincipal,
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      res.render('admin/unified-page', {
+        title: 'Active Sessions - TGVPANEL',
+        currentPage: 'sessions',
+        section: 'sessions',
+        user: res.locals.user || (req as any).session?.user,
+      });
+    }
+  );
+
+  router.get(
     '/admin/api-keys',
     requirePrincipal,
     requireRole(['admin']),
