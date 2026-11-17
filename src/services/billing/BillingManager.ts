@@ -7,6 +7,18 @@ export interface BillingPlanInput {
   description?: string;
   features?: string[] | string;
   isActive?: boolean;
+  // Specs (required for store plans)
+  virtualizationType?: string;
+  cpuCores?: number;
+  ramMb?: number;
+  storageGb?: number;
+  bandwidthGb?: number;
+  vpsCount?: number;
+  allowedOs?: string[] | string;
+  portsCount?: number;
+  dnsRecords?: number;
+  backupsIncluded?: boolean;
+  slaPercent?: number;
 }
 
 export interface SubscriptionInput {
@@ -29,15 +41,16 @@ export interface CreditAdjustmentInput {
 
 const BILLING_CYCLES = ['monthly', 'yearly', 'one-time'];
 const PLAN_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,63}$/;
-const PAYMENT_METHODS = ['manual', 'admin-verified', 'bank-transfer', 'cheque'];
+const PAYMENT_METHODS = ['manual', 'admin-verified', 'bank-transfer', 'cheque', 'famgateway', 'stripe', 'paypal'];
 
 /**
  * Internal billing & invoicing manager (Area K).
  *
  * Plans, subscriptions, invoices and a credit ledger. Payments are recorded
- * ONLY after an administrator confirms receipt with a payment reference —
- * there is no automated payment gateway and nothing is marked paid without
- * that verified confirmation.
+ * ONLY after gateway verification (FamGateway/Stripe/PayPal webhook or
+ * server-to-server polling) OR an administrator confirms receipt with a
+ * verified payment reference. Nothing is marked paid without verified
+ * confirmation.
  */
 export class BillingManager {
   private db: UnifiedDatabase;
@@ -82,6 +95,36 @@ export class BillingManager {
     if (!BILLING_CYCLES.includes(cycle)) {
       throw new Error(`billingCycle must be one of: ${BILLING_CYCLES.join(', ')}.`);
     }
+    // Validate virtualization type
+    const vtype = String(input.virtualizationType ?? existing?.virtualization_type ?? 'lxc').trim().toLowerCase();
+    if (!['lxc', 'kvm', 'both'].includes(vtype)) {
+      throw new Error("virtualizationType must be one of: 'lxc', 'kvm', 'both'.");
+    }
+    // Validate specs
+    const cpu = input.cpuCores ?? existing?.cpu_cores;
+    if (cpu !== undefined && (!Number.isInteger(Number(cpu)) || Number(cpu) < 1)) {
+      throw new Error('cpuCores must be a positive integer.');
+    }
+    const ram = input.ramMb ?? existing?.ram_mb;
+    if (ram !== undefined && (!Number.isInteger(Number(ram)) || Number(ram) < 128)) {
+      throw new Error('ramMb must be at least 128.');
+    }
+    const storage = input.storageGb ?? existing?.storage_gb;
+    if (storage !== undefined && (!Number.isInteger(Number(storage)) || Number(storage) < 1)) {
+      throw new Error('storageGb must be at least 1.');
+    }
+    const bw = input.bandwidthGb ?? existing?.bandwidth_gb;
+    if (bw !== undefined && (!Number.isInteger(Number(bw)) || Number(bw) < 1)) {
+      throw new Error('bandwidthGb must be at least 1.');
+    }
+    const vps = input.vpsCount ?? existing?.vps_count;
+    if (vps !== undefined && (!Number.isInteger(Number(vps)) || Number(vps) < 1)) {
+      throw new Error('vpsCount must be at least 1.');
+    }
+    const sla = input.slaPercent ?? existing?.sla_percent;
+    if (sla !== undefined && (Number(sla) < 0 || Number(sla) > 100)) {
+      throw new Error('slaPercent must be between 0 and 100.');
+    }
   }
 
   public async createPlan(input: BillingPlanInput) {
@@ -93,8 +136,8 @@ export class BillingManager {
     const cycle = String(input.billingCycle || 'monthly').trim();
     const features = this.parseFeatures(input.features);
     await this.db.run(
-      `INSERT INTO billing_plans (name, price_cents, billing_cycle, description, features, is_active)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO billing_plans (name, price_cents, billing_cycle, description, features, is_active, virtualization_type, cpu_cores, ram_mb, storage_gb, bandwidth_gb, vps_count, allowed_os, ports_count, dns_records, backups_included, sla_percent)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         name,
         priceCents,
@@ -102,6 +145,17 @@ export class BillingManager {
         input.description ? String(input.description) : null,
         JSON.stringify(features),
         input.isActive === false ? 0 : 1,
+        String(input.virtualizationType || 'lxc').toLowerCase(),
+        Number(input.cpuCores ?? 1),
+        Number(input.ramMb ?? 1024),
+        Number(input.storageGb ?? 10),
+        Number(input.bandwidthGb ?? 100),
+        Number(input.vpsCount ?? 1),
+        input.allowedOs ? JSON.stringify(input.allowedOs) : null,
+        Number(input.portsCount ?? 0),
+        Number(input.dnsRecords ?? 0),
+        input.backupsIncluded === false ? 0 : 1,
+        Number(input.slaPercent ?? 99.9),
       ]
     );
     return this.db.get<any>(`SELECT * FROM billing_plans WHERE name = ?`, [name]);
@@ -116,7 +170,9 @@ export class BillingManager {
     if (duplicate) throw new Error(`A plan named '${name}' already exists.`);
     await this.db.run(
       `UPDATE billing_plans
-       SET name = ?, price_cents = ?, billing_cycle = ?, description = ?, features = ?, is_active = ?
+       SET name = ?, price_cents = ?, billing_cycle = ?, description = ?, features = ?, is_active = ?,
+           virtualization_type = ?, cpu_cores = ?, ram_mb = ?, storage_gb = ?, bandwidth_gb = ?, vps_count = ?,
+           allowed_os = ?, ports_count = ?, dns_records = ?, backups_included = ?, sla_percent = ?
        WHERE id = ?`,
       [
         name,
@@ -125,6 +181,17 @@ export class BillingManager {
         input.description !== undefined ? (input.description ? String(input.description) : null) : existing.description,
         JSON.stringify(this.parseFeatures(input.features ?? JSON.parse(existing.features || '[]'))),
         input.isActive === undefined ? existing.is_active : input.isActive ? 1 : 0,
+        input.virtualizationType !== undefined ? String(input.virtualizationType).toLowerCase() : existing.virtualization_type,
+        input.cpuCores !== undefined ? Number(input.cpuCores) : existing.cpu_cores,
+        input.ramMb !== undefined ? Number(input.ramMb) : existing.ram_mb,
+        input.storageGb !== undefined ? Number(input.storageGb) : existing.storage_gb,
+        input.bandwidthGb !== undefined ? Number(input.bandwidthGb) : existing.bandwidth_gb,
+        input.vpsCount !== undefined ? Number(input.vpsCount) : existing.vps_count,
+        input.allowedOs !== undefined ? (input.allowedOs ? JSON.stringify(input.allowedOs) : null) : existing.allowed_os,
+        input.portsCount !== undefined ? Number(input.portsCount) : existing.ports_count,
+        input.dnsRecords !== undefined ? Number(input.dnsRecords) : existing.dns_records,
+        input.backupsIncluded !== undefined ? (input.backupsIncluded ? 1 : 0) : existing.backups_included,
+        input.slaPercent !== undefined ? Number(input.slaPercent) : existing.sla_percent,
         id,
       ]
     );

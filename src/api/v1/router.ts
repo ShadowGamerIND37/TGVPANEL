@@ -28,6 +28,16 @@ import { LifecycleAction, VirtualizationEngine } from '../../services/virtualiza
 import { RESELLER_API_SCOPES, createResellerHmacAuthMiddleware, ResellerApiScope } from '../../security/reseller-api-auth';
 
 const templateUploadDir = path.resolve(process.cwd(), 'data', 'lxc-templates');
+
+function safeJsonParse<T = unknown>(raw: string, fallback: T): T {
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed as T;
+  } catch {
+    return fallback;
+  }
+}
+
 fs.mkdirSync(templateUploadDir, { recursive: true });
 
 const templateUploader = multer({
@@ -2548,6 +2558,286 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         res.status(201).json(result);
       } catch (err: any) {
         res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  // --- Customer Store & Payment Gateways (Phase 32) ---
+
+  // List active plans for the store (customer-facing)
+  router.get(
+    '/store/plans',
+    requirePrincipal,
+    async (req: Request, res: Response) => {
+      const plans = await ctx.billingManager.listPlans();
+      const active = plans.filter((p: any) => p.is_active);
+      // Parse features JSON for display
+      const formatted = active.map((p: any) => ({
+        ...p,
+        features: typeof p.features === 'string' ? safeJsonParse(p.features, []) : p.features,
+        allowed_os: typeof p.allowed_os === 'string' ? safeJsonParse(p.allowed_os, []) : p.allowed_os,
+      }));
+      res.json({ plans: formatted });
+    }
+  );
+
+  // Get store configuration (enabled gateways for the customer)
+  router.get(
+    '/store/gateways',
+    requirePrincipal,
+    async (_req: Request, res: Response) => {
+      const gateways = await ctx.paymentGatewayManager.getEnabledGateways();
+      res.json({ gateways: gateways.map((g) => ({ id: g.id, name: g.name, provider: g.provider, currency: g.currency })) });
+    }
+  );
+
+  // Create a purchase order for a plan (customer-facing)
+  router.post(
+    '/store/purchase',
+    requirePrincipal,
+    async (req: Request, res: Response) => {
+      try {
+        const userId = req.principal!.userId;
+        const planId = Number((req.body || {}).planId);
+        const gatewayId = Number((req.body || {}).gatewayId);
+        if (!planId) return res.status(400).json({ error: 'planId is required.' });
+        if (!gatewayId) return res.status(400).json({ error: 'gatewayId is required.' });
+
+        const plan = await ctx.billingManager.getPlan(planId);
+        if (!plan) return res.status(404).json({ error: 'Plan does not exist.' });
+        if (!plan.is_active) return res.status(400).json({ error: 'Plan is not available for purchase.' });
+
+        // Verify gateway is enabled
+        const gateway = await ctx.paymentGatewayManager.getGateway(gatewayId);
+        if (!gateway) return res.status(404).json({ error: 'Gateway does not exist.' });
+        if (!gateway.enabled) return res.status(400).json({ error: 'Gateway is not enabled.' });
+
+        const user = req.principal as any;
+        const result = await ctx.paymentGatewayManager.createOrder(gatewayId, plan.price_cents, {
+          userId,
+          planId,
+          userName: user.username || 'Customer',
+          userEmail: user.email || undefined,
+          redirectUrl: `${req.protocol}://${req.get('host')}/store?status=success`,
+        });
+
+        if (!result.success) {
+          return res.status(502).json({ error: result.error || 'Payment order creation failed.' });
+        }
+
+        res.json({ order: result });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
+  // Check order status (customer-facing)
+  router.get(
+    '/store/orders/:orderId/status',
+    requirePrincipal,
+    async (req: Request, res: Response) => {
+      try {
+        const orderId = String(req.params.orderId);
+        const orders = await ctx.paymentGatewayManager.getOrder(orderId);
+        if (!orders) return res.status(404).json({ error: 'Order not found.' });
+        const order: any = orders[0];
+        if (order.user_id !== req.principal!.userId) {
+          return res.status(403).json({ error: 'Access denied.' });
+        }
+
+        // If not paid, verify with gateway
+        if (order.status !== 'paid' && order.gateway_order_id) {
+          const result = await ctx.paymentGatewayManager.verifyOrder(order.id, order.gateway_order_id);
+          if (result.success && result.status === 'paid') {
+            const utr = result.utr || result.payment_reference || '';
+            await ctx.paymentGatewayManager.markOrderPaid(orderId, utr);
+            // Also mark the invoice paid via billing manager
+            if (order.invoice_id) {
+              await ctx.billingManager.confirmPayment(order.invoice_id, {
+                paymentReference: utr,
+                method: order.gateway,
+              }, 0);
+            }
+            const updated = await ctx.paymentGatewayManager.getOrder(orderId);
+            return res.json({ order: updated ? updated[0] : null, verified: true });
+          }
+        }
+
+        res.json({ order, verified: false });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
+  // List customer's orders
+  router.get(
+    '/store/orders',
+    requirePrincipal,
+    async (req: Request, res: Response) => {
+      const userId = req.principal!.userId;
+      const orders = await ctx.paymentGatewayManager.listOrders(userId);
+      res.json({ orders });
+    }
+  );
+
+  // --- Admin: Payment Gateway Management ---
+
+  router.get(
+    '/gateways',
+    requireRole(['admin']),
+    async (_req: Request, res: Response) => {
+      const gateways = await ctx.paymentGatewayManager.listGateways();
+      res.json({ gateways });
+    }
+  );
+
+  router.put(
+    '/gateways/:id',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const id = pInt(req.params.id);
+        const input = req.body || {};
+        const gateway = await ctx.paymentGatewayManager.updateGateway(id, {
+          enabled: input.enabled !== undefined ? (input.enabled ? 1 : 0) : undefined,
+          apiKey: input.apiKey || undefined,
+          apiSecret: input.apiSecret || undefined,
+          webhookSecret: input.webhookSecret || undefined,
+          webhookUrl: input.webhookUrl || undefined,
+          accountId: input.accountId || undefined,
+          merchantId: input.merchantId || undefined,
+          currency: input.currency || undefined,
+          isDefault: input.isDefault !== undefined ? (input.isDefault ? 1 : 0) : undefined,
+        });
+        if (!gateway) return res.status(404).json({ error: 'Gateway not found.' });
+        res.json({ gateway });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/gateways/:id/test',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      const id = pInt(req.params.id);
+      const result = await ctx.paymentGatewayManager.testGateway(id);
+      res.json(result);
+    }
+  );
+
+  // --- Webhook receiver for payment gateways ---
+  router.post(
+    '/webhooks/payment',
+    async (req: Request, res: Response) => {
+      try {
+        // Determine which gateway sent the webhook based on headers
+        const sigHeader = (req.headers['x-famgateway-signature'] || req.headers['stripe-signature'] || req.headers['paypal-transmission-sig'] || '') as string;
+        const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
+
+        // Try to find a matching gateway and verify signature
+        const gateways = await ctx.paymentGatewayManager.listGateways();
+        const enabled = gateways.filter((g) => g.enabled);
+
+        for (const gw of enabled) {
+          const sig = req.headers[`x-famgateway-signature`] || req.headers['stripe-signature'] || '';
+          if (sig) {
+            const valid = await ctx.paymentGatewayManager.verifyWebhook(gw.id, rawBody, String(sig));
+            if (valid) {
+              const body: any = req.body || {};
+              if (body.status === 'success' && body.order_id) {
+                // FamGateway success
+                const verify = await ctx.paymentGatewayManager.verifyOrder(gw.id, body.order_id);
+                if (verify.success && verify.status === 'paid') {
+                  const orders = await ctx.paymentGatewayManager.getOrder(`po_${body.order_id}`);
+                  // Also try matching by gateway_order_id
+                  let matched = orders && orders.length > 0 ? orders : null;
+                  if (!matched) {
+                    // Search all orders with this gateway_order_id
+                    const all = await ctx.paymentGatewayManager.listOrders(0, 9999);
+                    match: for (const o of all) {
+                      if ((o as any).gateway_order_id === body.order_id && (o as any).gateway === gw.provider) {
+                        matched = [o];
+                        break match;
+                      }
+                    }
+                  }
+                  if (matched) {
+                    const orderId = (matched[0] as any).order_id;
+                    await ctx.paymentGatewayManager.markOrderPaid(orderId, body.utr || verify.utr || '');
+                    if ((matched[0] as any).invoice_id) {
+                      await ctx.billingManager.confirmPayment((matched[0] as any).invoice_id, {
+                        paymentReference: body.utr || verify.utr || '',
+                        method: gw.provider,
+                      }, 0);
+                    }
+                  }
+                }
+              } else if (body.object && body.object.payment_status === 'succeeded') {
+                // Stripe
+                const sessionId = body.object.id;
+                const verify = await ctx.paymentGatewayManager.verifyOrder(gw.id, sessionId);
+                if (verify.success && verify.status === 'paid') {
+                  const orders = await ctx.paymentGatewayManager.getOrder(sessionId);
+                  let matched = orders && orders.length > 0 ? orders : null;
+                  if (!matched) {
+                    const all = await ctx.paymentGatewayManager.listOrders(0, 9999);
+                    match: for (const o of all) {
+                      if ((o as any).gateway_order_id === sessionId && (o as any).gateway === gw.provider) {
+                        matched = [o];
+                        break match;
+                      }
+                    }
+                  }
+                  if (matched) {
+                    const orderId = (matched[0] as any).order_id;
+                    await ctx.paymentGatewayManager.markOrderPaid(orderId, verify.payment_reference || '');
+                    if ((matched[0] as any).invoice_id) {
+                      await ctx.billingManager.confirmPayment((matched[0] as any).invoice_id, {
+                        paymentReference: verify.payment_reference || '',
+                        method: gw.provider,
+                      }, 0);
+                    }
+                  }
+                }
+              } else if (body.resource_type === 'checkout-order' && body.status === 'COMPLETED') {
+                // PayPal
+                const orderId = body.id;
+                const verify = await ctx.paymentGatewayManager.verifyOrder(gw.id, orderId);
+                if (verify.success && verify.status === 'paid') {
+                  const orders = await ctx.paymentGatewayManager.getOrder(orderId);
+                  let matched = orders && orders.length > 0 ? orders : null;
+                  if (!matched) {
+                    const all = await ctx.paymentGatewayManager.listOrders(0, 9999);
+                    match: for (const o of all) {
+                      if ((o as any).gateway_order_id === orderId && (o as any).gateway === gw.provider) {
+                        matched = [o];
+                        break match;
+                      }
+                    }
+                  }
+                  if (matched) {
+                    const oid = (matched[0] as any).order_id;
+                    await ctx.paymentGatewayManager.markOrderPaid(oid, verify.payment_reference || '');
+                    if ((matched[0] as any).invoice_id) {
+                      await ctx.billingManager.confirmPayment((matched[0] as any).invoice_id, {
+                        paymentReference: verify.payment_reference || '',
+                        method: gw.provider,
+                      }, 0);
+                    }
+                  }
+                }
+              }
+              return res.json({ status: 'received' });
+            }
+          }
+        }
+        return res.status(401).json({ error: 'Invalid or missing webhook signature.' });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
       }
     }
   );

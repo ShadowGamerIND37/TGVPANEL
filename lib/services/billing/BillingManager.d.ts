@@ -6,6 +6,17 @@ export interface BillingPlanInput {
     description?: string;
     features?: string[] | string;
     isActive?: boolean;
+    virtualizationType?: string;
+    cpuCores?: number;
+    ramMb?: number;
+    storageGb?: number;
+    bandwidthGb?: number;
+    vpsCount?: number;
+    allowedOs?: string[] | string;
+    portsCount?: number;
+    dnsRecords?: number;
+    backupsIncluded?: boolean;
+    slaPercent?: number;
 }
 export interface SubscriptionInput {
     userId?: number;
@@ -26,9 +37,10 @@ export interface CreditAdjustmentInput {
  * Internal billing & invoicing manager (Area K).
  *
  * Plans, subscriptions, invoices and a credit ledger. Payments are recorded
- * ONLY after an administrator confirms receipt with a payment reference —
- * there is no automated payment gateway and nothing is marked paid without
- * that verified confirmation.
+ * ONLY after gateway verification (FamGateway/Stripe/PayPal webhook or
+ * server-to-server polling) OR an administrator confirms receipt with a
+ * verified payment reference. Nothing is marked paid without verified
+ * confirmation.
  */
 export declare class BillingManager {
     private db;

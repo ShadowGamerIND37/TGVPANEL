@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %></title>
+    <style>
+        .store-container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+        .store-header { margin-bottom: 24px; }
+        .store-header h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+        .store-header p { color: var(--text-muted); }
+        .store-gateways { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+        .gateway-badge { padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+        .gateway-badge.famgateway { background: #e8f5e9; color: #2e7d32; }
+        .gateway-badge.stripe { background: #e3f2fd; color: #1565c0; }
+        .gateway-badge.paypal { background: #fff3e0; color: #e65100; }
+        .plans-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+        .plan-card { background: var(--bg-secondary); border-radius: var(--radius-lg); padding: 24px; border: 1px solid var(--border-color); transition: transform 0.2s, box-shadow 0.2s; }
+        .plan-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
+        .plan-card.featured { border-color: #667eea; box-shadow: 0 0 0 1px #667eea; }
+        .plan-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+        .plan-desc { color: var(--text-muted); font-size: 14px; margin-bottom: 16px; min-height: 20px; }
+        .plan-price { font-size: 32px; font-weight: 800; margin-bottom: 4px; }
+        .plan-price .cycle { font-size: 14px; font-weight: 400; color: var(--text-muted); }
+        .plan-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-bottom: 16px; }
+        .plan-badge.lxc { background: #e8f5e9; color: #2e7d32; }
+        .plan-badge.kvm { background: #e3f2fd; color: #1565c0; }
+        .plan-badge.both { background: #f3e5f5; color: #7b1fa2; }
+        .plan-specs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+        .spec-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+        .spec-item svg { flex-shrink: 0; }
+        .plan-features { list-style: none; padding: 0; margin: 0 0 16px; }
+        .plan-features li { font-size: 13px; color: var(--text-secondary); padding: 3px 0; display: flex; align-items: flex-start; gap: 6px; }
+        .plan-features li::before { content: '✓'; color: #4caf50; font-weight: 700; flex-shrink: 0; }
+        .plan-actions { display: flex; gap: 8px; }
+        .btn-purchase { flex: 1; padding: 10px 16px; border: none; border-radius: var(--radius-md); background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+        .btn-purchase:hover { opacity: 0.9; }
+        .btn-purchase:disabled { opacity: 0.5; cursor: not-allowed; }
+        .store-empty { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center; }
+        .modal-overlay.active { display: flex; }
+        .modal-content { background: var(--bg-primary); border-radius: var(--radius-lg); padding: 32px; max-width: 480px; width: 90%; }
+        .modal-content h2 { margin-bottom: 16px; }
+        .modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: var(--text-muted); position: absolute; right: 16px; top: 16px; }
+        .checkout-section { margin-top: 16px; }
+        .checkout-section h3 { font-size: 16px; margin-bottom: 12px; }
+        .checkout-option { padding: 12px; border: 2px solid var(--border-color); border-radius: var(--radius-md); margin-bottom: 8px; cursor: pointer; transition: border-color 0.2s; display: flex; align-items: center; justify-content: space-between; }
+        .checkout-option:hover { border-color: #667eea; }
+        .checkout-option.selected { border-color: #667eea; background: rgba(102,126,234,0.05); }
+        .checkout-option .gw-name { font-weight: 600; }
+        .checkout-option .gw-info { font-size: 12px; color: var(--text-muted); }
+        .btn-confirm { width: 100%; padding: 12px; border: none; border-radius: var(--radius-md); background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }
+        .btn-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+        .order-status { text-align: center; padding: 20px; }
+        .order-status .status-icon { font-size: 48px; margin-bottom: 12px; }
+        .error-banner { background: #ffebee; color: #c62828; padding: 12px 16px; border-radius: var(--radius-md); margin-bottom: 16px; font-size: 14px; display: none; }
+        .error-banner.show { display: block; }
+        .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="admin-layout">
+        <%- include('../partials/users/sidebar') %>
+        <main class="admin-main">
+            <div class="admin-header">
+                <h1 class="admin-page-title">Store & Plans</h1>
+            </div>
+            <div class="store-container">
+                <div class="store-header">
+                    <h1>Plan Store</h1>
+                    <p>Browse and purchase VPS hosting plans. Choose the plan that fits your needs and pay securely.</p>
+                </div>
+
+                <div id="errorBanner" class="error-banner"></div>
+
+                <div id="loadingState" style="text-align:center; padding: 40px; color: var(--text-muted);">
+                    <span class="loading-spinner" style="border-color: rgba(102,126,234,0.3); border-top-color: #667eea;"></span>
+                    <p style="margin-top: 12px;">Loading plans...</p>
+                </div>
+
+                <div id="storeContent" style="display:none;">
+                    <div id="gatewaysBar" class="store-gateways"></div>
+                    <div id="plansGrid" class="plans-grid"></div>
+                    <div id="storeEmpty" class="store-empty" style="display:none;">
+                        <p>No plans are currently available for purchase.</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Purchase Modal -->
+    <div class="modal-overlay" id="purchaseModal">
+        <div class="modal-content" style="position: relative;">
+            <button class="modal-close" onclick="closePurchaseModal()">&times;</button>
+            <h2 id="modalTitle">Confirm Purchase</h2>
+            <div id="modalPlanInfo" style="margin-bottom: 16px; color: var(--text-secondary);"></div>
+            <div class="checkout-section">
+                <h3>Select Payment Method</h3>
+                <div id="checkoutOptions"></div>
+            </div>
+            <div id="modalError" class="error-banner"></div>
+            <button class="btn-confirm" id="confirmPurchaseBtn" onclick="confirmPurchase()">Confirm & Pay</button>
+        </div>
+    </div>
+
+    <!-- Status Modal -->
+    <div class="modal-overlay" id="statusModal">
+        <div class="modal-content" style="position: relative;">
+            <button class="modal-close" onclick="closeStatusModal()">&times;</button>
+            <div id="statusContent" class="order-status"></div>
+        </div>
+    </div>
+
+    <script>
+        let plans = [];
+        let gateways = [];
+        let selectedPlan = null;
+        let selectedGatewayId = null;
+
+        async function loadStore() {
+            try {
+                const [plansRes, gatewaysRes] = await Promise.all([
+                    fetch('/api/v1/store/plans', { headers: getAuthHeaders() }),
+                    fetch('/api/v1/store/gateways', { headers: getAuthHeaders() })
+                ]);
+
+                if (!plansRes.ok) throw new Error('Failed to load plans');
+                if (!gatewaysRes.ok) throw new Error('Failed to load gateways');
+
+                plans = (await plansRes.json()).plans || [];
+                gateways = (await gatewaysRes.json()).gateways || [];
+
+                renderStore();
+            } catch (err) {
+                showError(err.message);
+                document.getElementById('loadingState').style.display = 'none';
+            }
+        }
+
+        function renderStore() {
+            document.getElementById('loadingState').style.display = 'none';
+            document.getElementById('storeContent').style.display = 'block';
+
+            // Render gateways
+            const gwBar = document.getElementById('gatewaysBar');
+            if (gateways.length > 0) {
+                gwBar.innerHTML = gateways.map(g => `
+                    <span class="gateway-badge ${g.provider}">${g.name}</span>
+                `).join('');
+            } else {
+                gwBar.innerHTML = '<span style="color: var(--text-muted); font-size: 13px;">No payment gateways enabled. Please contact support.</span>';
+            }
+
+            // Render plans
+            const grid = document.getElementById('plansGrid');
+            if (plans.length === 0) {
+                grid.style.display = 'none';
+                document.getElementById('storeEmpty').style.display = 'block';
+                return;
+            }
+            grid.style.display = 'grid';
+            document.getElementById('storeEmpty').style.display = 'none';
+
+            grid.innerHTML = plans.map((p, i) => {
+                const vtype = p.virtualization_type || 'lxc';
+                const vtypeLabel = vtype === 'kvm' ? 'KVM' : vtype === 'lxc' ? 'LXC' : 'LXC & KVM';
+                const features = Array.isArray(p.features) ? p.features : [];
+                return `
+                    <div class="plan-card ${i === 0 ? 'featured' : ''}">
+                        <div class="plan-name">${escapeHtml(p.name)}</div>
+                        <div class="plan-desc">${escapeHtml(p.description || 'No description available')}</div>
+                        <div class="plan-badge ${vtype}">${vtypeLabel} Virtualization</div>
+                        <div class="plan-price">₹${(p.price_cents / 100).toFixed(2)}<span class="cycle">/${p.billing_cycle}</span></div>
+                        <div class="plan-specs">
+                            <div class="spec-item">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/><line x1="15" y1="4" x2="15" y2="20"/></svg>
+                                ${p.cpu_cores || 1} CPU Cores
+                            </div>
+                            <div class="spec-item">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="12" x2="18" y2="12"/></svg>
+                                ${(p.ram_mb || 1024) / 1024} GB RAM
+                            </div>
+                            <div class="spec-item">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>
+                                ${p.storage_gb || 10} GB Storage
+                            </div>
+                            <div class="spec-item">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                                ${p.bandwidth_gb || 100} GB Bandwidth
+                            </div>
+                        </div>
+                        <ul class="plan-features">
+                            ${features.map(f => `<li>${escapeHtml(f)}</li>`).join('')}
+                            ${p.vps_count > 1 ? `<li>${p.vps_count} VPS instances</li>` : ''}
+                            ${p.backups_included ? `<li>Daily backups included</li>` : ''}
+                            ${p.sla_percent ? `<li>${p.sla_percent}% SLA uptime</li>` : ''}
+                        </ul>
+                        <div class="plan-actions">
+                            <button class="btn-purchase" onclick="openPurchaseModal(${p.id})" ${gateways.length === 0 ? 'disabled' : ''}>
+                                ${gateways.length === 0 ? 'No Payment Available' : 'Buy Plan'}
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function openPurchaseModal(planId) {
+            selectedPlan = plans.find(p => p.id === planId);
+            if (!selectedPlan) return;
+
+            document.getElementById('modalTitle').textContent = 'Buy: ' + selectedPlan.name;
+            document.getElementById('modalPlanInfo').innerHTML = `
+                <strong>Price:</strong> ₹${(selectedPlan.price_cents / 100).toFixed(2)} / ${selectedPlan.billing_cycle}<br>
+                <strong>Virtualization:</strong> ${(selectedPlan.virtualization_type || 'lxc').toUpperCase()}<br>
+                <strong>Specs:</strong> ${selectedPlan.cpu_cores || 1} CPU, ${(selectedPlan.ram_mb || 1024) / 1024} GB RAM, ${selectedPlan.storage_gb || 10} GB Storage
+            `;
+
+            const checkoutEl = document.getElementById('checkoutOptions');
+            if (gateways.length === 0) {
+                checkoutEl.innerHTML = '<p style="color: var(--text-muted);">No payment gateways are enabled.</p>';
+            } else {
+                checkoutEl.innerHTML = gateways.map((g, i) => `
+                    <div class="checkout-option ${i === 0 ? 'selected' : ''}" data-gw="${g.id}" onclick="selectGateway(${g.id}, this)">
+                        <div>
+                            <div class="gw-name">${escapeHtml(g.name)}</div>
+                            <div class="gw-info">${g.currency} · ${g.provider}</div>
+                        </div>
+                        <span style="font-size: 20px;">${i === 0 ? '●' : '○'}</span>
+                    </div>
+                `).join('');
+                selectedGatewayId = gateways[0].id;
+            }
+
+            document.getElementById('modalError').classList.remove('show');
+            document.getElementById('purchaseModal').classList.add('active');
+        }
+
+        function selectGateway(gwId, el) {
+            selectedGatewayId = gwId;
+            document.querySelectorAll('.checkout-option').forEach(o => o.classList.remove('selected'));
+            el.classList.add('selected');
+        }
+
+        async function confirmPurchase() {
+            if (!selectedPlan || !selectedGatewayId) return;
+            const btn = document.getElementById('confirmPurchaseBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> Processing...';
+            document.getElementById('modalError').classList.remove('show');
+
+            try {
+                const res = await fetch('/api/v1/store/purchase', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                    body: JSON.stringify({ planId: selectedPlan.id, gatewayId: selectedGatewayId })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.error || 'Purchase failed');
+                }
+
+                const data = await res.json();
+                const order = data.order;
+                closePurchaseModal();
+                showStatusModal(order);
+            } catch (err) {
+                const errEl = document.getElementById('modalError');
+                errEl.textContent = err.message;
+                errEl.classList.add('show');
+                btn.disabled = false;
+                btn.textContent = 'Confirm & Pay';
+            }
+        }
+
+        function showStatusModal(order) {
+            const content = document.getElementById('statusContent');
+            const status = order.status || 'pending';
+            const icon = status === 'paid' ? '✅' : '💳';
+            const msg = status === 'paid'
+                ? 'Payment confirmed! Your plan is now active.'
+                : 'Your payment is being processed. Please complete the payment on the gateway page.';
+
+            let extraHtml = '';
+            if (order.checkout_url) {
+                extraHtml = `<a href="${order.checkout_url}" target="_blank" class="btn-confirm" style="text-decoration:none; display:inline-block; margin-top:16px;">Open Checkout</a>`;
+            }
+            if (order.qr_url) {
+                extraHtml = `<div style="margin-top:16px;"><img src="${order.qr_url}" style="max-width:200px; display:block; margin:0 auto;" alt="QR Code"/><p style="margin-top:8px; font-size:13px;">Scan to pay via UPI</p></div>`;
+            }
+
+            content.innerHTML = `
+                <div class="status-icon">${icon}</div>
+                <h2>${msg}</h2>
+                <p style="color: var(--text-muted); margin-bottom: 8px;">Order ID: ${escapeHtml(order.order_id || '')}</p>
+                <p style="color: var(--text-muted);">Amount: ₹${(order.amount_cents / 100).toFixed(2)}</p>
+                ${extraHtml}
+            `;
+
+            document.getElementById('statusModal').classList.add('active');
+
+            // Auto-poll for status if pending
+            if (status === 'pending' && order.order_id) {
+                let pollCount = 0;
+                const pollInterval = setInterval(async () => {
+                    pollCount++;
+                    if (pollCount > 20) { clearInterval(pollInterval); return; }
+                    try {
+                        const res = await fetch(`/api/v1/store/orders/${order.order_id}/status`, { headers: getAuthHeaders() });
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data.order && data.order.status === 'paid') {
+                                clearInterval(pollInterval);
+                                showStatusModal({ ...order, status: 'paid' });
+                            }
+                        }
+                    } catch (e) {}
+                }, 5000);
+            }
+        }
+
+        function closePurchaseModal() { document.getElementById('purchaseModal').classList.remove('active'); }
+        function closeStatusModal() { document.getElementById('statusModal').classList.remove('active'); }
+
+        function showError(msg) {
+            const el = document.getElementById('errorBanner');
+            el.textContent = msg;
+            el.classList.add('show');
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str || '';
+            return div.innerHTML;
+        }
+
+        function getAuthHeaders() {
+            const token = localStorage.getItem('tgvpanel_token');
+            return token ? { 'Authorization': 'Bearer ' + token } : {};
+        }
+
+        loadStore();
+    </script>
+</body>
+</html>

@@ -1945,7 +1945,7 @@
       <div class="v3-toolbar">
         <div>
           <h2 style="margin:0;color:var(--text-primary);">Billing &amp; Invoicing</h2>
-          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Plans, subscriptions, invoices and credits. Payments are recorded only after administrator-verified confirmation — no automated payment processing.</p>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Plans, subscriptions, invoices, credits and payment gateways. Supports FamGateway (UPI), Stripe and PayPal.</p>
         </div>
         <div class="v3-btn-row">
           <button class="btn btn-outline" onclick="loadBilling()">Refresh</button>
@@ -1957,13 +1957,28 @@
           <div class="v3-field"><label>Name</label><input id="bpName" placeholder="Starter"></div>
           <div class="v3-field"><label>Price (cents)</label><input id="bpPrice" type="number" min="0" placeholder="5000"></div>
           <div class="v3-field"><label>Cycle</label><select id="bpCycle"><option value="monthly">Monthly</option><option value="yearly">Yearly</option><option value="one-time">One-time</option></select></div>
+          <div class="v3-field"><label>Virtualization</label><select id="bpVtype"><option value="lxc">LXC</option><option value="kvm">KVM</option><option value="both">Both</option></select></div>
+          <div class="v3-field"><label>CPU Cores</label><input id="bpCpu" type="number" min="1" value="1"></div>
+          <div class="v3-field"><label>RAM (MB)</label><input id="bpRam" type="number" min="128" value="1024"></div>
+          <div class="v3-field"><label>Storage (GB)</label><input id="bpStorage" type="number" min="1" value="10"></div>
+          <div class="v3-field"><label>Bandwidth (GB)</label><input id="bpBw" type="number" min="1" value="100"></div>
+          <div class="v3-field"><label>VPS Count</label><input id="bpVps" type="number" min="1" value="1"></div>
+          <div class="v3-field"><label>Ports</label><input id="bpPorts" type="number" min="0" value="0"></div>
+          <div class="v3-field"><label>DNS Records</label><input id="bpDns" type="number" min="0" value="0"></div>
+          <div class="v3-field"><label>SLA (%)</label><input id="bpSla" type="number" min="0" max="100" step="0.1" value="99.9"></div>
           <div class="v3-field" style="grid-column:1/-1;"><label>Description</label><input id="bpDesc" placeholder="Entry-level VPS plan"></div>
           <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Plan</button></div>
         </form>
         <table class="v3-table" style="margin-top:12px;">
-          <thead><tr><th>ID</th><th>Name</th><th>Price</th><th>Cycle</th><th>Active</th><th>Actions</th></tr></thead>
+          <thead><tr><th>ID</th><th>Name</th><th>Price</th><th>V Type</th><th>CPU</th><th>RAM</th><th>Storage</th><th>Cycle</th><th>Active</th><th>Actions</th></tr></thead>
           <tbody id="bpBody"></tbody>
         </table>
+      </div>
+
+      <div class="v3-card">
+        <h3>Payment Gateways</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">Enable and configure payment gateways for the customer Store. Supported: FamGateway (UPI), Stripe, PayPal.</p>
+        <div id="gwList" style="display:flex;flex-direction:column;gap:12px;"></div>
       </div>
       <div class="v3-card">
         <h3>Subscriptions</h3>
@@ -5457,13 +5472,17 @@ async function loadBilling() {
     ? plans.map(p => `<tr>
         <td>#${p.id}</td><td><strong>${hkvmEsc(p.name)}</strong></td>
         <td>$${(p.price_cents / 100).toFixed(2)}</td>
+        <td>${hkvmEsc(p.virtualization_type || 'lxc')}</td>
+        <td>${p.cpu_cores || 1}</td>
+        <td>${(p.ram_mb || 1024) / 1024}GB</td>
+        <td>${p.storage_gb || 10}GB</td>
         <td>${hkvmEsc(p.billing_cycle)}</td>
         <td>${p.is_active ? 'active' : 'inactive'}</td>
         <td class="v3-btn-row">
           <button class="btn btn-outline" style="color:#ef4444;" onclick="delBillingPlan(${p.id})">Delete</button>
         </td>
       </tr>`).join('')
-    : '<tr><td colspan="6" style="color:var(--text-muted);">No plans configured.</td></tr>';
+    : '<tr><td colspan="10" style="color:var(--text-muted);">No plans configured.</td></tr>';
   const sel = document.getElementById('bsPlan');
   sel.innerHTML = plans.map(p => `<option value="${p.id}">${hkvmEsc(p.name)} — $${(p.price_cents / 100).toFixed(2)} (${hkvmEsc(p.billing_cycle)})</option>`).join('');
 
@@ -5496,6 +5515,7 @@ async function loadBilling() {
       </tr>`).join('')
     : '<tr><td colspan="7" style="color:var(--text-muted);">No invoices issued.</td></tr>';
 
+  loadGateways();
   const credits = creditsRes.credits || [];
   document.getElementById('bcBody').innerHTML = credits.length
     ? credits.map(c => `<tr>
@@ -5509,6 +5529,114 @@ async function loadBilling() {
     : '<tr><td colspan="7" style="color:var(--text-muted);">No credit entries.</td></tr>';
 }
 
+
+async function loadGateways() {
+  try {
+    const res = await hkvmApi('/api/v1/gateways');
+    const gateways = res.gateways || [];
+    const el = document.getElementById('gwList');
+    if (!el) return;
+    if (gateways.length === 0) {
+      el.innerHTML = '<p style="color:var(--text-muted);">No gateways configured.</p>';
+      return;
+    }
+    el.innerHTML = gateways.map(g => `
+      <div class="v3-card" style="margin-bottom:0;">
+        <div style="display:flex;justify-content:space-between;align-items:start;">
+          <div>
+            <h3 style="margin:0 0 4px;">${hkvmEsc(g.name)}</h3>
+            <p style="margin:0;font-size:12px;color:var(--text-muted);">
+              Provider: ${hkvmEsc(g.provider)} · Currency: ${hkvmEsc(g.currency)}
+              ${g.last_test_status ? ` · Last test: <strong style="color:${g.last_test_status === 'success' ? '#22c55e' : '#ef4444'};">${hkvmEsc(g.last_test_status)}</strong>` : ''}
+            </p>
+          </div>
+          <div class="v3-btn-row">
+            <label class="v3-switch-label" style="display:flex;align-items:center;gap:6px;font-size:13px;">
+              <input type="checkbox" ${g.enabled ? 'checked' : ''} onchange="toggleGateway(${g.id}, this.checked)"> Enabled
+            </label>
+            <button class="btn btn-outline" onclick="testGateway(${g.id})">Test</button>
+            <button class="btn btn-outline" onclick="editGatewayConfig(${g.id})">Configure</button>
+          </div>
+        </div>
+        <div id="gwConfig-${g.id}" style="display:none;margin-top:12px;"></div>
+      </div>
+    `).join('');
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function toggleGateway(id, enabled) {
+  try {
+    await hkvmApi('/api/v1/gateways/' + id, {
+      method: 'PUT',
+      body: { enabled: enabled ? 1 : 0 },
+    });
+    hkvmToast('Gateway updated');
+    loadGateways();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function testGateway(id) {
+  hkvmToast('Testing gateway...', 'info');
+  try {
+    const res = await hkvmApi('/api/v1/gateways/' + id + '/test', { method: 'POST' });
+    hkvmToast(res.message || 'Test complete', res.success ? 'success' : 'error');
+    loadGateways();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function editGatewayConfig(id) {
+  const configEl = document.getElementById('gwConfig-' + id);
+  if (configEl.style.display !== 'none') {
+    configEl.style.display = 'none';
+    return;
+  }
+  try {
+    const res = await hkvmApi('/api/v1/gateways');
+    const gw = (res.gateways || []).find(g => g.id === id);
+    if (!gw) return;
+    configEl.style.display = 'block';
+    configEl.innerHTML = `
+      <div class="v3-form-grid">
+        ${gw.provider === 'famgateway' ? `
+          <div class="v3-field"><label>API Key</label><input type="password" id="gwApiKey-${id}" placeholder="${gw.has_api_key ? '(set — leave blank to keep)' : 'Enter API key'}"></div>
+        ` : ''}
+        ${gw.provider === 'stripe' ? `
+          <div class="v3-field"><label>Secret Key</label><input type="password" id="gwApiKey-${id}" placeholder="${gw.has_api_key ? '(set — leave blank to keep)' : 'sk_live_...'}"></div>
+        ` : ''}
+        ${gw.provider === 'paypal' ? `
+          <div class="v3-field"><label>Client ID</label><input id="gwAccountId-${id}" placeholder="${gw.account_id ? gw.account_id : 'A...'}"></div>
+          <div class="v3-field"><label>Client Secret</label><input type="password" id="gwApiKey-${id}" placeholder="${gw.has_api_secret ? '(set — leave blank to keep)' : 'Enter client secret'}"></div>
+        ` : ''}
+        <div class="v3-field"><label>Webhook URL</label><input id="gwWebhook-${id}" placeholder="${gw.webhook_url || 'https://yourpanel.com/api/v1/webhooks/payment'}"></div>
+        <div class="v3-field"><label>Webhook Secret</label><input type="password" id="gwWebhookSecret-${id}" placeholder="${gw.has_webhook_secret ? '(set — leave blank to keep)' : 'Enter webhook secret'}"></div>
+        <div class="v3-field"><label>Currency</label><input id="gwCurrency-${id}" value="${gw.currency}"></div>
+        <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" onclick="saveGatewayConfig(${id})" style="width:100%;">Save Config</button></div>
+      </div>
+    `;
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function saveGatewayConfig(id) {
+  try {
+    const body = {};
+    const apiKey = document.getElementById('gwApiKey-' + id)?.value;
+    const apiSecret = document.getElementById('gwApiSecret-' + id)?.value;
+    const webhookUrl = document.getElementById('gwWebhook-' + id)?.value;
+    const webhookSecret = document.getElementById('gwWebhookSecret-' + id)?.value;
+    const currency = document.getElementById('gwCurrency-' + id)?.value;
+    const accountId = document.getElementById('gwAccountId-' + id)?.value;
+    if (apiKey) body.apiKey = apiKey;
+    if (apiSecret) body.apiSecret = apiSecret;
+    if (webhookUrl) body.webhookUrl = webhookUrl;
+    if (webhookSecret) body.webhookSecret = webhookSecret;
+    if (currency) body.currency = currency;
+    if (accountId) body.accountId = accountId;
+    await hkvmApi('/api/v1/gateways/' + id, { method: 'PUT', body });
+    hkvmToast('Gateway configuration saved');
+    loadGateways();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
 async function submitBillingPlan(e) {
   e.preventDefault();
   try {
@@ -5519,6 +5647,15 @@ async function submitBillingPlan(e) {
         priceCents: Number(document.getElementById('bpPrice').value),
         billingCycle: document.getElementById('bpCycle').value,
         description: document.getElementById('bpDesc').value,
+        virtualizationType: document.getElementById('bpVtype').value,
+        cpuCores: Number(document.getElementById('bpCpu').value),
+        ramMb: Number(document.getElementById('bpRam').value),
+        storageGb: Number(document.getElementById('bpStorage').value),
+        bandwidthGb: Number(document.getElementById('bpBw').value),
+        vpsCount: Number(document.getElementById('bpVps').value),
+        portsCount: Number(document.getElementById('bpPorts').value),
+        dnsRecords: Number(document.getElementById('bpDns').value),
+        slaPercent: Number(document.getElementById('bpSla').value),
       },
     });
     document.getElementById('bpName').value = '';

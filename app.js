@@ -1801,6 +1801,19 @@ app.get('/dashboard', checkAuth, (req, res) => {
     }
   });
 });
+
+// Customer Store - Browse and purchase plans
+app.get('/store', checkAuth, (req, res) => {
+  res.render('users/store', {
+    title: 'Store - TGVPANEL',
+    currentPage: 'store',
+    user: {
+      username: req.session.username,
+      role: req.session.role
+    }
+  });
+});
+
 // Admin Dashboard - Admin only
 app.get('/admin/dashboard', checkAuth, checkAdmin, (req, res) => {
   res.render('admin/dashboard', {

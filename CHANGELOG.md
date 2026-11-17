@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — Customer Store & Payment Gateways (2026-11-17)
+
+- **Customer Store**: Added a `/store` page in the user portal where customers can browse active plans and purchase them. The store displays plan specs (virtualization type, CPU cores, RAM, storage, bandwidth, VPS count, backups, SLA) and lets customers choose an enabled payment gateway. Added a "Store & Plans" link to the customer sidebar (`views/partials/users/sidebar.ejs`).
+- **Payment Gateway Integration**: New `PaymentGatewayManager` service (`src/services/billing/PaymentGatewayManager.ts`) with support for three gateways:
+  - **FamGateway** (UPI, India): Create orders via `POST https://famgateway.in/api/create-order`, verify via `GET /api/verify-order.php`, HMAC-SHA256 webhook signature verification. 0% fee, non-custodial, P2P UPI settlement. Requires a FamPay-linked Gmail with IMAP enabled and an API key from the FamGateway dashboard.
+  - **Stripe**: Checkout Session creation via `POST /v1/checkout/sessions`, Stripe-Signature webhook verification. Requires Stripe API secret key.
+  - **PayPal**: Orders API v2 via `POST /v2/checkout/orders`, OAuth2 client-credentials flow, webhook verification. Requires PayPal client ID and secret.
+- **Admin Gateway Management**: New admin UI section for enable/disable, configure API keys/secrets, webhook URL/secret, currency, and test connectivity for each gateway. Gateway credentials encrypted at rest via the existing crypto-vault (AES-256-GCM). Added "Payment Gateways" link to the admin sidebar.
+- **Plan Creation Fix**: Plan creation now captures and validates required specs: virtualization type (LXC/KVM/both), CPU cores, RAM (MB), storage (GB), bandwidth (GB), VPS count, ports, DNS records, backups, and SLA (%). The admin plan form now includes all these fields. Invalid specs are rejected with clear error messages.
+- **Payment Orders**: New `payment_orders` table tracks every purchase order (gateway, order ID, amount, status, UTR, checkout URL, QR URL). Payments are marked paid only after gateway verification (webhook or server-to-server polling) — no fake success.
+- **Webhook Receiver**: `POST /api/v1/webhooks/payment` handles incoming webhooks from all three gateways with signature verification before fulfilling orders.
+- **Migration v035**: Adds `virtualization_type`, `cpu_cores`, `ram_mb`, `storage_gb`, `bandwidth_gb`, `vps_count`, `allowed_os`, `ports_count`, `dns_records`, `backups_included`, `sla_percent` columns to `billing_plans`; creates `payment_gateways` (with encrypted credentials) and `payment_orders` tables.
+- **Tests T48/T49**: T48 covers store plan browsing, gateway enable/configure, purchase order creation, and role gating. T49 covers plan creation validation for virtualization type, specs, and required fields. **49/49 tests pass.**
+
+**Requirements:** FamGateway requires a merchant account at `famgateway.in` with a FamPay-linked Gmail (IMAP enabled) and API key. Stripe requires a Stripe account with API keys. PayPal requires a PayPal developer account with client credentials. Gateway connectivity tests require outbound HTTPS access to the respective gateway APIs.
+
 ## Unreleased — Enterprise DDoS protection upgrade (2026-11-17)
 
 - Upgraded the DDoS Prot module to a fully featured enterprise-grade detection and mitigation platform in one complete implementation. **Migration v034** expands the schema with enterprise settings (SYN cookies, connection/packet rate limits, ACK/ICMP/HTTP/DNS/UDP amplification thresholds, emergency mode, notification toggles), enhanced IP records (reputation, bans, whitelist, PPS/BPS/conn-rate, attack counters), plus new tables: `ddos_attacks` (attack history with severity/duration/mitigation), `ddos_mitigations` (active mitigation tracking), `ddos_whitelist`, `ddos_profiles` (Basic/Standard/Advanced/Aggressive/Custom with node/VPS assignments), `ddos_vps_policies` (per-VPS TCP/UDP/ICMP protection, port/IP whitelists, network isolation), `ddos_node_status` (multi-node sync), `ddos_integrations` (Cloudflare credentials encrypted at rest), `ddos_audit_log`, and `ddos_firewall_rules` (rule ownership for safe rollback).
