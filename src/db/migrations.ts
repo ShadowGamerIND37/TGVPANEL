@@ -2512,6 +2512,15 @@ export const MIGRATIONS: MigrationDefinition[] = [
       await ensureColumn(db, 'instances', 'unlimited_bandwidth', 'INTEGER DEFAULT 0');
     }
   },
+  {
+    version: 37,
+    name: 'v037_plan_default_node',
+    up: async (db) => {
+      // Allow each billing plan to specify a default target node for
+      // provisioning LXC/KVM VPS instances from that plan.
+      await ensureColumn(db, 'billing_plans', 'default_node_id', 'INTEGER');
+    }
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

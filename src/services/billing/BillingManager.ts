@@ -19,6 +19,7 @@ export interface BillingPlanInput {
   dnsRecords?: number;
   backupsIncluded?: boolean;
   slaPercent?: number;
+  defaultNodeId?: number | null;
 }
 
 export interface SubscriptionInput {
@@ -136,8 +137,8 @@ export class BillingManager {
     const cycle = String(input.billingCycle || 'monthly').trim();
     const features = this.parseFeatures(input.features);
     await this.db.run(
-      `INSERT INTO billing_plans (name, price_cents, billing_cycle, description, features, is_active, virtualization_type, cpu_cores, ram_mb, storage_gb, bandwidth_gb, vps_count, allowed_os, ports_count, dns_records, backups_included, sla_percent)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO billing_plans (name, price_cents, billing_cycle, description, features, is_active, virtualization_type, cpu_cores, ram_mb, storage_gb, bandwidth_gb, vps_count, allowed_os, ports_count, dns_records, backups_included, sla_percent, default_node_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         name,
         priceCents,
@@ -156,6 +157,7 @@ export class BillingManager {
         Number(input.dnsRecords ?? 0),
         input.backupsIncluded === false ? 0 : 1,
         Number(input.slaPercent ?? 99.9),
+        input.defaultNodeId ?? null,
       ]
     );
     return this.db.get<any>(`SELECT * FROM billing_plans WHERE name = ?`, [name]);
@@ -172,7 +174,8 @@ export class BillingManager {
       `UPDATE billing_plans
        SET name = ?, price_cents = ?, billing_cycle = ?, description = ?, features = ?, is_active = ?,
            virtualization_type = ?, cpu_cores = ?, ram_mb = ?, storage_gb = ?, bandwidth_gb = ?, vps_count = ?,
-           allowed_os = ?, ports_count = ?, dns_records = ?, backups_included = ?, sla_percent = ?
+           allowed_os = ?, ports_count = ?, dns_records = ?, backups_included = ?, sla_percent = ?,
+           default_node_id = ?
        WHERE id = ?`,
       [
         name,
@@ -192,6 +195,7 @@ export class BillingManager {
         input.dnsRecords !== undefined ? Number(input.dnsRecords) : existing.dns_records,
         input.backupsIncluded !== undefined ? (input.backupsIncluded ? 1 : 0) : existing.backups_included,
         input.slaPercent !== undefined ? Number(input.slaPercent) : existing.sla_percent,
+        input.defaultNodeId !== undefined ? input.defaultNodeId : existing.default_node_id,
         id,
       ]
     );
