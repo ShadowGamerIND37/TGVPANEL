@@ -173,22 +173,71 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | POST | `/billing/invoices/:id/pay` | admin-subadmin | **Admin-verified payment confirmation only:** requires `{paymentReference, method: manual|admin-verified|bank-transfer|cheque}`; refuses missing references and double payment; records `paid_at`, the reference/method, and posts a credit-ledger `payment` entry. No automated payment gateway is implemented. Phase 30. |
 | GET/POST | `/billing/credits?userId=` | admin-subadmin-operator / admin-subadmin | Credit-ledger history and balance, or adjust credits `{userId, type: credit|debit, amountCents, reason}` (debits refused when they would overdraw). Phase 30. |
 
-### DDoS protection
+### DDoS protection (Enterprise)
 
 | Method | Path | Roles | Description |
 |--------|------|-------|-------------|
-| GET | `/api/v1/ddos/stats` | any authenticated | Live monitoring stats, settings summary, and platform capability flag |
-| GET | `/api/v1/ddos/ips` | admin, subadmin, operator | List monitored IPs (supports `?page`, `?limit`, `?filter=all\|blocked\|active\|threat`) |
-| GET | `/api/v1/ddos/ips/:ip` | admin, subadmin, operator | IP detail with live data and recent attack log |
-| POST | `/api/v1/ddos/ips/:ip/block` | admin | Block IP via `iptables -A INPUT -s <ip> -j DROP` (body: `{reason}`) |
-| POST | `/api/v1/ddos/ips/:ip/unblock` | admin | Remove iptables DROP rule for IP |
+| GET | `/api/v1/ddos/stats` | any authenticated | Live monitoring stats (PPS, BPS, conn-rate, engine health, attack counts) + settings + platform capability |
+| GET | `/api/v1/ddos/ips` | admin, subadmin, operator | List monitored IPs (supports `?page`, `?limit`, `?filter`, `?search`) |
+| GET | `/api/v1/ddos/ips/:ip` | admin, subadmin, operator | IP detail with live data, logs, and attack history |
+| POST | `/api/v1/ddos/ips/:ip/block` | admin | Block IP via nftables/iptables (body: `{reason}`, `{protocol}`, `{port}`) |
+| POST | `/api/v1/ddos/ips/:ip/unblock` | admin | Remove firewall DROP rule for IP |
 | DELETE | `/api/v1/ddos/ips/:ip` | admin | Clear IP tracking data and logs |
 | GET | `/api/v1/ddos/logs` | admin, subadmin, operator | Attack log entries (supports `?limit`) |
-| GET | `/api/v1/ddos/settings` | admin, subadmin | Current DDoS protection settings |
-| PUT | `/api/v1/ddos/settings` | admin | Update settings (rate limits, thresholds, auto-block) |
-| GET | `/api/v1/ddos/network-analysis` | admin, subadmin, operator | Real-time network connection snapshot (active connections, SYN flood, port scanners) |
+| GET | `/api/v1/ddos/settings` | admin, subadmin | Current DDoS settings (all enterprise thresholds) |
+| PUT | `/api/v1/ddos/settings` | admin | Update settings (thresholds, limits, auto-block, emergency) |
+| GET | `/api/v1/ddos/network-analysis` | admin, subadmin, operator | Real-time connection snapshot (SYN/ACK/ICMP/UDP floods, DNS amp, port scans) |
+| GET | `/api/v1/ddos/attacks` | admin, subadmin, operator | Attack history (supports `?page`, `?limit`, `?severity`, `?ip`) |
+| GET | `/api/v1/ddos/mitigations` | admin, subadmin, operator | Active/past mitigations (`?active=1` for active only) |
+| GET | `/api/v1/ddos/whitelist` | admin, subadmin | List whitelisted IPs |
+| POST | `/api/v1/ddos/whitelist` | admin | Add IP to whitelist (body: `{ip}`, `{reason}`, `{nodeId}`, `{vpsId}`) |
+| DELETE | `/api/v1/ddos/whitelist/:ip` | admin | Remove IP from whitelist |
+| GET | `/api/v1/ddos/firewall/rules` | admin, subadmin | List active firewall rules |
+| GET | `/api/v1/ddos/firewall/status` | admin, subadmin, operator | Firewall engine info (nftables/iptables, rule count) |
+| POST | `/api/v1/ddos/firewall/rollback` | admin | Rollback all DDoS firewall rules |
+| POST | `/api/v1/ddos/firewall/syn-cookies` | admin | Enable/disable SYN cookies |
+| POST | `/api/v1/ddos/firewall/connection-limit` | admin | Set connection limit |
+| POST | `/api/v1/ddos/firewall/packet-rate` | admin | Set packet rate limit |
+| POST | `/api/v1/ddos/firewall/emergency` | admin | Toggle emergency mitigation mode |
+| GET | `/api/v1/ddos/http/settings` | admin, subadmin | HTTP protection settings |
+| PUT | `/api/v1/ddos/http/settings` | admin | Update HTTP protection settings |
+| GET | `/api/v1/ddos/http/tracker` | admin, subadmin, operator | HTTP request tracker stats + suspicious UA patterns |
+| GET | `/api/v1/ddos/profiles` | admin, subadmin | List protection profiles |
+| GET | `/api/v1/ddos/profiles/:id` | admin, subadmin | Get profile by ID |
+| POST | `/api/v1/ddos/profiles` | admin | Create profile |
+| PUT | `/api/v1/ddos/profiles/:id` | admin | Update profile |
+| DELETE | `/api/v1/ddos/profiles/:id` | admin | Delete profile |
+| POST | `/api/v1/ddos/profiles/:id/activate` | admin | Activate profile as the active protection profile |
+| POST | `/api/v1/ddos/profiles/:id/assign` | admin | Assign profile to node/VPS (body: `{nodeId}`, `{vpsId}`) |
+| DELETE | `/api/v1/ddos/profiles/:id/assign` | admin | Unassign profile |
+| GET | `/api/v1/ddos/nodes` | admin, subadmin, operator | List node DDoS status |
+| GET | `/api/v1/ddos/nodes/:id` | admin, subadmin | Get node DDoS status |
+| POST | `/api/v1/ddos/nodes/:id/enable` | admin | Enable DDoS protection on node |
+| POST | `/api/v1/ddos/nodes/:id/disable` | admin | Disable DDoS protection on node |
+| POST | `/api/v1/ddos/nodes/:id/sync` | admin | Push config + pull stats from node |
+| GET | `/api/v1/ddos/vps-policies` | admin, subadmin | List per-VPS policies |
+| GET | `/api/v1/ddos/vps-policies/:vpsId` | admin, subadmin | Get VPS policy |
+| PUT | `/api/v1/ddos/vps-policies/:vpsId` | admin | Set/update VPS policy |
+| DELETE | `/api/v1/ddos/vps-policies/:vpsId` | admin | Delete VPS policy |
+| GET | `/api/v1/ddos/integrations` | admin, subadmin | List Cloudflare/external integrations |
+| POST | `/api/v1/ddos/integrations` | admin | Create integration (API key encrypted at rest) |
+| GET | `/api/v1/ddos/integrations/:id` | admin, subadmin | Get integration |
+| PUT | `/api/v1/ddos/integrations/:id` | admin | Update integration |
+| DELETE | `/api/v1/ddos/integrations/:id` | admin | Delete integration |
+| POST | `/api/v1/ddos/integrations/:id/security-level` | admin | Set Cloudflare zone security level |
+| GET | `/api/v1/ddos/integrations/:id/stats` | admin, subadmin | Fetch Cloudflare traffic analytics |
+| GET | `/api/v1/ddos/audit` | admin | Audit log for firewall/mitigation operations |
 
-**Requirements:** Linux host with `ss`, `netstat`, and `iptables` for full monitoring and blocking. On non-Linux platforms, the `monitoring` flag in stats is `false` and block/unblock operations return a clear error.
+**Node Agent endpoints** (on each registered node, HMAC-authenticated):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/ddos/stats` | Node-side monitoring stats (PPS, BPS, connections, blocked count) |
+| POST | `/api/v1/ddos/config` | Push protection config to node |
+| POST | `/api/v1/ddos/block` | Block IP on node |
+| POST | `/api/v1/ddos/unblock` | Unblock IP on node |
+
+**Requirements:** Linux host with `ss`, `netstat`, `iptables`/`nft` for full monitoring and blocking. Cloudflare integration requires API credentials and network access to `api.cloudflare.com`. HTTP protection middleware skips loopback/private IPs.
 
 ## Reseller API
 

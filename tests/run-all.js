@@ -5117,6 +5117,191 @@ exec "$@"
       }
     });
 
+    await runStep('T47: Enterprise DDoS protection — profiles, HTTP, firewall, nodes, VPS, Cloudflare, audit', async () => {
+      const ctx = app.getHkvmV3Context();
+      // Create operator client for role-gating checks.
+      const bcrypt = require('bcryptjs');
+      const opHash = bcrypt.hashSync('OpPass!99', 10);
+      await ctx.db.run(`INSERT OR IGNORE INTO users (username, password, email, role, is_active) VALUES ('op_user', ?, 'op@example.org', 'operator', 1)`, [opHash]);
+      const opClient = new SessionClient(baseUrl);
+      const opLogin = await opClient.request('POST', '/api/login', { username: 'op_user', password: 'OpPass!99' });
+      assert.strictEqual(opLogin.status, 200, `Operator login failed: ${opLogin.text}`);
+      try {
+        // 1. Enterprise stats include new fields (pps, bps, conn_rate, engine_health).
+        const statsRes = await adminClient.request('GET', '/api/v1/ddos/stats');
+        assert.strictEqual(statsRes.status, 200, `Stats failed: ${statsRes.text}`);
+        const s = statsRes.json.stats;
+        assert.ok('pps' in s, 'pps field present');
+        assert.ok('bps' in s, 'bps field present');
+        assert.ok('conn_rate' in s, 'conn_rate field present');
+        assert.ok('engine_health' in s, 'engine_health field present');
+        assert.ok('firewall_engine' in s, 'firewall_engine field present');
+        assert.ok('attacks_detected' in s, 'attacks_detected field present');
+        assert.ok('active_mitigations' in s, 'active_mitigations field present');
+
+        // 2. Settings include enterprise thresholds.
+        const settingsRes = await adminClient.request('GET', '/api/v1/ddos/settings');
+        assert.strictEqual(settingsRes.status, 200);
+        const cfg = settingsRes.json.settings;
+        assert.strictEqual(typeof cfg.syn_cookies, 'number');
+        assert.strictEqual(typeof cfg.ack_flood_threshold, 'number');
+        assert.strictEqual(typeof cfg.icmp_flood_threshold, 'number');
+        assert.strictEqual(typeof cfg.http_get_threshold, 'number');
+        assert.strictEqual(typeof cfg.http_post_threshold, 'number');
+        assert.strictEqual(typeof cfg.slowloris_threshold, 'number');
+        assert.strictEqual(typeof cfg.dns_amp_threshold, 'number');
+        assert.strictEqual(typeof cfg.emergency_mode, 'number');
+
+        // 3. Profiles CRUD.
+        const profRes = await adminClient.request('POST', '/api/v1/ddos/profiles', {
+          name: 'T47 Test Profile',
+          level: 'custom',
+          auto_block: 1,
+          block_duration: 1800,
+          connection_limit: 2000,
+          threat_threshold_medium: 150,
+          threat_threshold_high: 600,
+          threat_threshold_critical: 1200,
+        });
+        assert.strictEqual(profRes.status, 201, `Profile create failed: ${profRes.text}`);
+        const profile = profRes.json.profile;
+        assert.strictEqual(profile.name, 'T47 Test Profile');
+        assert.strictEqual(profile.level, 'custom');
+
+        const profList = await adminClient.request('GET', '/api/v1/ddos/profiles');
+        assert.strictEqual(profList.status, 200);
+        assert.ok(profList.json.profiles.some((p) => p.name === 'T47 Test Profile'), 'Profile in list');
+
+        // Activate profile
+        const activateRes = await adminClient.request('POST', `/api/v1/ddos/profiles/${profile.id}/activate`);
+        assert.strictEqual(activateRes.status, 200, `Profile activate failed: ${activateRes.text}`);
+
+        // 4. HTTP protection settings.
+        const httpGet = await adminClient.request('GET', '/api/v1/ddos/http/settings');
+        assert.strictEqual(httpGet.status, 200);
+        assert.ok(httpGet.json.settings, 'HTTP settings present');
+        assert.strictEqual(typeof httpGet.json.settings.http_get_threshold, 'number');
+
+        const httpPut = await adminClient.request('PUT', '/api/v1/ddos/http/settings', {
+          http_get_threshold: 250,
+          slowloris_threshold: 15,
+        });
+        assert.strictEqual(httpPut.status, 200, `HTTP settings PUT failed: ${httpPut.text}`);
+        assert.strictEqual(httpPut.json.settings.http_get_threshold, 250);
+
+        // Operator cannot change HTTP settings.
+        const opHttp = await opClient.request('PUT', '/api/v1/ddos/http/settings', { http_get_threshold: 1 });
+        assert.ok([403, 401].includes(opHttp.status), `Operator must not update HTTP settings: ${opHttp.status}`);
+
+        // 5. Firewall status and engine controls.
+        const fwStatus = await adminClient.request('GET', '/api/v1/ddos/firewall/status');
+        assert.strictEqual(fwStatus.status, 200);
+        assert.ok('engine' in fwStatus.json, 'firewall engine present');
+        assert.ok('nftables' in fwStatus.json, 'nftables flag present');
+
+        // SYN cookies control (may fail on non-Linux — that's honest).
+        const synRes = await adminClient.request('POST', '/api/v1/ddos/firewall/syn-cookies', { enabled: true });
+        assert.ok([200, 400].includes(synRes.status), `SYN cookies returned unexpected: ${synRes.status}`);
+
+        // Connection limit control.
+        const connRes = await adminClient.request('POST', '/api/v1/ddos/firewall/connection-limit', { limit: 2000 });
+        assert.ok([200, 400].includes(connRes.status), `Connection limit returned unexpected: ${connRes.status}`);
+
+        // 6. Node status list.
+        const nodesRes = await adminClient.request('GET', '/api/v1/ddos/nodes');
+        assert.strictEqual(nodesRes.status, 200);
+        assert.ok(Array.isArray(nodesRes.json.nodes), 'nodes array present');
+
+        // 7. VPS policies.
+        const vpsPut = await adminClient.request('PUT', '/api/v1/ddos/vps-policies/1', {
+          vps_id: 1,
+          instance_type: 'lxc',
+          instance_ref_id: 1,
+          enabled: 1,
+          tcp_protection: 1,
+          udp_protection: 1,
+          connection_limit: 500,
+          auto_block: 1,
+          block_duration: 3600,
+        });
+        assert.strictEqual(vpsPut.status, 200, `VPS policy PUT failed: ${vpsPut.text}`);
+        assert.strictEqual(vpsPut.json.policy.vps_id, 1);
+
+        const vpsList = await adminClient.request('GET', '/api/v1/ddos/vps-policies');
+        assert.strictEqual(vpsList.status, 200);
+        assert.ok(vpsList.json.policies.some((p) => p.vps_id === 1), 'VPS policy in list');
+
+        // 8. Whitelist add/remove.
+        const wlAdd = await adminClient.request('POST', '/api/v1/ddos/whitelist', {
+          ip: '203.0.113.100', reason: 't47 test',
+        });
+        assert.strictEqual(wlAdd.status, 200, `Whitelist add failed: ${wlAdd.text}`);
+        const wlList = await adminClient.request('GET', '/api/v1/ddos/whitelist');
+        assert.strictEqual(wlList.status, 200);
+        assert.ok(wlList.json.whitelist.some((w) => w.ip === '203.0.113.100'), 'Whitelist entry present');
+
+        // Whitelisted IP cannot be blocked.
+        const wlBlock = await adminClient.request('POST', '/api/v1/ddos/ips/203.0.113.100/block', { reason: 'test' });
+        assert.strictEqual(wlBlock.status, 400, `Whitelisted IP must not be blocked: ${wlBlock.status}`);
+
+        const wlRemove = await adminClient.request('DELETE', '/api/v1/ddos/whitelist/203.0.113.100');
+        assert.strictEqual(wlRemove.status, 200, `Whitelist remove failed: ${wlRemove.text}`);
+
+        // 9. Cloudflare integration create/list/delete.
+        const cfRes = await adminClient.request('POST', '/api/v1/ddos/integrations', {
+          name: 'T47 CF', provider: 'cloudflare', zone: 'test-zone', securityLevel: 'medium',
+        });
+        assert.strictEqual(cfRes.status, 201, `Cloudflare create failed: ${cfRes.text}`);
+        const cf = cfRes.json.integration;
+        const cfList = await adminClient.request('GET', '/api/v1/ddos/integrations');
+        assert.strictEqual(cfList.status, 200);
+        assert.ok(cfList.json.integrations.some((i) => i.id === cf.id), 'Cloudflare in list');
+        // API key must not be returned in plaintext.
+        assert.ok(!cfList.json.integrations.find((i) => i.id === cf.id).api_key_enc, 'API key encrypted, not plaintext');
+
+        const cfDelete = await adminClient.request('DELETE', `/api/v1/ddos/integrations/${cf.id}`);
+        assert.strictEqual(cfDelete.status, 200);
+
+        // 10. Attacks and mitigations endpoints.
+        const atkRes = await adminClient.request('GET', '/api/v1/ddos/attacks?limit=10');
+        assert.strictEqual(atkRes.status, 200);
+        assert.ok(Array.isArray(atkRes.json.attacks), 'attacks array present');
+
+        const mitRes = await adminClient.request('GET', '/api/v1/ddos/mitigations?active=1');
+        assert.strictEqual(mitRes.status, 200);
+        assert.ok(Array.isArray(mitRes.json.mitigations), 'mitigations array present');
+
+        // 11. Audit log endpoint.
+        const auditRes = await adminClient.request('GET', '/api/v1/ddos/audit?limit=10');
+        assert.strictEqual(auditRes.status, 200);
+        assert.ok(Array.isArray(auditRes.json.logs), 'audit logs array present');
+
+        // 12. Network analysis includes enterprise attack types.
+        const naRes = await adminClient.request('GET', '/api/v1/ddos/network-analysis');
+        assert.strictEqual(naRes.status, 200);
+        assert.ok('ack_flood_attacks' in naRes.json, 'ack_flood_attacks present');
+        assert.ok('icmp_flood_attacks' in naRes.json, 'icmp_flood_attacks present');
+        assert.ok('dns_amplification' in naRes.json, 'dns_amplification present');
+
+        // 13. Profile assignment (to node).
+        const assignRes = await adminClient.request('POST', `/api/v1/ddos/profiles/${profile.id}/assign`, { nodeId: 1 });
+        assert.strictEqual(assignRes.status, 200, `Profile assign failed: ${assignRes.text}`);
+
+        // Cleanup
+        await adminClient.request('DELETE', `/api/v1/ddos/profiles/${profile.id}`);
+        await adminClient.request('DELETE', `/api/v1/ddos/vps-policies/1`);
+      } finally {
+        // Restore defaults and clean up test data.
+        await ctx.db.run(`UPDATE ddos_settings SET rate_limit_per_minute=60, block_duration=3600, http_get_threshold=300, slowloris_threshold=20`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM ddos_profiles WHERE name LIKE 'T47%'`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM ddos_profile_assignments`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM ddos_vps_policies WHERE vps_id = 1`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM ddos_whitelist WHERE ip = '203.0.113.100'`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM ddos_integrations WHERE name LIKE 'T47%'`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM users WHERE username = 'op_user'`).catch(() => undefined);
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

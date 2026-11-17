@@ -16,6 +16,12 @@ import { LoadBalancerManager } from './services/network/LoadBalancerManager';
 import { DockerManager } from './services/docker/DockerManager';
 import { BillingManager } from './services/billing/BillingManager';
 import { DdosManager } from './services/ddos/DdosManager';
+import { DdosFirewallManager } from './services/ddos/DdosFirewallManager';
+import { DdosHttpProtection } from './services/ddos/DdosHttpProtection';
+import { DdosProfileManager } from './services/ddos/DdosProfileManager';
+import { DdosCloudflareManager } from './services/ddos/DdosCloudflareManager';
+import { DdosNodeSyncManager } from './services/ddos/DdosNodeSyncManager';
+import { DdosVpsPolicyManager } from './services/ddos/DdosVpsPolicyManager';
 import { SqliteSessionStore } from './security/session-store';
 import { BackupSnapshotManager } from './services/backup/BackupSnapshotManager';
 import { MigrationManager } from './services/migration/MigrationManager';
@@ -35,6 +41,12 @@ export interface HkvmRuntimeContext {
   dockerManager: DockerManager;
   billingManager: BillingManager;
   ddosManager: DdosManager;
+  ddosFirewallManager: DdosFirewallManager;
+  ddosHttpProtection: DdosHttpProtection;
+  ddosProfileManager: DdosProfileManager;
+  ddosCloudflareManager: DdosCloudflareManager;
+  ddosNodeSyncManager: DdosNodeSyncManager;
+  ddosVpsPolicyManager: DdosVpsPolicyManager;
   sessionStore: SqliteSessionStore;
   backupManager: BackupSnapshotManager;
   migrationManager: MigrationManager;
@@ -100,17 +112,29 @@ export async function initializeUnifiedHkvmRuntime(
   const loadBalancerManager = new LoadBalancerManager(db, nodeManager);
   const dockerManager = new DockerManager(db, nodeManager);
   const billingManager = new BillingManager(db);
-  const ddosManager = new DdosManager(db);
+  // Enterprise DDoS protection (Area D hardening): detection, mitigation,
+  // HTTP protection, profiles, Cloudflare integration, multi-node sync, and
+  // per-VPS policies. Linux-only for full firewall capability.
+  const ddosFirewallManager = new DdosFirewallManager(db);
+  const ddosManager = new DdosManager(db, ddosFirewallManager, monitoringService);
+  const ddosHttpProtection = new DdosHttpProtection(db);
+  const ddosProfileManager = new DdosProfileManager(db);
+  const ddosCloudflareManager = new DdosCloudflareManager(db);
+  const ddosNodeSyncManager = new DdosNodeSyncManager(db, nodeManager);
+  const ddosVpsPolicyManager = new DdosVpsPolicyManager(db);
   // Shared persistent session store (inventory + revocation; also backs the
   // express-session parser wired in app.js against the same database file).
   const sessionStore = new SqliteSessionStore(dbPath);
 
-  // Real-time DDoS monitoring (ss/netstat + iptables blocking) - Linux only.
+  // Real-time DDoS monitoring (ss/netstat + iptables/nftables blocking) - Linux only.
   if (
     process.env.TGVPANEL_DISABLE_BACKGROUND_POLLER !== 'true' &&
     process.env.HKVM_DISABLE_BACKGROUND_POLLER !== 'true'
   ) {
     await ddosManager.start();
+    await ddosHttpProtection.loadSettings();
+    await ddosNodeSyncManager.initializeNodes();
+    await ddosNodeSyncManager.start();
   }
 
   if (
@@ -139,6 +163,12 @@ export async function initializeUnifiedHkvmRuntime(
     dockerManager,
     billingManager,
     ddosManager,
+    ddosFirewallManager,
+    ddosHttpProtection,
+    ddosProfileManager,
+    ddosCloudflareManager,
+    ddosNodeSyncManager,
+    ddosVpsPolicyManager,
     sessionStore,
     backupManager,
     migrationManager,

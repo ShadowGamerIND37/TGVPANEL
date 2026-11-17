@@ -2001,58 +2001,232 @@
       </div>
       <% } %>
 
-      <!-- SECTION: DDoS PROTECTION -->
+      <!-- SECTION: DDoS PROTECTION (Enterprise) -->
       <% if (section === 'ddos') { %>
       <div class="v3-toolbar">
         <div>
           <h2 style="margin:0;color:var(--text-primary);">🛡️ DDoS Protection</h2>
-          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Real-time network-connection monitoring with threat scoring and iptables-based auto-blocking. Requires Linux with <code>ss</code>, <code>netstat</code>, and <code>iptables</code>.</p>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Enterprise-grade real-time attack detection &amp; mitigation. Requires Linux with <code>ss</code>, <code>netstat</code>, <code>iptables</code>/<code>nft</code>.</p>
         </div>
         <div class="v3-btn-row">
           <button class="btn btn-outline" onclick="loadDdos()">Refresh</button>
+          <button class="btn btn-outline" onclick="loadDdosTab('attacks')">Attacks</button>
+          <button class="btn btn-outline" onclick="loadDdosTab('profiles')">Profiles</button>
+          <button class="btn btn-outline" onclick="loadDdosTab('nodes')">Nodes</button>
+          <button class="btn btn-outline" onclick="loadDdosTab('vps')">VPS</button>
+          <button class="btn btn-outline" onclick="loadDdosTab('cloudflare')">Cloudflare</button>
+          <button class="btn btn-outline" onclick="loadDdosTab('firewall')">Firewall</button>
         </div>
       </div>
-      <div class="v3-card">
-        <h3>Live Statistics</h3>
-        <div class="v3-stat-grid" id="ddosStatsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:8px;"></div>
-        <div id="ddosPlatform" style="margin-top:10px;font-size:13px;color:var(--text-muted);"></div>
-      </div>
-      <div class="v3-card">
-        <h3>Threat Levels &amp; Settings</h3>
-        <div class="v3-form-grid">
-          <div class="v3-field"><label>Rate Limit / min</label><input id="ddosRateLimit" type="number" min="1"></div>
-          <div class="v3-field"><label>Max Bandwidth / min</label><input id="ddosMaxBw" type="number" min="1"></div>
-          <div class="v3-field"><label>Auto-block</label><select id="ddosAutoBlock"><option value="1">Enabled</option><option value="0">Disabled</option></select></div>
-          <div class="v3-field"><label>Block Duration (s)</label><input id="ddosBlockDur" type="number" min="0"></div>
-          <div class="v3-field"><label>Medium Threshold</label><input id="ddosTMed" type="number" min="1"></div>
-          <div class="v3-field"><label>High Threshold</label><input id="ddosTHigh" type="number" min="1"></div>
-          <div class="v3-field"><label>Critical Threshold</label><input id="ddosTCritical" type="number" min="1"></div>
-          <div class="v3-field"><label>Intelligent Blocking</label><select id="ddosIntel"><option value="1">Enabled</option><option value="0">Disabled</option></select></div>
-          <div class="v3-field" style="display:flex;align-items:flex-end;grid-column:1/-1;"><button class="btn btn-primary" onclick="saveDdosSettings()">Save Settings</button></div>
+
+      <!-- TAB: DASHBOARD -->
+      <div id="ddosTab-dashboard">
+        <div class="v3-card">
+          <h3>Live Statistics</h3>
+          <div id="ddosStatsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-top:8px;"></div>
+          <div id="ddosPlatform" style="margin-top:10px;font-size:13px;color:var(--text-muted);"></div>
+        </div>
+        <div class="v3-card">
+          <h3>Protection Settings</h3>
+          <div class="v3-form-grid">
+            <div class="v3-field"><label>Rate Limit / min</label><input id="ddosRateLimit" type="number" min="1"></div>
+            <div class="v3-field"><label>Max Bandwidth / min</label><input id="ddosMaxBw" type="number" min="1"></div>
+            <div class="v3-field"><label>Auto-block</label><select id="ddosAutoBlock"><option value="1">Enabled</option><option value="0">Disabled</option></select></div>
+            <div class="v3-field"><label>Block Duration (s)</label><input id="ddosBlockDur" type="number" min="0"></div>
+            <div class="v3-field"><label>Medium Threshold</label><input id="ddosTMed" type="number" min="1"></div>
+            <div class="v3-field"><label>High Threshold</label><input id="ddosTHigh" type="number" min="1"></div>
+            <div class="v3-field"><label>Critical Threshold</label><input id="ddosTCritical" type="number" min="1"></div>
+            <div class="v3-field"><label>SYN Cookies</label><select id="ddosSynCookies"><option value="1">Enabled</option><option value="0">Disabled</option></select></div>
+            <div class="v3-field"><label>Connection Limit</label><input id="ddosConnLimit" type="number" min="1"></div>
+            <div class="v3-field"><label>Packet Rate Limit</label><input id="ddosPktRate" type="number" min="0"></div>
+            <div class="v3-field"><label>ACK Flood Threshold</label><input id="ddosAckThresh" type="number" min="1"></div>
+            <div class="v3-field"><label>ICMP Flood Threshold</label><input id="ddosIcmpThresh" type="number" min="1"></div>
+            <div class="v3-field"><label>HTTP GET Threshold</label><input id="ddosHttpGetThresh" type="number" min="1"></div>
+            <div class="v3-field"><label>HTTP POST Threshold</label><input id="ddosHttpPostThresh" type="number" min="1"></div>
+            <div class="v3-field"><label>Slowloris Threshold</label><input id="ddosSlowlorisThresh" type="number" min="1"></div>
+            <div class="v3-field"><label>DNS Amp Threshold</label><input id="ddosDnsAmpThresh" type="number" min="1"></div>
+            <div class="v3-field"><label>UDP Amp Threshold</label><input id="ddosUdpAmpThresh" type="number" min="1"></div>
+            <div class="v3-field"><label>Packet Rate Threshold</label><input id="ddosPktRateThresh" type="number" min="1"></div>
+            <div class="v3-field"><label>Emergency Mode</label><select id="ddosEmergency"><option value="0">Off</option><option value="1">On</option></select></div>
+            <div class="v3-field"><label>Intelligent Blocking</label><select id="ddosIntel"><option value="1">Enabled</option><option value="0">Disabled</option></select></div>
+            <div class="v3-field" style="display:flex;align-items:flex-end;grid-column:1/-1;"><button class="btn btn-primary" onclick="saveDdosSettings()">Save Settings</button></div>
+          </div>
+        </div>
+        <div class="v3-card v3-table-wrap">
+          <h3>Monitored IPs</h3>
+          <div class="v3-btn-row" style="margin-bottom:10px;">
+            <select id="ddosFilter" onchange="ddosPage=1;loadDdosIps()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border-color);background:var(--surface);color:var(--text-primary);">
+              <option value="all">All</option>
+              <option value="blocked">Blocked</option>
+              <option value="active">Active</option>
+              <option value="threat">Threats</option>
+              <option value="whitelisted">Whitelisted</option>
+            </select>
+            <input id="ddosSearch" placeholder="Search IP..." oninput="ddosPage=1;loadDdosIps()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border-color);background:var(--surface);color:var(--text-primary);">
+          </div>
+          <table class="v3-table">
+            <thead><tr><th>IP</th><th>Req</th><th>BW</th><th>PPS</th><th>BPS</th><th>Threat</th><th>Banned</th><th>Reputation</th><th>Last Seen</th><th>Actions</th></tr></thead>
+            <tbody id="ddosIpBody"></tbody>
+          </table>
+          <div style="margin-top:10px;display:flex;justify-content:center;gap:6px;" id="ddosIpPager"></div>
+        </div>
+        <div class="v3-card v3-table-wrap">
+          <h3>Attack Log</h3>
+          <table class="v3-table">
+            <thead><tr><th>Time</th><th>IP</th><th>Action</th><th>Requests</th><th>Bandwidth</th></tr></thead>
+            <tbody id="ddosLogBody"></tbody>
+          </table>
         </div>
       </div>
-      <div class="v3-card v3-table-wrap">
-        <h3>Monitored IPs</h3>
-        <div class="v3-btn-row" style="margin-bottom:10px;">
-          <select id="ddosFilter" onchange="loadDdosIps()" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border-color);background:var(--surface);color:var(--text-primary);">
-            <option value="all">All</option>
-            <option value="blocked">Blocked</option>
-            <option value="active">Active</option>
-            <option value="threat">Threats</option>
-          </select>
+
+      <!-- TAB: ATTACKS -->
+      <div id="ddosTab-attacks" style="display:none;">
+        <div class="v3-card v3-table-wrap">
+          <h3>Attack History</h3>
+          <table class="v3-table">
+            <thead><tr><th>Time</th><th>IP</th><th>Type</th><th>Severity</th><th>PPS</th><th>BPS</th><th>Conns</th><th>Duration</th><th>Mitigated</th></tr></thead>
+            <tbody id="ddosAttacksBody"></tbody>
+          </table>
         </div>
-        <table class="v3-table">
-          <thead><tr><th>IP</th><th>Requests</th><th>Bandwidth</th><th>Threads</th><th>Threat</th><th>Blocked</th><th>Last Seen</th><th>Actions</th></tr></thead>
-          <tbody id="ddosIpBody"></tbody>
-        </table>
-        <div style="margin-top:10px;display:flex;justify-content:center;gap:6px;" id="ddosIpPager"></div>
+        <div class="v3-card v3-table-wrap">
+          <h3>Active Mitigations</h3>
+          <table class="v3-table">
+            <thead><tr><th>IP</th><th>Method</th><th>Attack Type</th><th>Created</th><th>Expires</th><th>Status</th></tr></thead>
+            <tbody id="ddosMitBody"></tbody>
+          </table>
+        </div>
       </div>
-      <div class="v3-card v3-table-wrap">
-        <h3>Attack Log</h3>
-        <table class="v3-table">
-          <thead><tr><th>Time</th><th>IP</th><th>Action</th><th>Requests</th><th>Bandwidth</th></tr></thead>
-          <tbody id="ddosLogBody"></tbody>
-        </table>
+
+      <!-- TAB: PROFILES -->
+      <div id="ddosTab-profiles" style="display:none;">
+        <div class="v3-card">
+          <h3>Protection Profiles</h3>
+          <div class="v3-btn-row" style="margin-bottom:10px;">
+            <button class="btn btn-primary" onclick="showProfileForm()">Create Profile</button>
+          </div>
+          <table class="v3-table">
+            <thead><tr><th>ID</th><th>Name</th><th>Level</th><th>Auto-block</th><th>Conn Limit</th><th>Active</th><th>Actions</th></tr></thead>
+            <tbody id="ddosProfileBody"></tbody>
+          </table>
+        </div>
+        <div class="v3-card" id="ddosProfileForm" style="display:none;">
+          <h3 id="ddosProfileFormTitle">New Profile</h3>
+          <form onsubmit="saveDdosProfile(event)" class="v3-form-grid">
+            <input type="hidden" id="ddosPfId">
+            <div class="v3-field"><label>Name</label><input id="ddosPfName" required></div>
+            <div class="v3-field"><label>Level</label><select id="ddosPfLevel"><option value="custom">Custom</option><option value="basic">Basic</option><option value="standard">Standard</option><option value="advanced">Advanced</option><option value="aggressive">Aggressive</option></select></div>
+            <div class="v3-field"><label>Auto-block</label><select id="ddosPfAutoBlock"><option value="1">Enabled</option><option value="0">Disabled</option></select></div>
+            <div class="v3-field"><label>Block Duration (s)</label><input id="ddosPfBlockDur" type="number" min="0"></div>
+            <div class="v3-field"><label>Connection Limit</label><input id="ddosPfConnLimit" type="number" min="1"></div>
+            <div class="v3-field"><label>Medium Threshold</label><input id="ddosPfTMed" type="number" min="1"></div>
+            <div class="v3-field"><label>High Threshold</label><input id="ddosPfTHigh" type="number" min="1"></div>
+            <div class="v3-field"><label>Critical Threshold</label><input id="ddosPfTCritical" type="number" min="1"></div>
+            <div class="v3-field" style="display:flex;align-items:flex-end;grid-column:1/-1;">
+              <button class="btn btn-primary" type="submit">Save Profile</button>
+              <button class="btn btn-outline" type="button" onclick="document.getElementById('ddosProfileForm').style.display='none'">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- TAB: NODES -->
+      <div id="ddosTab-nodes" style="display:none;">
+        <div class="v3-card v3-table-wrap">
+          <h3>Node Protection Status</h3>
+          <table class="v3-table">
+            <thead><tr><th>Node ID</th><th>Enabled</th><th>Profile</th><th>Online</th><th>PPS</th><th>BPS</th><th>Conns</th><th>Blocked</th><th>Last Sync</th><th>Actions</th></tr></thead>
+            <tbody id="ddosNodeBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TAB: VPS -->
+      <div id="ddosTab-vps" style="display:none;">
+        <div class="v3-card v3-table-wrap">
+          <h3>Per-VPS Protection Policies</h3>
+          <table class="v3-table">
+            <thead><tr><th>VPS ID</th><th>Type</th><th>Ref ID</th><th>Enabled</th><th>TCP</th><th>UDP</th><th>Conn Limit</th><th>Auto-block</th><th>Actions</th></tr></thead>
+            <tbody id="ddosVpsBody"></tbody>
+          </table>
+        </div>
+        <div class="v3-card v3-table-wrap">
+          <h3>IP Whitelist</h3>
+          <form onsubmit="addDdosWhitelist(event)" class="v3-form-grid" style="margin-bottom:10px;">
+            <div class="v3-field"><label>IP</label><input id="ddosWlIp" required placeholder="203.0.113.10"></div>
+            <div class="v3-field"><label>Reason</label><input id="ddosWlReason" placeholder="Trusted client"></div>
+            <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit">Add to Whitelist</button></div>
+          </form>
+          <table class="v3-table">
+            <thead><tr><th>IP</th><th>Reason</th><th>Node</th><th>VPS</th><th>Created</th><th>Actions</th></tr></thead>
+            <tbody id="ddosWlBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TAB: CLOUDFLARE -->
+      <div id="ddosTab-cloudflare" style="display:none;">
+        <div class="v3-card">
+          <h3>External Integrations</h3>
+          <div class="v3-btn-row" style="margin-bottom:10px;">
+            <button class="btn btn-primary" onclick="showCfForm()">Add Cloudflare</button>
+          </div>
+          <table class="v3-table">
+            <thead><tr><th>ID</th><th>Name</th><th>Provider</th><th>Zone</th><th>Security Level</th><th>Active</th><th>Last Sync</th><th>Actions</th></tr></thead>
+            <tbody id="ddosCfBody"></tbody>
+          </table>
+        </div>
+        <div class="v3-card" id="ddosCfForm" style="display:none;">
+          <h3 id="ddosCfFormTitle">Add Integration</h3>
+          <form onsubmit="saveCfIntegration(event)" class="v3-form-grid">
+            <input type="hidden" id="ddosCfId">
+            <div class="v3-field"><label>Name</label><input id="ddosCfName" required></div>
+            <div class="v3-field"><label>Provider</label><select id="ddosCfProvider"><option value="cloudflare">Cloudflare</option></select></div>
+            <div class="v3-field"><label>API Key</label><input id="ddosCfKey" placeholder="Cloudflare API key"></div>
+            <div class="v3-field"><label>API Email</label><input id="ddosCfEmail" placeholder="user@example.com"></div>
+            <div class="v3-field"><label>Zone ID</label><input id="ddosCfZone" placeholder="Zone ID"></div>
+            <div class="v3-field"><label>Security Level</label><select id="ddosCfLevel"><option value="medium">Medium</option><option value="high">High</option><option value="under_attack">Under Attack</option><option value="low">Low</option><option value="off">Off</option></select></div>
+            <div class="v3-field" style="display:flex;align-items:flex-end;grid-column:1/-1;">
+              <button class="btn btn-primary" type="submit">Save</button>
+              <button class="btn btn-outline" type="button" onclick="document.getElementById('ddosCfForm').style.display='none'">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- TAB: FIREWALL -->
+      <div id="ddosTab-firewall" style="display:none;">
+        <div class="v3-card">
+          <h3>Firewall Engine</h3>
+          <div id="ddosFwStatus" style="margin-bottom:10px;font-size:13px;"></div>
+          <div class="v3-form-grid">
+            <div class="v3-field"><label>SYN Cookies</label><select id="ddosFwSyn"><option value="1">Enabled</option><option value="0">Disabled</option></select></div>
+            <div class="v3-field"><label>Connection Limit</label><input id="ddosFwConnLimit" type="number" min="1" placeholder="1000"></div>
+            <div class="v3-field"><label>Packet Rate / min</label><input id="ddosFwPktRate" type="number" min="0" placeholder="0"></div>
+            <div class="v3-field" style="display:flex;align-items:flex-end;gap:6px;">
+              <button class="btn btn-primary" onclick="applyDdosFwSyn()">Apply SYN Cookies</button>
+              <button class="btn btn-primary" onclick="applyDdosFwConn()">Apply Conn Limit</button>
+              <button class="btn btn-primary" onclick="applyDdosFwPktRate()">Apply Rate Limit</button>
+            </div>
+            <div class="v3-field" style="display:flex;align-items:flex-end;grid-column:1/-1;">
+              <button class="btn btn-outline" onclick="emergencyDdos()">Emergency Mode</button>
+              <button class="btn btn-danger" onclick="rollbackDdosFw()">Rollback All Rules</button>
+            </div>
+          </div>
+        </div>
+        <div class="v3-card v3-table-wrap">
+          <h3>Active Firewall Rules</h3>
+          <table class="v3-table">
+            <thead><tr><th>Rule ID</th><th>IP</th><th>Protocol</th><th>Port</th><th>Action</th><th>Engine</th><th>Created</th></tr></thead>
+            <tbody id="ddosFwRulesBody"></tbody>
+          </table>
+        </div>
+        <div class="v3-card v3-table-wrap">
+          <h3>Audit Log</h3>
+          <table class="v3-table">
+            <thead><tr><th>Time</th><th>Action</th><th>Target</th><th>IP</th><th>Method</th><th>Success</th></tr></thead>
+            <tbody id="ddosAuditBody"></tbody>
+          </table>
+        </div>
       </div>
       <% } %>
 
@@ -5433,37 +5607,59 @@ async function submitBillingCredit(e) {
   } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
-// ===== DDoS Protection =====
+// ===== DDoS Protection (Enterprise) =====
 let ddosPage = 1;
 const ddosThreatColor = { low: 'running', medium: 'warning', high: 'warning', critical: 'danger' };
+let ddosActiveTab = 'dashboard';
+
+function loadDdosTab(tab) {
+  ddosActiveTab = tab;
+  for (const t of ['dashboard', 'attacks', 'profiles', 'nodes', 'vps', 'cloudflare', 'firewall']) {
+    const el = document.getElementById('ddosTab-' + t);
+    if (el) el.style.display = (t === tab) ? 'block' : 'none';
+  }
+  if (tab === 'dashboard') loadDdos();
+  if (tab === 'attacks') loadDdosAttacks();
+  if (tab === 'profiles') loadDdosProfiles();
+  if (tab === 'nodes') loadDdosNodes();
+  if (tab === 'vps') loadDdosVps();
+  if (tab === 'cloudflare') loadDdosCloudflare();
+  if (tab === 'firewall') loadDdosFirewall();
+}
 
 async function loadDdos() {
   try {
-    const [statsRes, settingsRes] = await Promise.all([
+    const [statsRes, settingsRes, fwRes] = await Promise.all([
       hkvmApi('/api/v1/ddos/stats'),
       hkvmApi('/api/v1/ddos/settings'),
+      hkvmApi('/api/v1/ddos/firewall/status'),
     ]);
     const s = statsRes.stats;
     const grid = document.getElementById('ddosStatsGrid');
     const items = [
       ['Total Requests', s.total_requests],
-      ['Active Connections', s.active_connections],
+      ['Active Conn', s.active_connections],
+      ['PPS', s.pps],
+      ['BPS', s.bps],
+      ['Conn Rate', s.conn_rate],
+      ['Inbound BPS', s.inbound_bps],
+      ['Outbound BPS', s.outbound_bps],
       ['Blocked IPs', s.blocked_ips],
-      ['Suspicious IPs', s.suspicious_ips],
-      ['Critical Threats', s.critical_threats],
-      ['High Threats', s.high_threats],
-      ['Medium Threats', s.medium_threats],
-      ['Total Connections', s.total_network_connections],
+      ['Banned IPs', s.banned_ips],
+      ['Suspicious', s.suspicious_ips],
+      ['Critical', s.critical_threats],
+      ['High', s.high_threats],
+      ['Medium', s.medium_threats],
+      ['Attacks Detected', s.attacks_detected],
+      ['Mitigations', s.active_mitigations],
       ['Server Load', s.server_load.toFixed(2)],
-      ['Memory Usage', s.memory_usage + '%'],
+      ['Mem Usage', s.memory_usage + '%'],
+      ['Total Conn', s.total_network_connections],
     ];
     grid.innerHTML = items.map(([k, v]) =>
-      `<div style="background:var(--surface);border:1px solid var(--border-color);border-radius:8px;padding:10px 12px;"><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">${k}</div><div style="font-size:20px;font-weight:700;margin-top:2px;color:var(--text-primary);">${v}</div></div>`).join('');
+      `<div style="background:var(--surface);border:1px solid var(--border-color);border-radius:8px;padding:10px 12px;"><div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">${k}</div><div style="font-size:18px;font-weight:700;margin-top:2px;color:var(--text-primary);">${v}</div></div>`).join('');
     const plat = document.getElementById('ddosPlatform');
-    plat.textContent = statsRes.monitoring
-      ? 'Monitoring: active (Linux, ss/netstat + iptables). Auto-blocking enabled.'
-      : 'Monitoring: unavailable (requires Linux with ss, netstat, and iptables).';
-    plat.style.color = statsRes.monitoring ? 'var(--text-success)' : 'var(--text-muted)';
+    plat.innerHTML = `Engine: <strong>${statsRes.engine_health}</strong> | Firewall: <strong>${s.firewall_engine}</strong> | Monitoring: ${statsRes.monitoring ? '<span style="color:var(--text-success);">active</span>' : '<span style="color:var(--text-muted);">unavailable</span>'}`;
 
     const cfg = settingsRes.settings;
     document.getElementById('ddosRateLimit').value = cfg.rate_limit_per_minute;
@@ -5473,7 +5669,22 @@ async function loadDdos() {
     document.getElementById('ddosTMed').value = cfg.threat_threshold_medium;
     document.getElementById('ddosTHigh').value = cfg.threat_threshold_high;
     document.getElementById('ddosTCritical').value = cfg.threat_threshold_critical;
+    document.getElementById('ddosSynCookies').value = cfg.syn_cookies;
+    document.getElementById('ddosConnLimit').value = cfg.connection_limit;
+    document.getElementById('ddosPktRate').value = cfg.packet_rate_limit;
+    document.getElementById('ddosAckThresh').value = cfg.ack_flood_threshold;
+    document.getElementById('ddosIcmpThresh').value = cfg.icmp_flood_threshold;
+    document.getElementById('ddosHttpGetThresh').value = cfg.http_get_threshold;
+    document.getElementById('ddosHttpPostThresh').value = cfg.http_post_threshold;
+    document.getElementById('ddosSlowlorisThresh').value = cfg.slowloris_threshold;
+    document.getElementById('ddosDnsAmpThresh').value = cfg.dns_amp_threshold;
+    document.getElementById('ddosUdpAmpThresh').value = cfg.udp_amp_threshold;
+    document.getElementById('ddosPktRateThresh').value = cfg.packet_rate_threshold;
+    document.getElementById('ddosEmergency').value = cfg.emergency_mode;
     document.getElementById('ddosIntel').value = cfg.intelligent_blocking;
+
+    // Firewall status
+    document.getElementById('ddosFwStatus').innerHTML = `Engine: <strong>${fwRes.engine}</strong> | Active Rules: ${fwRes.active_rules} | nftables: ${fwRes.nftables ? 'yes' : 'no'} | iptables: ${fwRes.iptables ? 'yes' : 'no'}`;
 
     loadDdosIps();
     loadDdosLogs();
@@ -5483,30 +5694,33 @@ async function loadDdos() {
 async function loadDdosIps() {
   try {
     const filter = document.getElementById('ddosFilter').value;
-    const data = await hkvmApi(`/api/v1/ddos/ips?page=${ddosPage}&limit=20&filter=${filter}`);
+    const search = document.getElementById('ddosSearch').value;
+    const params = new URLSearchParams({ page: ddosPage, limit: '20', filter });
+    if (search) params.set('search', search);
+    const data = await hkvmApi('/api/v1/ddos/ips?' + params);
     const body = document.getElementById('ddosIpBody');
     body.innerHTML = data.ips.length
       ? data.ips.map(r => `<tr>
         <td><code>${hkvmEsc(r.ip)}</code></td>
         <td>${r.requests}</td>
         <td>${(r.bandwidth / 1024).toFixed(1)} KB</td>
-        <td>${r.threads}</td>
+        <td>${r.pps || 0}</td>
+        <td>${r.bps || 0}</td>
         <td><span class="v3-pill ${ddosThreatColor[r.threat_level] || 'running'}">${r.threat_level}</span></td>
-        <td>${r.blocked ? '<span class="v3-pill danger">blocked</span>' : '<span class="v3-pill running">open</span>'}</td>
+        <td>${r.banned ? '<span class="v3-pill danger">yes</span>' : '<span class="v3-pill running">no</span>'}</td>
+        <td>${r.reputation || 0}</td>
         <td>${r.last_seen ? new Date(r.last_seen).toLocaleString() : '—'}</td>
         <td>
           ${!r.blocked ? `<button class="btn btn-outline" onclick="blockDdosIp('${r.ip}')">Block</button>` : `<button class="btn btn-outline" onclick="unblockDdosIp('${r.ip}')">Unblock</button>`}
           <button class="btn btn-outline" onclick="clearDdosIp('${r.ip}')">Clear</button>
         </td>
       </tr>`).join('')
-      : '<tr><td colspan="8" style="color:var(--text-muted);">No IPs tracked.</td></tr>';
+      : '<tr><td colspan="10" style="color:var(--text-muted);">No IPs tracked.</td></tr>';
     const pager = document.getElementById('ddosIpPager');
     if (data.pagination.pages > 1) {
       pager.innerHTML = Array.from({ length: data.pagination.pages }, (_, i) =>
         `<button class="btn btn-outline" style="padding:4px 10px;" ${i + 1 === data.pagination.page ? 'disabled' : ''} onclick="ddosPage=${i + 1};loadDdosIps()">${i + 1}</button>`).join('');
-    } else {
-      pager.innerHTML = '';
-    }
+    } else { pager.innerHTML = ''; }
   } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
@@ -5546,6 +5760,18 @@ async function saveDdosSettings() {
         threat_threshold_medium: Number(document.getElementById('ddosTMed').value),
         threat_threshold_high: Number(document.getElementById('ddosTHigh').value),
         threat_threshold_critical: Number(document.getElementById('ddosTCritical').value),
+        syn_cookies: Number(document.getElementById('ddosSynCookies').value),
+        connection_limit: Number(document.getElementById('ddosConnLimit').value),
+        packet_rate_limit: Number(document.getElementById('ddosPktRate').value),
+        ack_flood_threshold: Number(document.getElementById('ddosAckThresh').value),
+        icmp_flood_threshold: Number(document.getElementById('ddosIcmpThresh').value),
+        http_get_threshold: Number(document.getElementById('ddosHttpGetThresh').value),
+        http_post_threshold: Number(document.getElementById('ddosHttpPostThresh').value),
+        slowloris_threshold: Number(document.getElementById('ddosSlowlorisThresh').value),
+        dns_amp_threshold: Number(document.getElementById('ddosDnsAmpThresh').value),
+        udp_amp_threshold: Number(document.getElementById('ddosUdpAmpThresh').value),
+        packet_rate_threshold: Number(document.getElementById('ddosPktRateThresh').value),
+        emergency_mode: Number(document.getElementById('ddosEmergency').value),
         intelligent_blocking: Number(document.getElementById('ddosIntel').value),
       },
     });
@@ -5567,7 +5793,404 @@ async function loadDdosLogs() {
         <td>${(l.bandwidth / 1024).toFixed(1)} KB</td>
       </tr>`).join('')
       : '<tr><td colspan="5" style="color:var(--text-muted);">No attack log entries.</td></tr>';
-  } catch (err) { /* logs are non-critical */ }
+  } catch (err) { /* non-critical */ }
+}
+
+// --- Attacks & Mitigations tab ---
+async function loadDdosAttacks() {
+  try {
+    const [attRes, mitRes] = await Promise.all([
+      hkvmApi('/api/v1/ddos/attacks?limit=50'),
+      hkvmApi('/api/v1/ddos/mitigations?active=1'),
+    ]);
+    const atBody = document.getElementById('ddosAttacksBody');
+    atBody.innerHTML = attRes.attacks.length
+      ? attRes.attacks.map(a => `<tr>
+        <td>${new Date(a.detected_at).toLocaleString()}</td>
+        <td><code>${hkvmEsc(a.ip || '-')}</code></td>
+        <td>${hkvmEsc(a.attack_type)}</td>
+        <td><span class="v3-pill ${a.severity === 'critical' ? 'danger' : a.severity === 'high' ? 'warning' : 'running'}">${a.severity}</span></td>
+        <td>${a.pps || 0}</td>
+        <td>${a.bps || 0}</td>
+        <td>${a.connections || 0}</td>
+        <td>${a.duration_seconds ? a.duration_seconds + 's' : '—'}</td>
+        <td>${a.mitigated ? '<span class="v3-pill running">yes</span>' : '<span class="v3-pill warning">no</span>'}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="9" style="color:var(--text-muted);">No attacks detected.</td></tr>';
+    const mBody = document.getElementById('ddosMitBody');
+    mBody.innerHTML = mitRes.mitigations.length
+      ? mitRes.mitigations.map(m => `<tr>
+        <td><code>${hkvmEsc(m.ip)}</code></td>
+        <td>${hkvmEsc(m.method)}</td>
+        <td>${hkvmEsc(m.attack_type || '-')}</td>
+        <td>${new Date(m.created_at).toLocaleString()}</td>
+        <td>${m.expired_at ? new Date(m.expired_at).toLocaleString() : '—'}</td>
+        <td><span class="v3-pill running">active</span></td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" style="color:var(--text-muted);">No active mitigations.</td></tr>';
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+// --- Profiles tab ---
+async function loadDdosProfiles() {
+  try {
+    const data = await hkvmApi('/api/v1/ddos/profiles');
+    const body = document.getElementById('ddosProfileBody');
+    body.innerHTML = data.profiles.length
+      ? data.profiles.map(p => `<tr>
+        <td>#${p.id}</td>
+        <td>${hkvmEsc(p.name)}</td>
+        <td><span class="v3-pill running">${p.level}</span></td>
+        <td>${p.auto_block ? '✅' : '❌'}</td>
+        <td>${p.connection_limit}</td>
+        <td>${p.is_active ? '<span class="v3-pill running">active</span>' : '<span class="v3-pill">inactive</span>'}</td>
+        <td>
+          <button class="btn btn-outline" onclick="editDdosProfile(${p.id})">Edit</button>
+          ${p.is_active ? '' : `<button class="btn btn-outline" onclick="activateDdosProfile(${p.id})">Activate</button>`}
+          <button class="btn btn-outline" onclick="deleteDdosProfile(${p.id})">Delete</button>
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="7" style="color:var(--text-muted);">No profiles.</td></tr>';
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+function showProfileForm() {
+  document.getElementById('ddosProfileForm').style.display = 'block';
+  document.getElementById('ddosPfId').value = '';
+  document.getElementById('ddosProfileFormTitle').textContent = 'New Profile';
+}
+
+async function editDdosProfile(id) {
+  try {
+    const data = await hkvmApi('/api/v1/ddos/profiles/' + id);
+    const p = data.profile;
+    document.getElementById('ddosProfileForm').style.display = 'block';
+    document.getElementById('ddosPfId').value = p.id;
+    document.getElementById('ddosProfileFormTitle').textContent = 'Edit Profile';
+    document.getElementById('ddosPfName').value = p.name;
+    document.getElementById('ddosPfLevel').value = p.level;
+    document.getElementById('ddosPfAutoBlock').value = p.auto_block;
+    document.getElementById('ddosPfBlockDur').value = p.block_duration;
+    document.getElementById('ddosPfConnLimit').value = p.connection_limit;
+    document.getElementById('ddosPfTMed').value = p.threat_threshold_medium;
+    document.getElementById('ddosPfTHigh').value = p.threat_threshold_high;
+    document.getElementById('ddosPfTCritical').value = p.threat_threshold_critical;
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function saveDdosProfile(e) {
+  e.preventDefault();
+  const id = document.getElementById('ddosPfId').value;
+  const body = {
+    name: document.getElementById('ddosPfName').value,
+    level: document.getElementById('ddosPfLevel').value,
+    auto_block: Number(document.getElementById('ddosPfAutoBlock').value),
+    block_duration: Number(document.getElementById('ddosPfBlockDur').value),
+    connection_limit: Number(document.getElementById('ddosPfConnLimit').value),
+    threat_threshold_medium: Number(document.getElementById('ddosPfTMed').value),
+    threat_threshold_high: Number(document.getElementById('ddosPfTHigh').value),
+    threat_threshold_critical: Number(document.getElementById('ddosPfTCritical').value),
+  };
+  try {
+    if (id) {
+      await hkvmApi('/api/v1/ddos/profiles/' + id, { method: 'PUT', body });
+    } else {
+      await hkvmApi('/api/v1/ddos/profiles', { method: 'POST', body });
+    }
+    hkvmToast('Profile saved');
+    document.getElementById('ddosProfileForm').style.display = 'none';
+    loadDdosProfiles();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function activateDdosProfile(id) {
+  try {
+    await hkvmApi('/api/v1/ddos/profiles/' + id + '/activate', { method: 'POST' });
+    hkvmToast('Profile activated');
+    loadDdosProfiles();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function deleteDdosProfile(id) {
+  if (!confirm('Delete this profile?')) return;
+  try {
+    await hkvmApi('/api/v1/ddos/profiles/' + id, { method: 'DELETE' });
+    hkvmToast('Profile deleted');
+    loadDdosProfiles();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+// --- Nodes tab ---
+async function loadDdosNodes() {
+  try {
+    const data = await hkvmApi('/api/v1/ddos/nodes');
+    const body = document.getElementById('ddosNodeBody');
+    body.innerHTML = data.nodes.length
+      ? data.nodes.map(n => `<tr>
+        <td>#${n.node_id}</td>
+        <td>${n.enabled ? '✅' : '❌'}</td>
+        <td>${n.profile_id ? '#' + n.profile_id : '—'}</td>
+        <td>${n.online ? '<span class="v3-pill running">online</span>' : '<span class="v3-pill warning">offline</span>'}</td>
+        <td>${n.pps || 0}</td>
+        <td>${n.bps || 0}</td>
+        <td>${n.active_connections || 0}</td>
+        <td>${n.blocked_ips || 0}</td>
+        <td>${n.last_sync_at ? new Date(n.last_sync_at).toLocaleString() : '—'}</td>
+        <td>
+          ${!n.enabled ? `<button class="btn btn-outline" onclick="enableDdosNode(${n.node_id})">Enable</button>` : `<button class="btn btn-outline" onclick="disableDdosNode(${n.node_id})">Disable</button>`}
+          <button class="btn btn-outline" onclick="syncDdosNode(${n.node_id})">Sync</button>
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="10" style="color:var(--text-muted);">No nodes registered.</td></tr>';
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function enableDdosNode(id) {
+  try {
+    await hkvmApi('/api/v1/ddos/nodes/' + id + '/enable', { method: 'POST', body: {} });
+    hkvmToast('Node enabled');
+    loadDdosNodes();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function disableDdosNode(id) {
+  try {
+    await hkvmApi('/api/v1/ddos/nodes/' + id + '/disable', { method: 'POST' });
+    hkvmToast('Node disabled');
+    loadDdosNodes();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function syncDdosNode(id) {
+  try {
+    await hkvmApi('/api/v1/ddos/nodes/' + id + '/sync', { method: 'POST' });
+    hkvmToast('Node synced');
+    loadDdosNodes();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+// --- VPS tab ---
+async function loadDdosVps() {
+  try {
+    const [polRes, wlRes] = await Promise.all([
+      hkvmApi('/api/v1/ddos/vps-policies'),
+      hkvmApi('/api/v1/ddos/whitelist'),
+    ]);
+    const pBody = document.getElementById('ddosVpsBody');
+    pBody.innerHTML = polRes.policies.length
+      ? polRes.policies.map(p => `<tr>
+        <td>#${p.vps_id}</td>
+        <td>${hkvmEsc(p.instance_type)}</td>
+        <td>${p.instance_ref_id}</td>
+        <td>${p.enabled ? '✅' : '❌'}</td>
+        <td>${p.tcp_protection ? '✅' : '❌'}</td>
+        <td>${p.udp_protection ? '✅' : '❌'}</td>
+        <td>${p.connection_limit}</td>
+        <td>${p.auto_block ? '✅' : '❌'}</td>
+        <td><button class="btn btn-outline" onclick="deleteDdosVps(${p.vps_id})">Delete</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="9" style="color:var(--text-muted);">No VPS policies.</td></tr>';
+    const wBody = document.getElementById('ddosWlBody');
+    wBody.innerHTML = wlRes.whitelist.length
+      ? wlRes.whitelist.map(w => `<tr>
+        <td><code>${hkvmEsc(w.ip)}</code></td>
+        <td>${hkvmEsc(w.reason || '-')}</td>
+        <td>${w.node_id ? '#' + w.node_id : '—'}</td>
+        <td>${w.vps_id ? '#' + w.vps_id : '—'}</td>
+        <td>${new Date(w.created_at).toLocaleString()}</td>
+        <td><button class="btn btn-outline" onclick="removeDdosWhitelist('${w.ip}')">Remove</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" style="color:var(--text-muted);">Whitelist is empty.</td></tr>';
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function addDdosWhitelist(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi('/api/v1/ddos/whitelist', {
+      method: 'POST',
+      body: { ip: document.getElementById('ddosWlIp').value, reason: document.getElementById('ddosWlReason').value },
+    });
+    hkvmToast('Added to whitelist');
+    document.getElementById('ddosWlIp').value = '';
+    document.getElementById('ddosWlReason').value = '';
+    loadDdosVps();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function removeDdosWhitelist(ip) {
+  try {
+    await hkvmApi('/api/v1/ddos/whitelist/' + ip, { method: 'DELETE' });
+    hkvmToast('Removed from whitelist');
+    loadDdosVps();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function deleteDdosVps(vpsId) {
+  if (!confirm('Delete this VPS policy?')) return;
+  try {
+    await hkvmApi('/api/v1/ddos/vps-policies/' + vpsId, { method: 'DELETE' });
+    hkvmToast('VPS policy deleted');
+    loadDdosVps();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+// --- Cloudflare tab ---
+async function loadDdosCloudflare() {
+  try {
+    const data = await hkvmApi('/api/v1/ddos/integrations');
+    const body = document.getElementById('ddosCfBody');
+    body.innerHTML = data.integrations.length
+      ? data.integrations.map(i => `<tr>
+        <td>#${i.id}</td>
+        <td>${hkvmEsc(i.name)}</td>
+        <td>${hkvmEsc(i.provider)}</td>
+        <td>${hkvmEsc(i.zone || '-')}</td>
+        <td><span class="v3-pill running">${hkvmEsc(i.security_level)}</span></td>
+        <td>${i.is_active ? '✅' : '❌'}</td>
+        <td>${i.last_sync_at ? new Date(i.last_sync_at).toLocaleString() : '—'}</td>
+        <td>
+          <button class="btn btn-outline" onclick="editCfIntegration(${i.id})">Edit</button>
+          <button class="btn btn-outline" onclick="deleteCfIntegration(${i.id})">Delete</button>
+        </td>
+      </tr>`).join('')
+      : '<tr><td colspan="8" style="color:var(--text-muted);">No integrations configured.</td></tr>';
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+function showCfForm() {
+  document.getElementById('ddosCfForm').style.display = 'block';
+  document.getElementById('ddosCfId').value = '';
+  document.getElementById('ddosCfFormTitle').textContent = 'Add Integration';
+}
+
+async function editCfIntegration(id) {
+  try {
+    const data = await hkvmApi('/api/v1/ddos/integrations/' + id);
+    const i = data.integration;
+    document.getElementById('ddosCfForm').style.display = 'block';
+    document.getElementById('ddosCfId').value = i.id;
+    document.getElementById('ddosCfFormTitle').textContent = 'Edit Integration';
+    document.getElementById('ddosCfName').value = i.name;
+    document.getElementById('ddosCfProvider').value = i.provider;
+    document.getElementById('ddosCfEmail').value = i.api_email || '';
+    document.getElementById('ddosCfZone').value = i.zone || '';
+    document.getElementById('ddosCfLevel').value = i.security_level;
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function saveCfIntegration(e) {
+  e.preventDefault();
+  const id = document.getElementById('ddosCfId').value;
+  const body = {
+    name: document.getElementById('ddosCfName').value,
+    provider: document.getElementById('ddosCfProvider').value,
+    apiEmail: document.getElementById('ddosCfEmail').value,
+    zone: document.getElementById('ddosCfZone').value,
+    securityLevel: document.getElementById('ddosCfLevel').value,
+  };
+  const key = document.getElementById('ddosCfKey').value;
+  if (key) body.apiKey = key;
+  try {
+    if (id) {
+      await hkvmApi('/api/v1/ddos/integrations/' + id, { method: 'PUT', body });
+    } else {
+      await hkvmApi('/api/v1/ddos/integrations', { method: 'POST', body });
+    }
+    hkvmToast('Integration saved');
+    document.getElementById('ddosCfForm').style.display = 'none';
+    loadDdosCloudflare();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function deleteCfIntegration(id) {
+  if (!confirm('Delete this integration?')) return;
+  try {
+    await hkvmApi('/api/v1/ddos/integrations/' + id, { method: 'DELETE' });
+    hkvmToast('Integration deleted');
+    loadDdosCloudflare();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+// --- Firewall tab ---
+async function loadDdosFirewall() {
+  try {
+    const [rulesRes, auditRes] = await Promise.all([
+      hkvmApi('/api/v1/ddos/firewall/rules'),
+      hkvmApi('/api/v1/ddos/audit?limit=100'),
+    ]);
+    const rBody = document.getElementById('ddosFwRulesBody');
+    rBody.innerHTML = rulesRes.rules.length
+      ? rulesRes.rules.map(r => `<tr>
+        <td><code>${hkvmEsc(r.rule_id)}</code></td>
+        <td><code>${hkvmEsc(r.ip)}</code></td>
+        <td>${hkvmEsc(r.protocol || '-')}</td>
+        <td>${hkvmEsc(r.port || '-')}</td>
+        <td><span class="v3-pill danger">${hkvmEsc(r.action)}</span></td>
+        <td>${hkvmEsc(r.table_name)}</td>
+        <td>${new Date(r.created_at).toLocaleString()}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="7" style="color:var(--text-muted);">No active firewall rules.</td></tr>';
+    const aBody = document.getElementById('ddosAuditBody');
+    aBody.innerHTML = auditRes.logs.length
+      ? auditRes.logs.map(l => `<tr>
+        <td>${new Date(l.created_at).toLocaleString()}</td>
+        <td>${hkvmEsc(l.action)}</td>
+        <td>${hkvmEsc(l.target || '-')}</td>
+        <td>${l.ip ? '<code>' + hkvmEsc(l.ip) + '</code>' : '—'}</td>
+        <td>${hkvmEsc(l.method || '-')}</td>
+        <td>${l.success ? '<span class="v3-pill running">success</span>' : '<span class="v3-pill danger">failed</span>'}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="6" style="color:var(--text-muted);">No audit entries.</td></tr>';
+    // Also load status
+    const fwRes = await hkvmApi('/api/v1/ddos/firewall/status');
+    document.getElementById('ddosFwStatus').innerHTML = `Engine: <strong>${fwRes.engine}</strong> | Active Rules: ${fwRes.active_rules} | nftables: ${fwRes.nftables ? 'yes' : 'no'} | iptables: ${fwRes.iptables ? 'yes' : 'no'}`;
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function applyDdosFwSyn() {
+  try {
+    const enabled = document.getElementById('ddosFwSyn').value === '1';
+    const result = await hkvmApi('/api/v1/ddos/firewall/syn-cookies', { method: 'POST', body: { enabled } });
+    hkvmToast(result.message);
+    loadDdosFirewall();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function applyDdosFwConn() {
+  try {
+    const limit = Number(document.getElementById('ddosFwConnLimit').value);
+    const result = await hkvmApi('/api/v1/ddos/firewall/connection-limit', { method: 'POST', body: { limit } });
+    hkvmToast(result.message);
+    loadDdosFirewall();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function applyDdosFwPktRate() {
+  try {
+    const rate = Number(document.getElementById('ddosFwPktRate').value);
+    const result = await hkvmApi('/api/v1/ddos/firewall/packet-rate', { method: 'POST', body: { rate } });
+    hkvmToast(result.message);
+    loadDdosFirewall();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function emergencyDdos() {
+  if (!confirm('Enable emergency mitigation mode?')) return;
+  try {
+    const result = await hkvmApi('/api/v1/ddos/firewall/emergency', { method: 'POST', body: { enabled: true } });
+    hkvmToast(result.message);
+    loadDdosFirewall();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function rollbackDdosFw() {
+  if (!confirm('Rollback ALL DDoS firewall rules? This will unblock all IPs protected by the DDoS engine.')) return;
+  try {
+    const result = await hkvmApi('/api/v1/ddos/firewall/rollback', { method: 'POST' });
+    hkvmToast(result.message);
+    loadDdosFirewall();
+  } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
 async function loadFirewall() {

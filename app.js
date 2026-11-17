@@ -529,6 +529,50 @@ app.use((req, res, next) => {
   next();
 });
 
+// Enterprise DDoS HTTP protection middleware.
+// Analyzes incoming HTTP requests for GET/POST floods, Slowloris, suspicious
+// user-agents, and request bursts. Only active when the runtime context is
+// initialized; skips the DDoS admin API itself and static assets. Blocked
+// requests get a 429 with a clear message.
+app.use((req, res, next) => {
+  try {
+    const ctx = hkvmV3Context;
+    if (!ctx || !ctx.ddosHttpProtection) return next();
+    const pathname = (req.originalUrl || req.url || '').split('?')[0];
+    if (pathname.startsWith('/js/') || pathname.startsWith('/css/') ||
+        pathname.startsWith('/images/') || pathname.startsWith('/assets/') ||
+        pathname.startsWith('/ddos/') || req.path.startsWith('/api/v1/ddos/')) {
+      return next();
+    }
+    if (req.method === 'OPTIONS' || pathname === '/health') return next();
+
+    // Skip HTTP protection for loopback/private IPs — this middleware guards
+    // against external DDoS, not local/trusted traffic (panel management, tests).
+    const clientIp = req.ip || (req.socket && req.socket.remoteAddress) || '';
+    const isLocal = clientIp === '127.0.0.1' || clientIp === '::1' ||
+      clientIp.startsWith('127.') || clientIp.startsWith('10.') ||
+      clientIp.startsWith('192.168.') || clientIp.startsWith('172.16.') ||
+      clientIp.startsWith('169.254.') || clientIp.startsWith('::ffff:127.');
+    if (isLocal) return next();
+
+    const threat = ctx.ddosHttpProtection.analyzeRequest(req);
+    if (threat.blocked) {
+      const contentLength = parseInt(req.headers['content-length'] || '0', 10) || 0;
+      void ctx.ddosManager.trackRequest(threat.ip || 'unknown', contentLength, req.method);
+      return res.status(429).json({
+        error: 'Request rate limit exceeded or suspicious activity detected',
+        reason: threat.reason,
+        ip: threat.ip
+      });
+    }
+    const contentLength = parseInt(req.headers['content-length'] || '0', 10) || 0;
+    void ctx.ddosManager.trackRequest(threat.ip || 'unknown', contentLength, req.method);
+    next();
+  } catch {
+    next();
+  }
+});
+
 // Initialize License Middleware
 licenses.initLicenseMiddleware(app);
 
@@ -6217,6 +6261,15 @@ async function bootstrapHkvmV3() {
   v3ApiRouter = createApiV1Router(hkvmV3Context);
   v3WebRouter = createUnifiedWebRouter(hkvmV3Context);
   attachUnifiedWebSockets(server, sessionParser, hkvmV3Context);
+
+  // Wire DDoS notifications to the first admin user
+  const adminUser = await hkvmV3Context.db.get(
+    `SELECT id FROM users WHERE role = 'admin' AND is_active = 1 ORDER BY id LIMIT 1`
+  );
+  if (adminUser) {
+    hkvmV3Context.ddosManager.setNotifyUserId(adminUser.id);
+  }
+
   return hkvmV3Context;
 }
 
