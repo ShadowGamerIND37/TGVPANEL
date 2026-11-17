@@ -9,6 +9,7 @@ import { InstanceManager } from './services/virtualization/InstanceManager';
 import { StorageManager } from './services/storage/StorageManager';
 import { NetworkManager } from './services/network/NetworkManager';
 import { LoadBalancerManager } from './services/network/LoadBalancerManager';
+import { DockerManager } from './services/docker/DockerManager';
 import { SqliteSessionStore } from './security/session-store';
 import { BackupSnapshotManager } from './services/backup/BackupSnapshotManager';
 import { MigrationManager } from './services/migration/MigrationManager';
@@ -23,6 +24,7 @@ export interface HkvmRuntimeContext {
     storageManager: StorageManager;
     networkManager: NetworkManager;
     loadBalancerManager: LoadBalancerManager;
+    dockerManager: DockerManager;
     sessionStore: SqliteSessionStore;
     backupManager: BackupSnapshotManager;
     migrationManager: MigrationManager;

@@ -416,6 +416,34 @@ export const SafeValidators = {
     return val;
   },
 
+  dockerContainerName(name: unknown): string {
+    const value = String(name ?? '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(value)) {
+      throw new Error(
+        'Container name must start with an alphanumeric character and contain only alphanumeric characters, dots, dashes or underscores (max 63 chars).'
+      );
+    }
+    return value;
+  },
+
+  dockerImage(image: unknown): string {
+    const value = String(image ?? '').trim();
+    if (!/^[a-z0-9]([a-z0-9._-]*[a-z0-9])?(:\d+)?(\/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@[a-zA-Z0-9]+:[a-f0-9]{64})?$/.test(value)) {
+      throw new Error(
+        'Image must be a valid Docker reference such as nginx:latest, registry.example.com/repo:tag or repo@sha256:digest.'
+      );
+    }
+    return value;
+  },
+
+  dockerRestartPolicy(policy: unknown): string {
+    const value = String(policy ?? '').trim();
+    if (!['no', 'always', 'unless-stopped', 'on-failure'].includes(value)) {
+      throw new Error('restartPolicy must be one of: no, always, unless-stopped, on-failure.');
+    }
+    return value;
+  },
+
   loadBalancerName(name: unknown): string {
     const val = String(name || '').trim();
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,59}$/.test(val)) {

@@ -4686,6 +4686,203 @@ exec "$@"
       }
     });
 
+    // Phase 29: Docker container manager (Area I) — panel-managed containers
+    // are registered, rendered as docker run/lifecycle commands, executed via
+    // the allowlisted command runner (locally or through the node agent) and
+    // capability-gated honestly when the docker binary is absent.
+    await runStep('T44: Docker container registry, rendered commands, lifecycle gating & agent enforcement', async () => {
+      const dockerDir = path.join(tmpRoot, 'docker-test');
+      fs.mkdirSync(dockerDir, { recursive: true });
+
+      try {
+        // 1. Registry CRUD with validation.
+        const createRes = await adminClient.request('POST', '/api/v1/docker/containers', {
+          name: 't44-web',
+          nodeId: 1,
+          image: 'nginx:latest',
+          restartPolicy: 'unless-stopped',
+          network: 'tgvpanel',
+          ports: [{ hostPort: 8080, containerPort: 80, protocol: 'tcp' }],
+          env: { APP_ENV: 'test' },
+        });
+        assert.strictEqual(createRes.status, 201, `Container create failed: ${createRes.text}`);
+        const container = createRes.json.container;
+        assert.strictEqual(container.name, 't44-web');
+        assert.strictEqual(container.status, 'created');
+
+        // Invalid inputs are rejected.
+        const badName = await adminClient.request('POST', '/api/v1/docker/containers', {
+          name: 'bad name!',
+          image: 'nginx:latest',
+        });
+        assert.strictEqual(badName.status, 400, `Invalid container name must be rejected: ${badName.text}`);
+        const badImage = await adminClient.request('POST', '/api/v1/docker/containers', {
+          name: 't44-bad-image',
+          image: 'Not A Valid Image',
+        });
+        assert.strictEqual(badImage.status, 400, `Invalid image must be rejected: ${badImage.text}`);
+        const badPolicy = await adminClient.request('POST', '/api/v1/docker/containers', {
+          name: 't44-bad-policy',
+          image: 'nginx:latest',
+          restartPolicy: 'sometimes',
+        });
+        assert.strictEqual(badPolicy.status, 400, `Invalid restart policy must be rejected: ${badPolicy.text}`);
+        const dupRes = await adminClient.request('POST', '/api/v1/docker/containers', {
+          name: 't44-web',
+          image: 'nginx:latest',
+        });
+        assert.strictEqual(dupRes.status, 400, `Duplicate container name must be rejected: ${dupRes.text}`);
+
+        // 2. Rendered commands are correct.
+        const dockerManager = ctx.dockerManager;
+        assert.ok(dockerManager, 'dockerManager must be wired into the runtime context');
+        const runArgs = dockerManager.renderRunArgs(container);
+        assert.deepStrictEqual(runArgs.slice(0, 4), ['run', '-d', '--name', 't44-web']);
+        assert.ok(runArgs.includes('--restart'), 'Rendered run args must include --restart');
+        assert.ok(runArgs.includes('--network'), 'Rendered run args must include --network');
+        assert.ok(runArgs.includes('-p'), 'Rendered run args must include port mappings');
+        assert.ok(runArgs.includes('8080:80/tcp'), 'Rendered run args must map host:container/proto');
+        assert.ok(runArgs.includes('-e'), 'Rendered run args must include environment');
+        assert.ok(runArgs.includes('APP_ENV=test'), 'Rendered run args must include KEY=VALUE env');
+        assert.ok(runArgs[runArgs.length - 1] === 'nginx:latest', 'Rendered run args must end with the image');
+        const runCmd = dockerManager.renderRunCommand(container);
+        assert.ok(runCmd.startsWith('docker run -d --name t44-web'), `Rendered run command: ${runCmd}`);
+        assert.strictEqual(
+          dockerManager.renderLifecycleCommand(container, 'stop'),
+          'docker stop t44-web'
+        );
+        assert.strictEqual(
+          dockerManager.renderLifecycleCommand(container, 'remove'),
+          'docker rm -f t44-web'
+        );
+
+        // 3. Lifecycle apply is capability-gated honestly (docker absent here).
+        const applyRes = await adminClient.request(
+          'POST',
+          `/api/v1/docker/containers/${container.id}/apply`,
+          { mode: 'create' },
+          { 'X-Forwarded-For': '198.51.100.90' }
+        );
+        assert.strictEqual(applyRes.status, 200, `Container apply failed: ${applyRes.text}`);
+        if (!applyRes.json.applied) {
+          assert.ok(
+            /docker binary is not available/i.test(applyRes.json.error || ''),
+            `Honest capability-gating error expected: ${applyRes.json.error}`
+          );
+        }
+
+        // 4. Status reports docker availability honestly.
+        const statusRes = await adminClient.request('GET', `/api/v1/docker/containers/${container.id}/status`);
+        assert.strictEqual(statusRes.status, 200, `Container status failed: ${statusRes.text}`);
+        assert.strictEqual(statusRes.json.status.id, container.id);
+        assert.strictEqual(statusRes.json.status.dockerAvailable, applyRes.json.applied, 'Status availability must match the apply result');
+
+        // 5. Customers cannot manage containers.
+        const bobClient = new SessionClient(baseUrl);
+        await bobClient.request('POST', '/api/login', { username: 'bob_user', password: 'BobPass!123' });
+        const forbiddenList = await bobClient.request('GET', '/api/v1/docker/containers');
+        assert.strictEqual(forbiddenList.status, 403, `Customer container list must be forbidden: ${forbiddenList.text}`);
+
+        // 6. Agent enforces the lifecycle command on the host (honest gating
+        //    when docker is absent; a valid spec passes agent validation).
+        const agentApply = await new Promise((resolve, reject) => {
+          const body = JSON.stringify({
+            name: 't44-web',
+            image: 'nginx:latest',
+            restart_policy: 'unless-stopped',
+            network: 'tgvpanel',
+            ports: [{ hostPort: 8080, containerPort: 80, protocol: 'tcp' }],
+            env: { APP_ENV: 'test' },
+            mode: 'create',
+          });
+          const signed = signAgentRequest({
+            nodeId: 'local-loopback-agent',
+            apiKey: agentApiKey,
+            hmacSecret: agentHmacSecret,
+            method: 'POST',
+            pathWithQuery: '/api/v1/docker/apply',
+            bodyBuffer: body,
+          });
+          const r = http.request(
+            {
+              hostname: '127.0.0.1',
+              port: AGENT_PORT,
+              path: '/api/v1/docker/apply',
+              method: 'POST',
+              headers: { ...signed, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+            },
+            (res) => {
+              const chunks = [];
+              res.on('data', (c) => chunks.push(c));
+              res.on('end', () => {
+                const text = Buffer.concat(chunks).toString('utf8');
+                resolve({ status: res.statusCode, text });
+              });
+            }
+          );
+          r.on('error', reject);
+          r.end(body);
+        });
+        assert.strictEqual(agentApply.status, 200, `Agent docker apply failed: ${agentApply.text}`);
+        const agentJson = JSON.parse(agentApply.text);
+        if (!agentJson.applied) {
+          assert.ok(
+            /docker binary is not available/i.test(agentJson.error || ''),
+            `Agent must report honest capability gating: ${agentJson.error}`
+          );
+        }
+        const agentBad = await new Promise((resolve, reject) => {
+          const body = JSON.stringify({ name: 'bad name!', image: 'nginx:latest', mode: 'create' });
+          const signed = signAgentRequest({
+            nodeId: 'local-loopback-agent',
+            apiKey: agentApiKey,
+            hmacSecret: agentHmacSecret,
+            method: 'POST',
+            pathWithQuery: '/api/v1/docker/apply',
+            bodyBuffer: body,
+          });
+          const r = http.request(
+            {
+              hostname: '127.0.0.1',
+              port: AGENT_PORT,
+              path: '/api/v1/docker/apply',
+              method: 'POST',
+              headers: { ...signed, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+            },
+            (res) => {
+              const chunks = [];
+              res.on('data', (c) => chunks.push(c));
+              res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+            }
+          );
+          r.on('error', reject);
+          r.end(body);
+        });
+        assert.strictEqual(agentBad.status, 400, `Agent must reject invalid container specs: ${agentBad.text}`);
+
+        // 7. Update replaces the spec; delete removes the registry row.
+        const updRes = await adminClient.request('PUT', `/api/v1/docker/containers/${container.id}`, {
+          image: 'nginx:1.27-alpine',
+          ports: [{ hostPort: 8443, containerPort: 443, protocol: 'tcp' }],
+        });
+        assert.strictEqual(updRes.status, 200, `Container update failed: ${updRes.text}`);
+        assert.strictEqual(updRes.json.container.image, 'nginx:1.27-alpine');
+        const updArgs = dockerManager.renderRunArgs(updRes.json.container);
+        assert.ok(updArgs.includes('8443:443/tcp'), 'Updated ports must render into the run args');
+
+        const listRes = await adminClient.request('GET', '/api/v1/docker/containers');
+        assert.strictEqual(listRes.status, 200);
+        assert.ok(listRes.json.containers.some((c) => c.name === 't44-web'), 'Registry list must include the container');
+
+        const delRes = await adminClient.request('DELETE', `/api/v1/docker/containers/${container.id}`);
+        assert.strictEqual(delRes.status, 200, `Container delete failed: ${delRes.text}`);
+        const goneRes = await adminClient.request('GET', `/api/v1/docker/containers/${container.id}`);
+        assert.strictEqual(goneRes.status, 404, `Deleted container must be gone: ${goneRes.text}`);
+      } finally {
+        await ctx.db.run(`DELETE FROM docker_containers WHERE name LIKE 't44-%'`).catch(() => undefined);
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

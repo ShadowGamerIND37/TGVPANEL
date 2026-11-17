@@ -973,6 +973,117 @@ export function createNodeAgentServer(opts: StandaloneAgentOptions = {}) {
     }
   });
 
+  // Docker container lifecycle enforcement on the host (Area I, Phase 29).
+  // The panel renders the container spec; the agent validates it, capability-
+  // gates on the docker binary, and executes the lifecycle command locally.
+  app.post('/api/v1/docker/apply', async (req, res) => {
+    try {
+      const name = String(req.body?.name || '').trim();
+      const image = String(req.body?.image || '').trim();
+      const mode: 'create' | 'start' | 'stop' | 'restart' | 'remove' =
+        ['create', 'start', 'stop', 'restart', 'remove'].includes(String(req.body?.mode))
+          ? req.body.mode
+          : 'create';
+
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(name)) {
+        return res.status(400).json({ error: 'Invalid container name.' });
+      }
+      if (!/^[a-z0-9]([a-z0-9._-]*[a-z0-9])?(:\d+)?(\/[a-z0-9]([a-z0-9._-]*[a-z0-9])?)*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@[a-zA-Z0-9]+:[a-f0-9]{64})?$/.test(image)) {
+        return res.status(400).json({ error: 'Invalid Docker image reference.' });
+      }
+      if (!isBinaryAvailable('docker')) {
+        return res.json({ applied: false, error: 'The docker binary is not available on this node.' });
+      }
+
+      let args: string[];
+      if (mode === 'create') {
+        args = ['run', '-d', '--name', name];
+        const restartPolicy = String(req.body?.restart_policy || 'unless-stopped');
+        if (['no', 'always', 'unless-stopped', 'on-failure'].includes(restartPolicy)) {
+          args.push('--restart', restartPolicy);
+        }
+        const network = String(req.body?.network || 'tgvpanel').trim();
+        if (/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(network)) {
+          args.push('--network', network);
+        }
+        let ports: any[] = [];
+        try {
+          ports = JSON.parse(String(req.body?.ports || '[]'));
+        } catch {
+          ports = [];
+        }
+        if (Array.isArray(ports)) {
+          for (const p of ports) {
+            const hostPort = Number(p?.hostPort);
+            const containerPort = Number(p?.containerPort);
+            const protocol = String(p?.protocol || 'tcp').toLowerCase();
+            if (
+              Number.isInteger(hostPort) && hostPort > 0 && hostPort <= 65535 &&
+              Number.isInteger(containerPort) && containerPort > 0 && containerPort <= 65535 &&
+              (protocol === 'tcp' || protocol === 'udp')
+            ) {
+              args.push('-p', `${hostPort}:${containerPort}/${protocol}`);
+            }
+          }
+        }
+        let env: Record<string, string> = {};
+        try {
+          env = JSON.parse(String(req.body?.env || '{}'));
+        } catch {
+          env = {};
+        }
+        if (env && typeof env === 'object' && !Array.isArray(env)) {
+          for (const [key, value] of Object.entries(env)) {
+            if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key))) {
+              args.push('-e', `${key}=${value}`);
+            }
+          }
+        }
+        args.push(image);
+      } else if (mode === 'remove') {
+        args = ['rm', '-f', name];
+      } else {
+        args = [mode, name];
+      }
+
+      const applyRes = await runAllowlistedCommand('docker', args, {
+        asRoot: true,
+        timeoutMs: 30_000,
+      });
+      if (applyRes.exitCode !== 0) {
+        return res.json({
+          applied: false,
+          error: `docker ${mode} failed: ${(applyRes.stderr || applyRes.stdout).trim()}`,
+        });
+      }
+      return res.json({ applied: true, error: null });
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/v1/docker/status', async (req, res) => {
+    try {
+      const name = String(req.body?.name || '').trim();
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/.test(name)) {
+        return res.status(400).json({ error: 'Invalid container name.' });
+      }
+      if (!isBinaryAvailable('docker')) {
+        return res.json({ state: null, available: false });
+      }
+      const inspect = await runAllowlistedCommand('docker', ['inspect', '-f', '{{.State.Status}}', name], {
+        asRoot: true,
+        timeoutMs: 10_000,
+      });
+      if (inspect.exitCode === 0) {
+        return res.json({ state: inspect.stdout.trim() || null, available: true });
+      }
+      return res.json({ state: 'not-found', available: true });
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
+  });
+
   // Offline migration export/import endpoints
   app.post('/api/v1/transfers/export', async (req, res) => {
     try {
