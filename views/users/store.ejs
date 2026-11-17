@@ -1,67 +1,72 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><%= title %></title>
-    <style>
-        .store-container { max-width: 1200px; margin: 0 auto; padding: 24px; }
-        .store-header { margin-bottom: 24px; }
-        .store-header h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
-        .store-header p { color: var(--text-muted); }
-        .store-gateways { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
-        .gateway-badge { padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
-        .gateway-badge.famgateway { background: #e8f5e9; color: #2e7d32; }
-        .gateway-badge.stripe { background: #e3f2fd; color: #1565c0; }
-        .gateway-badge.paypal { background: #fff3e0; color: #e65100; }
-        .plans-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
-        .plan-card { background: var(--bg-secondary); border-radius: var(--radius-lg); padding: 24px; border: 1px solid var(--border-color); transition: transform 0.2s, box-shadow 0.2s; }
-        .plan-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
-        .plan-card.featured { border-color: #667eea; box-shadow: 0 0 0 1px #667eea; }
-        .plan-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
-        .plan-desc { color: var(--text-muted); font-size: 14px; margin-bottom: 16px; min-height: 20px; }
-        .plan-price { font-size: 32px; font-weight: 800; margin-bottom: 4px; }
-        .plan-price .cycle { font-size: 14px; font-weight: 400; color: var(--text-muted); }
-        .plan-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-bottom: 16px; }
-        .plan-badge.lxc { background: #e8f5e9; color: #2e7d32; }
-        .plan-badge.kvm { background: #e3f2fd; color: #1565c0; }
-        .plan-badge.both { background: #f3e5f5; color: #7b1fa2; }
-        .plan-specs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
-        .spec-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
-        .spec-item svg { flex-shrink: 0; }
-        .plan-features { list-style: none; padding: 0; margin: 0 0 16px; }
-        .plan-features li { font-size: 13px; color: var(--text-secondary); padding: 3px 0; display: flex; align-items: flex-start; gap: 6px; }
-        .plan-features li::before { content: '✓'; color: #4caf50; font-weight: 700; flex-shrink: 0; }
-        .plan-actions { display: flex; gap: 8px; }
-        .btn-purchase { flex: 1; padding: 10px 16px; border: none; border-radius: var(--radius-md); background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
-        .btn-purchase:hover { opacity: 0.9; }
-        .btn-purchase:disabled { opacity: 0.5; cursor: not-allowed; }
-        .store-empty { text-align: center; padding: 60px 20px; color: var(--text-muted); }
-        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center; }
-        .modal-overlay.active { display: flex; }
-        .modal-content { background: var(--bg-primary); border-radius: var(--radius-lg); padding: 32px; max-width: 480px; width: 90%; }
-        .modal-content h2 { margin-bottom: 16px; }
-        .modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: var(--text-muted); position: absolute; right: 16px; top: 16px; }
-        .checkout-section { margin-top: 16px; }
-        .checkout-section h3 { font-size: 16px; margin-bottom: 12px; }
-        .checkout-option { padding: 12px; border: 2px solid var(--border-color); border-radius: var(--radius-md); margin-bottom: 8px; cursor: pointer; transition: border-color 0.2s; display: flex; align-items: center; justify-content: space-between; }
-        .checkout-option:hover { border-color: #667eea; }
-        .checkout-option.selected { border-color: #667eea; background: rgba(102,126,234,0.05); }
-        .checkout-option .gw-name { font-weight: 600; }
-        .checkout-option .gw-info { font-size: 12px; color: var(--text-muted); }
-        .btn-confirm { width: 100%; padding: 12px; border: none; border-radius: var(--radius-md); background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }
-        .btn-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
-        .order-status { text-align: center; padding: 20px; }
-        .order-status .status-icon { font-size: 48px; margin-bottom: 12px; }
-        .error-banner { background: #ffebee; color: #c62828; padding: 12px 16px; border-radius: var(--radius-md); margin-bottom: 16px; font-size: 14px; display: none; }
-        .error-banner.show { display: block; }
-        .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0a0a0f">
+  <title><%= title %></title>
+  <link rel="icon" href="<%= siteLogo %>" type="image/png">
+  <link rel="stylesheet" href="/css/admin.css">
+  <script src="/js/tgvpanel-v3.js"></script>
+  <style>
+    .store-container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .store-header { margin-bottom: 24px; }
+    .store-header h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .store-header p { color: var(--text-muted); }
+    .store-gateways { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+    .gateway-badge { padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .gateway-badge.famgateway { background: #e8f5e9; color: #2e7d32; }
+    .gateway-badge.stripe { background: #e3f2fd; color: #1565c0; }
+    .gateway-badge.paypal { background: #fff3e0; color: #e65100; }
+    .plans-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; }
+    .plan-card { background: var(--bg-secondary); border-radius: var(--radius-lg); padding: 24px; border: 1px solid var(--border-color); transition: transform 0.2s, box-shadow 0.2s; }
+    .plan-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
+    .plan-card.featured { border-color: #667eea; box-shadow: 0 0 0 1px #667eea; }
+    .plan-name { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+    .plan-desc { color: var(--text-muted); font-size: 14px; margin-bottom: 16px; min-height: 20px; }
+    .plan-price { font-size: 32px; font-weight: 800; margin-bottom: 4px; }
+    .plan-price .cycle { font-size: 14px; font-weight: 400; color: var(--text-muted); }
+    .plan-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-bottom: 16px; }
+    .plan-badge.lxc { background: #e8f5e9; color: #2e7d32; }
+    .plan-badge.kvm { background: #e3f2fd; color: #1565c0; }
+    .plan-badge.both { background: #f3e5f5; color: #7b1fa2; }
+    .plan-specs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+    .spec-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+    .spec-item svg { flex-shrink: 0; }
+    .plan-features { list-style: none; padding: 0; margin: 0 0 16px; }
+    .plan-features li { font-size: 13px; color: var(--text-secondary); padding: 3px 0; display: flex; align-items: flex-start; gap: 6px; }
+    .plan-features li::before { content: '✓'; color: #4caf50; font-weight: 700; flex-shrink: 0; }
+    .plan-actions { display: flex; gap: 8px; }
+    .btn-purchase { flex: 1; padding: 10px 16px; border: none; border-radius: var(--radius-md); background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+    .btn-purchase:hover { opacity: 0.9; }
+    .btn-purchase:disabled { opacity: 0.5; cursor: not-allowed; }
+    .store-empty { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1000; align-items: center; justify-content: center; }
+    .modal-overlay.active { display: flex; }
+    .modal-content { background: var(--bg-primary); border-radius: var(--radius-lg); padding: 32px; max-width: 480px; width: 90%; }
+    .modal-content h2 { margin-bottom: 16px; }
+    .modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: var(--text-muted); position: absolute; right: 16px; top: 16px; }
+    .checkout-section { margin-top: 16px; }
+    .checkout-section h3 { font-size: 16px; margin-bottom: 12px; }
+    .checkout-option { padding: 12px; border: 2px solid var(--border-color); border-radius: var(--radius-md); margin-bottom: 8px; cursor: pointer; transition: border-color 0.2s; display: flex; align-items: center; justify-content: space-between; }
+    .checkout-option:hover { border-color: #667eea; }
+    .checkout-option.selected { border-color: #667eea; background: rgba(102,126,234,0.05); }
+    .checkout-option .gw-name { font-weight: 600; }
+    .checkout-option .gw-info { font-size: 12px; color: var(--text-muted); }
+    .btn-confirm { width: 100%; padding: 12px; border: none; border-radius: var(--radius-md); background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }
+    .btn-confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+    .order-status { text-align: center; padding: 20px; }
+    .order-status .status-icon { font-size: 48px; margin-bottom: 12px; }
+    .error-banner { background: #ffebee; color: #c62828; padding: 12px 16px; border-radius: var(--radius-md); margin-bottom: 16px; font-size: 14px; display: none; }
+    .error-banner.show { display: block; }
+    .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
 </head>
 <body>
     <div class="admin-layout">
         <%- include('../partials/users/sidebar') %>
+        <%- include('../partials/admin/header') %>
         <main class="admin-main">
             <div class="admin-header">
                 <h1 class="admin-page-title">Store & Plans</h1>
@@ -122,19 +127,16 @@
         async function loadStore() {
             try {
                 const [plansRes, gatewaysRes] = await Promise.all([
-                    fetch('/api/v1/store/plans', { headers: getAuthHeaders() }),
-                    fetch('/api/v1/store/gateways', { headers: getAuthHeaders() })
+                    window.hkvmApi('/api/v1/store/plans'),
+                    window.hkvmApi('/api/v1/store/gateways')
                 ]);
 
-                if (!plansRes.ok) throw new Error('Failed to load plans');
-                if (!gatewaysRes.ok) throw new Error('Failed to load gateways');
-
-                plans = (await plansRes.json()).plans || [];
-                gateways = (await gatewaysRes.json()).gateways || [];
+                plans = (plansRes.plans || []);
+                gateways = (gatewaysRes.gateways || []);
 
                 renderStore();
             } catch (err) {
-                showError(err.message);
+                showError(err.message || 'Failed to load store');
                 document.getElementById('loadingState').style.display = 'none';
             }
         }
@@ -147,7 +149,7 @@
             const gwBar = document.getElementById('gatewaysBar');
             if (gateways.length > 0) {
                 gwBar.innerHTML = gateways.map(g => `
-                    <span class="gateway-badge ${g.provider}">${g.name}</span>
+                    <span class="gateway-badge ${g.provider}">${escapeHtml(g.name)}</span>
                 `).join('');
             } else {
                 gwBar.innerHTML = '<span style="color: var(--text-muted); font-size: 13px;">No payment gateways enabled. Please contact support.</span>';
@@ -252,24 +254,17 @@
             document.getElementById('modalError').classList.remove('show');
 
             try {
-                const res = await fetch('/api/v1/store/purchase', {
+                const data = await window.hkvmApi('/api/v1/store/purchase', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                     body: JSON.stringify({ planId: selectedPlan.id, gatewayId: selectedGatewayId })
                 });
 
-                if (!res.ok) {
-                    const err = await res.json();
-                    throw new Error(err.error || 'Purchase failed');
-                }
-
-                const data = await res.json();
                 const order = data.order;
                 closePurchaseModal();
                 showStatusModal(order);
             } catch (err) {
                 const errEl = document.getElementById('modalError');
-                errEl.textContent = err.message;
+                errEl.textContent = err.message || 'Purchase failed';
                 errEl.classList.add('show');
                 btn.disabled = false;
                 btn.textContent = 'Confirm & Pay';
@@ -309,13 +304,10 @@
                     pollCount++;
                     if (pollCount > 20) { clearInterval(pollInterval); return; }
                     try {
-                        const res = await fetch(`/api/v1/store/orders/${order.order_id}/status`, { headers: getAuthHeaders() });
-                        if (res.ok) {
-                            const data = await res.json();
-                            if (data.order && data.order.status === 'paid') {
-                                clearInterval(pollInterval);
-                                showStatusModal({ ...order, status: 'paid' });
-                            }
+                        const data = await window.hkvmApi(`/api/v1/store/orders/${order.order_id}/status`);
+                        if (data.order && data.order.status === 'paid') {
+                            clearInterval(pollInterval);
+                            showStatusModal({ ...order, status: 'paid' });
                         }
                     } catch (e) {}
                 }, 5000);
@@ -335,11 +327,6 @@
             const div = document.createElement('div');
             div.textContent = str || '';
             return div.innerHTML;
-        }
-
-        function getAuthHeaders() {
-            const token = localStorage.getItem('tgvpanel_token');
-            return token ? { 'Authorization': 'Bearer ' + token } : {};
         }
 
         loadStore();

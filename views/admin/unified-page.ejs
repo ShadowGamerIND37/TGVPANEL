@@ -1979,11 +1979,12 @@
           <div class="v3-field"><label>Ports</label><input id="bpPorts" type="number" min="0" value="0"></div>
           <div class="v3-field"><label>DNS Records</label><input id="bpDns" type="number" min="0" value="0"></div>
           <div class="v3-field"><label>SLA (%)</label><input id="bpSla" type="number" min="0" max="100" step="0.1" value="99.9"></div>
+          <div class="v3-field"><label>Default Node</label><select id="bpNode"><option value="">Auto-select (any node)</option></select><div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Target node for provisioning VPS from this plan.</div></div>
           <div class="v3-field" style="grid-column:1/-1;"><label>Description</label><input id="bpDesc" placeholder="Entry-level VPS plan"></div>
           <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Plan</button></div>
         </form>
         <table class="v3-table" style="margin-top:12px;">
-          <thead><tr><th>ID</th><th>Name</th><th>Price</th><th>V Type</th><th>CPU</th><th>RAM</th><th>Storage</th><th>Cycle</th><th>Active</th><th>Actions</th></tr></thead>
+          <thead><tr><th>ID</th><th>Name</th><th>Price</th><th>V Type</th><th>CPU</th><th>RAM</th><th>Storage</th><th>Node</th><th>Cycle</th><th>Active</th><th>Actions</th></tr></thead>
           <tbody id="bpBody"></tbody>
         </table>
       </div>
@@ -5500,6 +5501,7 @@ async function loadBilling() {
         <td>${p.cpu_cores || 1}</td>
         <td>${(p.ram_mb || 1024) / 1024}GB</td>
         <td>${p.storage_gb || 10}GB</td>
+        <td style="font-size:11px;">${p.default_node_id ? '#' + p.default_node_id : 'Auto'}</td>
         <td>${hkvmEsc(p.billing_cycle)}</td>
         <td>${p.is_active ? 'active' : 'inactive'}</td>
         <td class="v3-btn-row">
@@ -5540,6 +5542,22 @@ async function loadBilling() {
     : '<tr><td colspan="7" style="color:var(--text-muted);">No invoices issued.</td></tr>';
 
   loadGateways();
+  // Populate node dropdown for plan creation
+  const nodeSel = document.getElementById('bpNode');
+  if (nodeSel && !nodeSel.dataset.populated) {
+    try {
+      const nodesRes = await hkvmApi('/api/v1/nodes');
+      const nodes = nodesRes.nodes || [];
+      nodes.forEach(n => {
+        const opt = document.createElement('option');
+        opt.value = n.id;
+        opt.textContent = `${n.name} (${n.ip_address || 'no-ip'})`;
+        nodeSel.appendChild(opt);
+      });
+      nodeSel.dataset.populated = '1';
+    } catch (e) { /* nodes may not be available */ }
+  }
+
   const credits = creditsRes.credits || [];
   document.getElementById('bcBody').innerHTML = credits.length
     ? credits.map(c => `<tr>
@@ -5680,6 +5698,7 @@ async function submitBillingPlan(e) {
         portsCount: Number(document.getElementById('bpPorts').value),
         dnsRecords: Number(document.getElementById('bpDns').value),
         slaPercent: Number(document.getElementById('bpSla').value),
+        defaultNodeId: document.getElementById('bpNode').value ? Number(document.getElementById('bpNode').value) : null,
       },
     });
     document.getElementById('bpName').value = '';

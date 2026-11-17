@@ -5543,6 +5543,66 @@ exec "$@"
     });
 
 
+    await runStep('T51: Store UI auth fix & plan default-node selection (migration v037)', async () => {
+      const ctx = app.getHkvmV3Context();
+      const bcrypt = require('bcryptjs');
+      try {
+        // 1. Create a plan with a default node specified
+        const nodeRow = await ctx.db.get(`SELECT id FROM nodes LIMIT 1`);
+        const nodeId = nodeRow ? nodeRow.id : 1;
+
+        const planRes = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T51 Node Plan',
+          priceCents: 15000,
+          billingCycle: 'monthly',
+          virtualizationType: 'kvm',
+          cpuCores: 2,
+          ramMb: 4096,
+          storageGb: 40,
+          bandwidthGb: 200,
+          defaultNodeId: nodeId,
+        });
+        assert.strictEqual(planRes.status, 201, `Plan with node failed: ${planRes.text}`);
+        const plan = planRes.json.plan;
+        assert.strictEqual(plan.default_node_id, nodeId, 'default_node_id stored');
+
+        // 2. Update plan to change the default node
+        const planRes2 = await adminClient.request('PUT', '/api/v1/billing/plans/' + plan.id, {
+          defaultNodeId: null,
+        });
+        assert.strictEqual(planRes2.status, 200, `Plan node update failed: ${planRes2.text}`);
+        assert.strictEqual(planRes2.json.plan.default_node_id, null, 'default_node_id cleared');
+
+        // 3. Customer can browse plans via store API (GET works with session)
+        const bBobHash = bcrypt.hashSync('BobPass!123', 10);
+        await ctx.db.run(`INSERT OR IGNORE INTO users (username, password, email, role, is_active) VALUES ('bob_user', ?, 'bob@example.org', 'user', 1)`, [bBobHash]);
+        const bobClient = new SessionClient(baseUrl);
+        await bobClient.request('POST', '/api/login', { username: 'bob_user', password: 'BobPass!123' });
+        await bobClient.request('GET', '/dashboard');
+
+        const storePlansRes = await bobClient.request('GET', '/api/v1/store/plans');
+        assert.strictEqual(storePlansRes.status, 200, `Store plans GET failed: ${storePlansRes.text}`);
+        const storePlans = storePlansRes.json.plans;
+        assert.ok(storePlans.length > 0, 'plans visible to customer');
+
+        // 4. Customer can browse gateways via store API
+        const storeGwRes = await bobClient.request('GET', '/api/v1/store/gateways');
+        assert.strictEqual(storeGwRes.status, 200, `Store gateways GET failed: ${storeGwRes.text}`);
+
+        // 5. Store page renders (HTML)
+        const storePage = await bobClient.request('GET', '/store');
+        assert.strictEqual(storePage.status, 200, `Store page failed: ${storePage.status}`);
+        assert.ok(storePage.text.includes('Store'), 'Store page has Store content');
+        assert.ok(storePage.text.includes('csrf-token'), 'Store page includes CSRF meta tag');
+        assert.ok(storePage.text.includes('tgvpanel-v3.js'), 'Store page includes shared JS');
+
+        // 6. Cleanup
+        await adminClient.request('DELETE', '/api/v1/billing/plans/' + plan.id);
+      } catch (err) {
+        throw err;
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

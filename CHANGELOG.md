@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Store UI Fix & Plan Node Selection (2026-11-17)
+
+- **Store UI fix**: Rewrote `views/users/store.ejs` to properly include the panel's shared assets (`/css/admin.css`, `/js/tgvpanel-v3.js`) and CSRF token meta tag. Previously the store used a non-existent `localStorage` token for API auth, causing all store API calls (plans, gateways, purchase) to fail. Now uses `window.hkvmApi()` with proper session cookie + CSRF authentication.
+- **Plan default node selection**: Plan creation now includes a **Default Node** dropdown that lets admins specify which compute node VPS instances provisioned from that plan will target. Added `default_node_id` column to `billing_plans` (migration v037).
+- **Plan table**: The admin billing plans table now shows the default node column.
+- **Migration v037**: Adds `default_node_id` column to `billing_plans`.
+- **Test T51**: Verifies plan creation with default node, node update, store API GET access for customers, and store page rendering with CSRF/JS assets. **51/51 tests pass.**
+
 ## Unreleased — Bandwidth Limits on VM/LXC/VPS (2026-11-17)
 
 - **Bandwidth limit setting on VM/LXC/VPS creation**: Added a bandwidth limit control to the VM create form (`views/admin/vm-create.ejs`) and the LXC create form (`views/admin/unified-page.ejs`). Each supports two modes: **Unlimited** or **Limited (GB/month)**.

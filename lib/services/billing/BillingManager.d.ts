@@ -17,6 +17,7 @@ export interface BillingPlanInput {
     dnsRecords?: number;
     backupsIncluded?: boolean;
     slaPercent?: number;
+    defaultNodeId?: number | null;
 }
 export interface SubscriptionInput {
     userId?: number;
