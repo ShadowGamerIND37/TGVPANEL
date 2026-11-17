@@ -173,6 +173,23 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | POST | `/billing/invoices/:id/pay` | admin-subadmin | **Admin-verified payment confirmation only:** requires `{paymentReference, method: manual|admin-verified|bank-transfer|cheque}`; refuses missing references and double payment; records `paid_at`, the reference/method, and posts a credit-ledger `payment` entry. No automated payment gateway is implemented. Phase 30. |
 | GET/POST | `/billing/credits?userId=` | admin-subadmin-operator / admin-subadmin | Credit-ledger history and balance, or adjust credits `{userId, type: credit|debit, amountCents, reason}` (debits refused when they would overdraw). Phase 30. |
 
+### DDoS protection
+
+| Method | Path | Roles | Description |
+|--------|------|-------|-------------|
+| GET | `/api/v1/ddos/stats` | any authenticated | Live monitoring stats, settings summary, and platform capability flag |
+| GET | `/api/v1/ddos/ips` | admin, subadmin, operator | List monitored IPs (supports `?page`, `?limit`, `?filter=all\|blocked\|active\|threat`) |
+| GET | `/api/v1/ddos/ips/:ip` | admin, subadmin, operator | IP detail with live data and recent attack log |
+| POST | `/api/v1/ddos/ips/:ip/block` | admin | Block IP via `iptables -A INPUT -s <ip> -j DROP` (body: `{reason}`) |
+| POST | `/api/v1/ddos/ips/:ip/unblock` | admin | Remove iptables DROP rule for IP |
+| DELETE | `/api/v1/ddos/ips/:ip` | admin | Clear IP tracking data and logs |
+| GET | `/api/v1/ddos/logs` | admin, subadmin, operator | Attack log entries (supports `?limit`) |
+| GET | `/api/v1/ddos/settings` | admin, subadmin | Current DDoS protection settings |
+| PUT | `/api/v1/ddos/settings` | admin | Update settings (rate limits, thresholds, auto-block) |
+| GET | `/api/v1/ddos/network-analysis` | admin, subadmin, operator | Real-time network connection snapshot (active connections, SYN flood, port scanners) |
+
+**Requirements:** Linux host with `ss`, `netstat`, and `iptables` for full monitoring and blocking. On non-Linux platforms, the `monitoring` flag in stats is `false` and block/unblock operations return a clear error.
+
 ## Reseller API
 
 Reseller endpoints use isolated HMAC credentials and scoped access
