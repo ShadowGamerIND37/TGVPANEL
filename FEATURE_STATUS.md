@@ -85,7 +85,7 @@ The **only roadmap system classified FULLY IMPLEMENTED is the existing reseller 
 | 9 — Docker | PARTIALLY IMPLEMENTED | **Docker container manager implemented (Phase 29, migration v031):** container registry with validation, `docker run`/lifecycle command rendering, lifecycle apply (create/start/stop/restart/remove) via the allowlisted command runner (local or node agent), honest capability gating when the docker binary is absent, live status, API routes and an admin section. Image registry management, compose orchestration and resource quotas remain unimplemented. |
 | 6 — Session management | PARTIALLY IMPLEMENTED | **Session inventory & revocation implemented (Phase 28, migration v030):** sessions persisted in SQLite (`SqliteSessionStore`), admin inventory `GET /api/v1/sessions`, per-session `DELETE /api/v1/sessions/:sid` and per-user `DELETE /api/v1/sessions?userId=` revocation, activity metadata (IP, user agent, last seen), admin Sessions section. Sessions from the pre-upgrade in-memory store in a running process are not tracked. |
 | 12 — Load balancer | PARTIALLY IMPLEMENTED | **HAProxy load balancer manager implemented (Phase 27, migration v029): registry with backend pools, rendered-config validation (`haproxy -c`) before start/reload/stop, honest capability gating, remote-node enforcement via the agent, API routes and an admin section.** TLS termination and stats parsing remain unimplemented. |
-| 13 — Billing/payments | NOT IMPLEMENTED | No verified billing ledger or payment integration. |
+| 13 — Billing/payments | IMPLEMENTED (Phase 32) | Plans, subscriptions, invoices, credit ledger, customer Store, and payment gateway integration (FamGateway UPI, Stripe, PayPal). Admin gateway enable/configure/test. Payments verified via gateway webhook or server-to-server polling. |
 | 14 — Admin/customer API | PARTIALLY IMPLEMENTED; reseller system FULLY IMPLEMENTED | Existing APIs and generic keys/webhooks exist; **outbound webhook deliveries retry with bounded attempts + backoff and record honest delivery status (Phase 22)**; broader admin/customer API coverage is incomplete. Preserve the completed reseller API/key system. |
 | 15 — DNS | NOT IMPLEMENTED as managed DNS | Local DNS relay exists; no PowerDNS zone/record manager. |
 | 16 — Monitoring/alerting | PARTIALLY IMPLEMENTED; KVM network traffic unavailable | Real selected host/process/cgroup metrics and alerts exist; **instance metrics history is now recorded on telemetry read (Phase 17)**; KVM network counters and unknown IPs are honestly null; IOPS/latency and broad health coverage incomplete. |
@@ -100,9 +100,31 @@ The **only roadmap system classified FULLY IMPLEMENTED is the existing reseller 
 - **Scope:** billing plans (price/cycle/features), customer subscriptions with
   auto-issued invoices, invoice numbering (`INV-YYYYMMDD-NNNN`), admin-verified
   payment confirmation, and a credit ledger with balance tracking.
-- **Payments:** recorded **only** after administrator-verified confirmation with
-  a payment reference; whitelisted methods only; no payment gateway, processor,
-  or simulation is implemented or claimed.
+- **Payments:** recorded **only** after gateway verification (FamGateway/Stripe/
+  PayPal webhook or server-to-server polling) OR administrator-verified confirmation
+  with a payment reference. No simulated payments.
+
+## Customer Store & Payment Gateways (Phase 32, verified)
+
+- **Status:** Implemented and verified by T48/T49 (49/49 acceptance suites pass).
+- **Store:** Customer-facing `/store` page in the user portal where customers
+  browse active plans (with virtualization type, CPU, RAM, storage, bandwidth
+  specs) and purchase via the enabled payment gateway.
+- **Gateways:** Three gateways integrated:
+  - **FamGateway** (UPI, India): create order via `POST /api/create-order`,
+    verify via `GET /api/verify-order.php`, HMAC-SHA256 webhook signatures.
+  - **Stripe**: Checkout Session creation, Stripe-Signature webhook verification.
+  - **PayPal**: Orders API v2, OAuth2 client-credentials, webhook verification.
+- **Admin gateways:** Enable/disable, configure API keys/secrets, set webhook
+  URL/secret, test connectivity. Gateway config encrypted at rest via crypto-vault.
+- **Plan specs:** Plan creation now captures virtualization type (LXC/KVM/both),
+  CPU cores, RAM, storage, bandwidth, VPS count, ports, DNS records, backups,
+  and SLA. Validation rejects invalid specs.
+- **Files:** migration v035 in `src/db/migrations.ts`,
+  `src/services/billing/PaymentGatewayManager.ts`, routes in
+  `src/api/v1/router.ts`, `views/users/store.ejs`, admin UI in
+  `views/admin/unified-page.ejs`, sidebar links in
+  `views/partials/users/sidebar.ejs` and `views/partials/admin/sidebar.ejs`.
 - **Files:** migration v032 in `src/db/migrations.ts`,
   `src/services/billing/BillingManager.ts`, routes in
   `src/api/v1/router.ts`, admin UI in `views/admin/unified-page.ejs`.

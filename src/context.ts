@@ -15,6 +15,7 @@ import { NetworkManager } from './services/network/NetworkManager';
 import { LoadBalancerManager } from './services/network/LoadBalancerManager';
 import { DockerManager } from './services/docker/DockerManager';
 import { BillingManager } from './services/billing/BillingManager';
+import { PaymentGatewayManager } from './services/billing/PaymentGatewayManager';
 import { DdosManager } from './services/ddos/DdosManager';
 import { DdosFirewallManager } from './services/ddos/DdosFirewallManager';
 import { DdosHttpProtection } from './services/ddos/DdosHttpProtection';
@@ -40,6 +41,7 @@ export interface HkvmRuntimeContext {
   loadBalancerManager: LoadBalancerManager;
   dockerManager: DockerManager;
   billingManager: BillingManager;
+  paymentGatewayManager: PaymentGatewayManager;
   ddosManager: DdosManager;
   ddosFirewallManager: DdosFirewallManager;
   ddosHttpProtection: DdosHttpProtection;
@@ -112,6 +114,7 @@ export async function initializeUnifiedHkvmRuntime(
   const loadBalancerManager = new LoadBalancerManager(db, nodeManager);
   const dockerManager = new DockerManager(db, nodeManager);
   const billingManager = new BillingManager(db);
+  const paymentGatewayManager = new PaymentGatewayManager(db);
   // Enterprise DDoS protection (Area D hardening): detection, mitigation,
   // HTTP protection, profiles, Cloudflare integration, multi-node sync, and
   // per-VPS policies. Linux-only for full firewall capability.
@@ -162,6 +165,7 @@ export async function initializeUnifiedHkvmRuntime(
     loadBalancerManager,
     dockerManager,
     billingManager,
+    paymentGatewayManager,
     ddosManager,
     ddosFirewallManager,
     ddosHttpProtection,

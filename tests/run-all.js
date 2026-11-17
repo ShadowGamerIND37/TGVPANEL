@@ -5302,6 +5302,179 @@ exec "$@"
       }
     });
 
+    await runStep('T48: Customer Store — plan browsing, gateway config, purchase order creation', async () => {
+      const ctx = app.getHkvmV3Context();
+      const bcrypt = require('bcryptjs');
+      const bobHash = bcrypt.hashSync('BobPass!123', 10);
+      await ctx.db.run(`INSERT OR IGNORE INTO users (username, password, email, role, is_active) VALUES ('bob_user', ?, 'bob@example.org', 'user', 1)`, [bobHash]);
+      const bobClient = new SessionClient(baseUrl);
+      await bobClient.request('POST', '/api/login', { username: 'bob_user', password: 'BobPass!123' });
+      // Visit dashboard to extract CSRF token
+      await bobClient.request('GET', '/dashboard');
+      try {
+        // 1. Admin can list payment gateways (FamGateway, Stripe, PayPal pre-seeded)
+        const gwRes = await adminClient.request('GET', '/api/v1/gateways');
+        assert.strictEqual(gwRes.status, 200, `Gateways list failed: ${gwRes.text}`);
+        const gateways = gwRes.json.gateways;
+        assert.ok(Array.isArray(gateways), 'gateways is array');
+        assert.ok(gateways.length >= 3, 'at least 3 gateways seeded');
+        const providers = gateways.map((g) => g.provider);
+        assert.ok(providers.includes('famgateway'), 'famgateway present');
+        assert.ok(providers.includes('stripe'), 'stripe present');
+        assert.ok(providers.includes('paypal'), 'paypal present');
+
+        // 2. Admin can enable and configure a gateway
+        const famGw = gateways.find((g) => g.provider === 'famgateway');
+        const enableRes = await adminClient.request('PUT', '/api/v1/gateways/' + famGw.id, {
+          enabled: 1,
+          apiKey: 'test-key-12345',
+        });
+        assert.strictEqual(enableRes.status, 200, `Enable gateway failed: ${enableRes.text}`);
+        assert.strictEqual(enableRes.json.gateway.enabled, 1, 'gateway enabled');
+
+        // 3. Customer can list active plans from the store
+        const plansRes = await bobClient.request('GET', '/api/v1/store/plans');
+        assert.strictEqual(plansRes.status, 200, `Store plans failed: ${plansRes.text}`);
+        const plans = plansRes.json.plans;
+        assert.ok(Array.isArray(plans), 'plans is array');
+
+        // 4. Customer can see enabled gateways
+        const storeGwRes = await bobClient.request('GET', '/api/v1/store/gateways');
+        assert.strictEqual(storeGwRes.status, 200, `Store gateways failed: ${storeGwRes.text}`);
+        const storeGws = storeGwRes.json.gateways;
+        assert.ok(storeGws.length >= 1, 'at least 1 enabled gateway visible to customer');
+
+        // 5. Create a test plan with specs for purchase
+        const createPlanRes = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T48 Store Plan',
+          priceCents: 50000,
+          billingCycle: 'monthly',
+          description: 'Test store plan',
+          virtualizationType: 'kvm',
+          cpuCores: 2,
+          ramMb: 4096,
+          storageGb: 40,
+          bandwidthGb: 200,
+          vpsCount: 1,
+          slaPercent: 99.9,
+        });
+        assert.strictEqual(createPlanRes.status, 201, `Plan create failed: ${createPlanRes.text}`);
+        const plan = createPlanRes.json.plan;
+        assert.strictEqual(plan.virtualization_type, 'kvm', 'virtualization type stored');
+        assert.strictEqual(plan.cpu_cores, 2, 'cpu cores stored');
+        assert.strictEqual(plan.ram_mb, 4096, 'ram stored');
+        assert.strictEqual(plan.storage_gb, 40, 'storage stored');
+
+        // 6. Customer attempts purchase — should fail without API key (gateway enabled but not configured)
+        const purchaseRes = await bobClient.request('POST', '/api/v1/store/purchase', {
+          planId: plan.id,
+          gatewayId: famGw.id,
+        });
+        // Should return 502 because FamGateway has no API key configured
+        assert.ok(purchaseRes.status === 502 || purchaseRes.status === 400, `Purchase should fail without key: ${purchaseRes.status} ${purchaseRes.text}`);
+
+        // 7. Gateway test will fail (fake key) but should not crash
+        const testRes = await adminClient.request('POST', '/api/v1/gateways/' + famGw.id + '/test');
+        assert.strictEqual(testRes.status, 200, `Gateway test failed: ${testRes.text}`);
+        assert.ok(typeof testRes.json.success === 'boolean', 'test returns success boolean');
+
+        // 9. Customer cannot access admin gateway routes
+        const forbidden = await bobClient.request('GET', '/api/v1/gateways');
+        assert.strictEqual(forbidden.status, 403, 'customer blocked from gateway admin');
+
+        // 10. Cleanup
+        await adminClient.request('DELETE', '/api/v1/billing/plans/' + plan.id);
+        await adminClient.request('PUT', '/api/v1/gateways/' + famGw.id, { enabled: 0 });
+      } finally {
+        // Ensure gateway is disabled even on assertion failure
+        try {
+          const gws = await adminClient.request('GET', '/api/v1/gateways');
+          const famGw = gws.json.gateways.find((g) => g.provider === 'famgateway');
+          if (famGw) await adminClient.request('PUT', '/api/v1/gateways/' + famGw.id, { enabled: 0 });
+        } catch (_) {}
+      }
+    });
+
+    await runStep('T49: Plan creation validation — virtualization type, specs, required fields', async () => {
+      const ctx = app.getHkvmV3Context();
+      try {
+        // 1. Invalid virtualization type rejected
+        const badVtype = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T49 Bad VType',
+          priceCents: 1000,
+          virtualizationType: 'docker',
+        });
+        assert.strictEqual(badVtype.status, 400, 'invalid virtualization type rejected');
+        assert.ok(badVtype.json.error.includes('virtualizationType'), 'error mentions virtualizationType');
+
+        // 2. Negative CPU rejected
+        const badCpu = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T49 Bad CPU',
+          priceCents: 1000,
+          virtualizationType: 'kvm',
+          cpuCores: 0,
+        });
+        assert.strictEqual(badCpu.status, 400, 'invalid CPU rejected');
+
+        // 3. Invalid RAM rejected
+        const badRam = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T49 Bad RAM',
+          priceCents: 1000,
+          virtualizationType: 'kvm',
+          ramMb: 10,
+        });
+        assert.strictEqual(badRam.status, 400, 'invalid RAM rejected');
+
+        // 4. Invalid SLA rejected
+        const badSla = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T49 Bad SLA',
+          priceCents: 1000,
+          slaPercent: 150,
+        });
+        assert.strictEqual(badSla.status, 400, 'invalid SLA rejected');
+
+        // 5. Valid plan with all specs succeeds
+        const goodRes = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T49 Good Plan',
+          priceCents: 25000,
+          billingCycle: 'monthly',
+          virtualizationType: 'both',
+          cpuCores: 4,
+          ramMb: 8192,
+          storageGb: 80,
+          bandwidthGb: 500,
+          vpsCount: 2,
+          portsCount: 5,
+          dnsRecords: 10,
+          slaPercent: 99.99,
+          backupsIncluded: true,
+        });
+        assert.strictEqual(goodRes.status, 201, `Valid plan create failed: ${goodRes.text}`);
+        const plan = goodRes.json.plan;
+        assert.strictEqual(plan.virtualization_type, 'both', 'vtype stored as both');
+        assert.strictEqual(plan.vps_count, 2, 'vps count stored');
+        assert.strictEqual(plan.ports_count, 5, 'ports stored');
+        assert.strictEqual(plan.dns_records, 10, 'dns records stored');
+
+        // 6. Update plan specs
+        const updateRes = await adminClient.request('PUT', '/api/v1/billing/plans/' + plan.id, {
+          priceCents: 30000,
+          cpuCores: 8,
+          ramMb: 16384,
+        });
+        assert.strictEqual(updateRes.status, 200, `Plan update failed: ${updateRes.text}`);
+        const updated = updateRes.json.plan;
+        assert.strictEqual(updated.cpu_cores, 8, 'cpu updated');
+        assert.strictEqual(updated.ram_mb, 16384, 'ram updated');
+        assert.strictEqual(updated.price_cents, 30000, 'price updated');
+
+        // 7. Cleanup
+        await adminClient.request('DELETE', '/api/v1/billing/plans/' + plan.id);
+      } catch (err) {
+        throw err;
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

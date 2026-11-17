@@ -11,6 +11,7 @@ import { NetworkManager } from './services/network/NetworkManager';
 import { LoadBalancerManager } from './services/network/LoadBalancerManager';
 import { DockerManager } from './services/docker/DockerManager';
 import { BillingManager } from './services/billing/BillingManager';
+import { PaymentGatewayManager } from './services/billing/PaymentGatewayManager';
 import { DdosManager } from './services/ddos/DdosManager';
 import { DdosFirewallManager } from './services/ddos/DdosFirewallManager';
 import { DdosHttpProtection } from './services/ddos/DdosHttpProtection';
@@ -34,6 +35,7 @@ export interface HkvmRuntimeContext {
     loadBalancerManager: LoadBalancerManager;
     dockerManager: DockerManager;
     billingManager: BillingManager;
+    paymentGatewayManager: PaymentGatewayManager;
     ddosManager: DdosManager;
     ddosFirewallManager: DdosFirewallManager;
     ddosHttpProtection: DdosHttpProtection;
