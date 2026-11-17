@@ -72,6 +72,49 @@ export declare class NetworkManager {
         priority?: number;
         comment?: string;
     }): Promise<any>;
+    listInstanceFirewallRules(instanceType: string, instanceRefId: number): Promise<any[]>;
+    listFirewallProfiles(): Promise<any[]>;
+    getFirewallProfile(profileId: number): Promise<any>;
+    private validateProfileRuleInput;
+    createFirewallProfile(input: {
+        name: string;
+        description?: string | null;
+        createdBy?: number | null;
+        rules: Array<{
+            direction?: string;
+            action?: string;
+            protocol?: string;
+            sourceCidr?: string | null;
+            destPort?: string | null;
+            priority?: number;
+            comment?: string | null;
+        }>;
+    }): Promise<any>;
+    deleteFirewallProfile(profileId: number): Promise<void>;
+    /**
+     * Materializes a profile's rules as instance-scoped firewall_rules rows for
+     * the given instance and enforces each through the normal (Phase 24) path.
+     * Returns the created rules with their honest enforcement results.
+     */
+    applyFirewallProfileToInstance(profileId: number, input: {
+        instanceType: string;
+        instanceRefId: number;
+        createdBy?: number | null;
+    }): Promise<{
+        profile: {
+            id: any;
+            name: any;
+        };
+        instanceType: string;
+        instanceRefId: number;
+        created: {
+            ruleId: number;
+            direction: string;
+            action: string;
+            applied: boolean;
+        }[];
+    }>;
+    private resolveInstanceIps;
     deleteFirewallRule(ruleId: number): Promise<void>;
     private applyFirewallRuleForNode;
 }

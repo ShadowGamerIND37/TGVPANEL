@@ -6,6 +6,7 @@ import net from 'net';
 import { UnifiedDatabase } from '../../db/database';
 import { isBinaryAvailable, runAllowlistedCommand } from '../../node-agent/command-runner';
 import { SafeValidators } from '../../security/middleware';
+import { encryptArchive } from '../backup/backup-crypto';
 import {
   InstanceCapabilityProfile,
   InstanceTelemetry,
@@ -74,6 +75,36 @@ export class KVMAdapter implements VirtualizationAdapter {
 
   private parseDiskGb(diskSizeVal: unknown): number {
     return parseFloat(String(diskSizeVal || '20').replace(/[^0-9.]/g, '')) || 20;
+  }
+
+  /**
+   * Reads honest disk-image statistics via `qemu-img info --output=json`:
+   * `virtual-size` (the image's virtual capacity) and `disk-size` (the actual
+   * bytes allocated on disk). This replaces a bare `statSync` image-file-size
+   * reading, which does not distinguish virtual capacity from allocated usage or
+   * disclose the image format. Returns null when qemu-img is unavailable or fails
+   * (callers fall back to the previous behavior).
+   */
+  private async getDiskImageStats(
+    diskPath: string
+  ): Promise<{ virtualSizeBytes: number; diskSizeBytes: number; format: string | null } | null> {
+    const info = await this.commandRunner('qemu-img', ['info', '--output=json', diskPath], {
+      timeoutMs: 30_000,
+    });
+    if (info.exitCode !== 0 || info.timedOut) return null;
+    try {
+      const parsed = JSON.parse(info.stdout);
+      const virtualSizeBytes = Number(parsed['virtual-size']);
+      const diskSizeBytes = Number(parsed['disk-size']);
+      if (!Number.isFinite(virtualSizeBytes) || !Number.isFinite(diskSizeBytes)) return null;
+      return {
+        virtualSizeBytes,
+        diskSizeBytes,
+        format: String(parsed.format || '').toLowerCase() || null,
+      };
+    } catch {
+      return null;
+    }
   }
 
   private parseDiskSizeBytes(value: string): number | null {
@@ -219,7 +250,11 @@ export class KVMAdapter implements VirtualizationAdapter {
     }
   }
 
-  private async stopVmProcess(pid: number | null | undefined, force?: boolean): Promise<void> {
+  private async stopVmProcess(
+    pid: number | null | undefined,
+    force?: boolean,
+    gracefulWaitMs?: number
+  ): Promise<void> {
     const processPid = Number(pid) || 0;
     if (!processPid || !this.isProcessAlive(processPid)) {
       return;
@@ -232,14 +267,14 @@ export class KVMAdapter implements VirtualizationAdapter {
       throw error;
     }
 
-    const deadlineMs = Date.now() + (force ? 3000 : 5000);
+    const deadlineMs = Date.now() + (force ? 3000 : gracefulWaitMs ?? 5000);
     while (Date.now() < deadlineMs) {
       if (!this.isProcessAlive(processPid)) return;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     throw new Error(
-      `KVM VM process ${processPid} did not stop before the ${force ? 3000 : 5000}ms deadline.`
+      `KVM VM process ${processPid} did not stop before the ${force ? 3000 : (gracefulWaitMs ?? 5000)}ms deadline.`
     );
   }
 
@@ -746,6 +781,17 @@ export class KVMAdapter implements VirtualizationAdapter {
       }
       await this.hooks.startVmById(refId);
       await this.assertHookedVmProcessState(refId, 'running');
+    } else if (action === 'shutdown') {
+      // Graceful guest shutdown: SIGTERM with a longer grace period and no forced kill.
+      // Distinct from `stop`, which may escalate to SIGKILL when force is requested.
+      if (this.hooks.stopVmById) {
+        await this.hooks.stopVmById(refId, false);
+        await this.assertHookedVmProcessState(refId, 'stopped');
+      } else {
+        this.assertCanStopWithoutHook(vm, 'shutdown');
+        await this.stopVmProcess(vm.pid, false, 15_000);
+        await this.db.run(`UPDATE vms SET status = 'stopped', pid = NULL WHERE vm_id = ?`, [refId]);
+      }
     } else if (action === 'stop') {
       if (this.hooks.stopVmById) {
         await this.hooks.stopVmById(refId, options?.force);
@@ -859,11 +905,22 @@ export class KVMAdapter implements VirtualizationAdapter {
 
     const diskPath = this.resolveVmDiskPath(vm);
     let diskUsedGb = 0;
+    let diskTotalGb = this.parseDiskGb(vm.disk_size);
+    let diskFormat: string | null = null;
     if (diskPath && fs.existsSync(diskPath)) {
-      try {
-        diskUsedGb = Number((fs.statSync(diskPath).size / 1024 ** 3).toFixed(2));
-      } catch {
-        diskUsedGb = 0;
+      // Honest disk stats via qemu-img: disk-size (actual allocated bytes) for
+      // diskUsedGb and virtual-size (capacity) for diskTotalGb, plus the format.
+      const stats = await this.getDiskImageStats(diskPath);
+      if (stats) {
+        diskUsedGb = Number((stats.diskSizeBytes / 1024 ** 3).toFixed(2));
+        diskTotalGb = Number((stats.virtualSizeBytes / 1024 ** 3).toFixed(2));
+        diskFormat = stats.format;
+      } else {
+        try {
+          diskUsedGb = Number((fs.statSync(diskPath).size / 1024 ** 3).toFixed(2));
+        } catch {
+          diskUsedGb = 0;
+        }
       }
     }
 
@@ -880,7 +937,8 @@ export class KVMAdapter implements VirtualizationAdapter {
       ramTotalMb,
       ramPercent: Number(Math.min(100, (ramUsedMb / ramTotalMb) * 100).toFixed(2)),
       diskUsedGb,
-      diskTotalGb: this.parseDiskGb(vm.disk_size),
+      diskTotalGb,
+      diskFormat,
       netRxBytes: null,
       netTxBytes: null,
       measuredAt: new Date().toISOString(),
@@ -898,26 +956,35 @@ export class KVMAdapter implements VirtualizationAdapter {
     if ((vm.disk_format || 'qcow2').toLowerCase() !== 'qcow2') {
       throw new Error('Internal QEMU snapshots require QCOW2 disk format (current disk is RAW).');
     }
-    if (!isBinaryAvailable('qemu-img')) {
-      throw new Error('qemu-img binary is not installed on this host.');
-    }
     const diskPath = this.resolveVmDiskPath(vm);
     if (!diskPath || !fs.existsSync(diskPath)) {
       throw new Error(`VM disk image does not exist on disk: ${diskPath}`);
     }
 
-    const res = await runAllowlistedCommand('qemu-img', ['snapshot', '-c', safeSnap, diskPath], {
+    const res = await this.commandRunner('qemu-img', ['snapshot', '-c', safeSnap, diskPath], {
       timeoutMs: 120_000,
     });
-    if (res.exitCode !== 0) {
+    if (res.exitCode !== 0 || res.timedOut) {
       throw new Error(`qemu-img snapshot failed: ${res.stderr || res.stdout}`);
     }
 
-    const sizeGb = Number((fs.statSync(diskPath).size / 1024 ** 3).toFixed(2));
+    // Honest sizing: size_gb is the snapshot disk's virtual capacity and
+    // allocated_gb is the actual on-disk consumption, both read from qemu-img.
+    // Fall back to the image-file size only when qemu-img stats are unavailable.
+    const stats = await this.getDiskImageStats(diskPath);
+    let sizeGb: number;
+    let allocatedGb: number | null;
+    if (stats) {
+      sizeGb = Number((stats.virtualSizeBytes / 1024 ** 3).toFixed(2));
+      allocatedGb = Number((stats.diskSizeBytes / 1024 ** 3).toFixed(2));
+    } else {
+      sizeGb = Number((fs.statSync(diskPath).size / 1024 ** 3).toFixed(2));
+      allocatedGb = null;
+    }
     const ins = await this.db.run(
-      `INSERT INTO vm_snapshots (vm_id, snapshot_name, tag_name, file_path, size_gb, description, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'completed')`,
-      [vmId, safeSnap, safeSnap, diskPath, sizeGb, description]
+      `INSERT INTO vm_snapshots (vm_id, snapshot_name, tag_name, file_path, size_gb, allocated_gb, description, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'completed')`,
+      [vmId, safeSnap, safeSnap, diskPath, sizeGb, allocatedGb, description]
     );
     return { id: ins.lastID, name: safeSnap };
   }
@@ -969,7 +1036,15 @@ export class KVMAdapter implements VirtualizationAdapter {
   public async createDiskBackup(
     vmId: number,
     backupDir = path.resolve(process.cwd(), 'data', 'instance-backups')
-  ): Promise<{ backupId: number; filePath: string; sizeBytes: number; checksumSha256: string }> {
+  ): Promise<{
+    backupId: number;
+    backupName: string;
+    filePath: string;
+    sizeBytes: number;
+    checksumSha256: string;
+    encrypted: boolean;
+    encryptionAlg: string;
+  }> {
     const vm = await this.db.get<any>(`SELECT * FROM vms WHERE vm_id = ?`, [vmId]);
     if (!vm) throw new Error(`KVM VM #${vmId} not found.`);
     const diskPath = this.resolveVmDiskPath(vm);
@@ -998,15 +1073,28 @@ export class KVMAdapter implements VirtualizationAdapter {
       s.on('end', () => resolve());
     });
     const checksumSha256 = hash.digest('hex');
-    const sizeBytes = fs.statSync(outFile).size;
+
+    // Encrypt the archive at rest with AES-256-GCM (same TGVENC1 format as local
+    // LXC backups). The recorded checksum remains the decrypted-content SHA-256;
+    // sizeBytes records the plaintext archive size, matching the LXC path.
+    const enc = encryptArchive(outFile);
+    const sizeBytes = enc.plaintextSizeBytes;
 
     const ins = await this.db.run(
       `INSERT INTO container_backups
-         (instance_type, instance_ref_id, node_id, backup_name, file_path, size_bytes, sha256, checksum_sha256, verified, status)
-       VALUES ('kvm', ?, COALESCE(?, 1), ?, ?, ?, ?, ?, 1, 'completed')`,
-      [vm.vm_id, vm.node_id, backupName, outFile, sizeBytes, checksumSha256, checksumSha256]
+         (instance_type, instance_ref_id, node_id, backup_name, file_path, size_bytes, sha256, checksum_sha256, encrypted, encryption_alg, verified, status)
+       VALUES ('kvm', ?, COALESCE(?, 1), ?, ?, ?, ?, ?, 1, 'aes-256-gcm', 1, 'completed')`,
+      [vm.vm_id, vm.node_id, backupName, enc.encryptedPath, sizeBytes, checksumSha256, checksumSha256]
     );
 
-    return { backupId: ins.lastID, filePath: outFile, sizeBytes, checksumSha256 };
+    return {
+      backupId: ins.lastID,
+      backupName,
+      filePath: enc.encryptedPath,
+      sizeBytes,
+      checksumSha256,
+      encrypted: true,
+      encryptionAlg: 'aes-256-gcm',
+    };
   }
 }

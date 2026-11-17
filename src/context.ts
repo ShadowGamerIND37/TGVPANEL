@@ -12,6 +12,8 @@ import { VirtualizationManager } from './services/virtualization/VirtualizationM
 import { InstanceManager } from './services/virtualization/InstanceManager';
 import { StorageManager } from './services/storage/StorageManager';
 import { NetworkManager } from './services/network/NetworkManager';
+import { LoadBalancerManager } from './services/network/LoadBalancerManager';
+import { SqliteSessionStore } from './security/session-store';
 import { BackupSnapshotManager } from './services/backup/BackupSnapshotManager';
 import { MigrationManager } from './services/migration/MigrationManager';
 import { MonitoringService } from './services/monitoring/MonitoringService';
@@ -26,6 +28,8 @@ export interface HkvmRuntimeContext {
   instanceManager: InstanceManager;
   storageManager: StorageManager;
   networkManager: NetworkManager;
+  loadBalancerManager: LoadBalancerManager;
+  sessionStore: SqliteSessionStore;
   backupManager: BackupSnapshotManager;
   migrationManager: MigrationManager;
   monitoringService: MonitoringService;
@@ -87,6 +91,10 @@ export async function initializeUnifiedHkvmRuntime(
     networkManager
   );
   const monitoringService = new MonitoringService(db, nodeManager, instanceManager);
+  const loadBalancerManager = new LoadBalancerManager(db, nodeManager);
+  // Shared persistent session store (inventory + revocation; also backs the
+  // express-session parser wired in app.js against the same database file).
+  const sessionStore = new SqliteSessionStore(dbPath);
 
   if (
     process.env.TGVPANEL_DISABLE_BACKGROUND_POLLER !== 'true' &&
@@ -94,6 +102,8 @@ export async function initializeUnifiedHkvmRuntime(
   ) {
     monitoringService.startBackgroundLoop(60_000);
     backupManager.startScheduleLoop(60_000);
+    lxcAdapter.startExpirationLoop(300_000);
+    monitoringService.startTrafficLoop(300_000);
     lxcAdapter.healLocalContainersNetworking().catch((err) => {
       console.warn('[LXC Network Self-Heal]', err?.message || err);
     });
@@ -108,6 +118,8 @@ export async function initializeUnifiedHkvmRuntime(
     instanceManager,
     storageManager,
     networkManager,
+    loadBalancerManager,
+    sessionStore,
     backupManager,
     migrationManager,
     monitoringService,

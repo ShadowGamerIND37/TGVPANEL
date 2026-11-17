@@ -23,7 +23,7 @@ import {
   requirePrincipal,
   requireRole,
 } from '../../security/middleware';
-import { importHvmDatabase } from '../../db/hvm-importer';
+import { importHvmDatabase, dryRunHvmImport } from '../../db/hvm-importer';
 import { LifecycleAction, VirtualizationEngine } from '../../services/virtualization/VirtualizationAdapter';
 import { RESELLER_API_SCOPES, createResellerHmacAuthMiddleware, ResellerApiScope } from '../../security/reseller-api-auth';
 
@@ -655,11 +655,28 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   });
 
+  router.get('/instances/:engine/:id/traffic', async (req: Request, res: Response) => {
+    try {
+      const engine = pStr(req.params.engine) as VirtualizationEngine;
+      const refId = pInt(req.params.id);
+      if (engine !== 'kvm' && engine !== 'lxc') return res.status(400).json({ error: 'Unsupported instance engine.' });
+      await ctx.instanceManager.getAuthorizedInstance(req.principal!, engine, refId, true);
+      const hours = req.query.hours === undefined ? 24 : Number(req.query.hours);
+      const traffic = await ctx.monitoringService.getInstanceTraffic(engine, refId, hours);
+      res.json({ traffic });
+    } catch (err: any) {
+      res.status(err.statusCode || 500).json({ error: err.message });
+    }
+  });
+
   router.get('/instances/:engine/:id/telemetry', async (req: Request, res: Response) => {
     try {
       const engine = pStr(req.params.engine) as VirtualizationEngine;
       const refId = pInt(req.params.id);
       const telemetry = await ctx.instanceManager.getTelemetry(req.principal!, engine, refId);
+      // Record-on-read: persist the real measured sample to metrics_history so
+      // the instance metrics history endpoint returns honest data (best-effort).
+      await ctx.monitoringService.recordInstanceMetrics(engine, refId, telemetry).catch(() => undefined);
       res.json({ telemetry });
     } catch (err: any) {
       res.status(err.statusCode || 500).json({ error: err.message });
@@ -689,6 +706,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       const action = String(req.body?.action || '') as LifecycleAction;
       const allowed: LifecycleAction[] = [
         'start',
+        'shutdown',
         'stop',
         'restart',
         'freeze',
@@ -1249,6 +1267,32 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         res.json({ success: true, instance: updated });
       } catch (err: any) {
         res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/lxc/expirations/sweep',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const result = await ctx.lxcAdapter.sweepExpiredInstances();
+        // Notify each affected owner in-panel. Notification failures never
+        // mask the sweep result.
+        for (const item of result.suspended) {
+          await ctx.monitoringService
+            .createNotification({
+              userId: item.ownerUserId,
+              type: 'warning',
+              title: 'VPS expired and suspended',
+              message: `Your LXC VPS "${item.containerName}" expired on ${item.expiresAt} and was suspended automatically. Renew it to restore service.`,
+              data: { lxcId: item.lxcId, expiresAt: item.expiresAt },
+            })
+            .catch(() => undefined);
+        }
+        res.json({ success: true, ...result });
+      } catch (err: any) {
+        res.status(err.statusCode || 500).json({ error: err.message });
       }
     }
   );
@@ -1894,6 +1938,34 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // --- Storage Orphan Image Detection (report-only; never deletes) ---
+  router.get(
+    '/storage/orphans',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      try {
+        const orphans = await ctx.storageManager.listOrphanImages();
+        res.json({ orphans });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
+  // --- ISO Library Inventory (honest size + SHA-256 checksum) ---
+  router.get(
+    '/iso/inventory',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      try {
+        const isoFiles = await ctx.storageManager.listIsoFiles();
+        res.json({ isoFiles });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
   // --- Networking, Port Forwarding & Firewall ---
   router.get(
     '/network/pools',
@@ -2032,6 +2104,241 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     async (req: Request, res: Response) => {
       await ctx.networkManager.deleteFirewallRule(pInt(req.params.id));
       res.json({ success: true });
+    }
+  );
+
+  // Per-VPS firewall policy: list and create firewall rules scoped to a
+  // single instance. Enforcement targets that instance's concrete IPs on the
+  // host (local iptables or the node agent), not the whole node.
+  router.get(
+    '/instances/:engine/:id/firewall-rules',
+    async (req: Request, res: Response) => {
+      try {
+        const engine = req.params.engine === 'kvm' || req.params.engine === 'lxc' ? req.params.engine : null;
+        const refId = pInt(req.params.id);
+        if (!engine || !Number.isInteger(refId) || refId < 1) {
+          return res.status(400).json({ error: 'Valid engine (kvm|lxc) and a positive instance id are required.' });
+        }
+        await ctx.instanceManager.getAuthorizedInstance(req.principal!, engine, refId, true);
+        const rules = await ctx.networkManager.listInstanceFirewallRules(engine, refId);
+        res.json({ rules });
+      } catch (err: any) {
+        res.status(err.statusCode || 500).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/instances/:engine/:id/firewall-rules',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const engine = req.params.engine === 'kvm' || req.params.engine === 'lxc' ? req.params.engine : null;
+        const refId = pInt(req.params.id);
+        if (!engine || !Number.isInteger(refId) || refId < 1) {
+          return res.status(400).json({ error: 'Valid engine (kvm|lxc) and a positive instance id are required.' });
+        }
+        const rule = await ctx.networkManager.createFirewallRule({
+          ...req.body,
+          instanceType: engine,
+          instanceRefId: refId,
+        });
+        res.status(201).json({ rule });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  // --- Reusable per-VPS firewall rule profiles (security-group style) ---
+  router.get(
+    '/network/firewall-profiles',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const profiles = await ctx.networkManager.listFirewallProfiles();
+      res.json({ profiles });
+    }
+  );
+
+  router.get(
+    '/network/firewall-profiles/:id',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const profile = await ctx.networkManager.getFirewallProfile(pInt(req.params.id));
+      if (!profile) return res.status(404).json({ error: 'Firewall profile does not exist.' });
+      res.json({ profile });
+    }
+  );
+
+  router.post(
+    '/network/firewall-profiles',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const profile = await ctx.networkManager.createFirewallProfile({
+          ...req.body,
+          createdBy: req.principal?.userId ?? null,
+        });
+        res.status(201).json({ profile });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/network/firewall-profiles/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      const profile = await ctx.networkManager.getFirewallProfile(pInt(req.params.id));
+      if (!profile) return res.status(404).json({ error: 'Firewall profile does not exist.' });
+      await ctx.networkManager.deleteFirewallProfile(profile.id);
+      res.json({ success: true });
+    }
+  );
+
+  router.post(
+    '/network/firewall-profiles/:id/apply',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const result = await ctx.networkManager.applyFirewallProfileToInstance(pInt(req.params.id), {
+          ...req.body,
+        });
+        res.json(result);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  // --- HAProxy Load Balancers ---
+  router.get(
+    '/load-balancers',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const loadBalancers = await ctx.loadBalancerManager.listLoadBalancers();
+      res.json({ loadBalancers });
+    }
+  );
+
+  router.get(
+    '/load-balancers/:id',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const lb = await ctx.loadBalancerManager.getLoadBalancer(pInt(req.params.id));
+      if (!lb) return res.status(404).json({ error: 'Load balancer does not exist.' });
+      res.json({ loadBalancer: lb });
+    }
+  );
+
+  router.post(
+    '/load-balancers',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const lb = await ctx.loadBalancerManager.createLoadBalancer(req.body || {});
+        res.status(201).json({ loadBalancer: lb });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.put(
+    '/load-balancers/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const lb = await ctx.loadBalancerManager.updateLoadBalancer(pInt(req.params.id), req.body || {});
+        res.json({ loadBalancer: lb });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/load-balancers/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      const id = pInt(req.params.id);
+      const lb = await ctx.loadBalancerManager.getLoadBalancer(id);
+      if (!lb) return res.status(404).json({ error: 'Load balancer does not exist.' });
+      await ctx.loadBalancerManager.deleteLoadBalancer(id);
+      res.json({ success: true });
+    }
+  );
+
+  router.post(
+    '/load-balancers/:id/apply',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      const lb = await ctx.loadBalancerManager.getLoadBalancer(pInt(req.params.id));
+      if (!lb) return res.status(404).json({ error: 'Load balancer does not exist.' });
+      const mode = req.body?.mode === 'reload' || req.body?.mode === 'stop' ? req.body.mode : 'start';
+      const result = await ctx.loadBalancerManager.applyLoadBalancer(lb, mode);
+      res.json(result);
+    }
+  );
+
+  router.get(
+    '/load-balancers/:id/status',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const status = await ctx.loadBalancerManager.getLoadBalancerStatus(pInt(req.params.id));
+      if (!status) return res.status(404).json({ error: 'Load balancer does not exist.' });
+      res.json({ status });
+    }
+  );
+
+  // --- Session inventory & revocation (Phase 28) ---
+  router.get(
+    '/sessions',
+    requireRole(['admin', 'subadmin']),
+    async (_req: Request, res: Response) => {
+      try {
+        const store = ctx.sessionStore;
+        if (!store) return res.status(500).json({ error: 'Session store is not available.' });
+        const sessions = await store.listSessions();
+        res.json({ sessions });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/sessions/:sid',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const store = ctx.sessionStore;
+        if (!store) return res.status(500).json({ error: 'Session store is not available.' });
+        const revoked = await store.revokeSession(String(req.params.sid));
+        res.json({ success: true, revoked });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/sessions',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const store = ctx.sessionStore;
+        if (!store) return res.status(500).json({ error: 'Session store is not available.' });
+        const userId = Number(req.query.userId);
+        if (!Number.isInteger(userId) || userId < 1) {
+          return res.status(400).json({ error: 'A positive userId query parameter is required.' });
+        }
+        const revoked = await store.revokeUserSessions(userId);
+        res.json({ success: true, revoked });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
     }
   );
 
@@ -2246,6 +2553,54 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  router.post(
+    '/backups/:id/rehearse',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      try {
+        const out = await ctx.backupManager.rehearseRestore(pInt(req.params.id));
+        res.json(out);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/backups/:id/copy',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const backupId = pInt(req.params.id);
+        const targetNodeId = pInt(req.body?.targetNodeId);
+        if (!targetNodeId) {
+          return res.status(400).json({ error: 'targetNodeId is required.' });
+        }
+        const out = await ctx.backupManager.copyBackupToNode(
+          backupId,
+          targetNodeId,
+          req.principal!.userId
+        );
+        res.status(201).json({ copy: out });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.get(
+    '/backups/:id/copies',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      try {
+        const copies = await ctx.backupManager.listBackupCopies(pInt(req.params.id));
+        res.json({ copies });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
   router.post('/backups/:id/restore', async (req: Request, res: Response) => {
     try {
       const backupId = pInt(req.params.id);
@@ -2258,7 +2613,18 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         bkp.instance_type as VirtualizationEngine,
         Number(bkp.instance_ref_id)
       );
-      const out = await ctx.backupManager.restoreBackup(backupId, req.principal!.userId);
+      let copyId: number | undefined;
+      if (req.body?.copyId !== undefined) {
+        copyId = Number(req.body.copyId);
+        if (!Number.isInteger(copyId) || copyId <= 0) {
+          return res.status(400).json({ error: 'copyId must be a positive integer.' });
+        }
+      }
+      const out = await ctx.backupManager.restoreBackup(
+        backupId,
+        req.principal!.userId,
+        { copyId }
+      );
       return res.json({ success: true, ...out });
     } catch (err: any) {
       return res.status(err.statusCode || 500).json({ error: err.message });
@@ -2860,7 +3226,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
 
   router.get('/webhooks', requireRole(['admin']), async (_req: Request, res: Response) => {
     const webhooks = await ctx.db.all<any>(
-      `SELECT id, name, url, events, is_active, last_triggered_at, last_status_code, created_at FROM webhooks ORDER BY id DESC`
+      `SELECT id, name, url, events, is_active, last_triggered_at, last_status_code, last_error, failure_count, created_at FROM webhooks ORDER BY id DESC`
     );
     res.json({ webhooks });
   });
@@ -2979,6 +3345,20 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       try {
         const dbFilePath = path.resolve(String(req.body?.hvmDbPath || ''));
         const report = await importHvmDatabase(ctx.db, dbFilePath);
+        res.json({ success: true, report });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/database/import-hvm/dry-run',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const dbFilePath = path.resolve(String(req.body?.hvmDbPath || ''));
+        const report = await dryRunHvmImport(ctx.db, dbFilePath);
         res.json({ success: true, report });
       } catch (err: any) {
         res.status(400).json({ error: err.message });

@@ -29,11 +29,62 @@ declare global {
 /**
  * Sliding-window in-memory rate limiter for auth, terminal, and mutation endpoints.
  */
+
+/**
+ * Parse a comma-separated list of trusted reverse-proxy addresses (exact IPs or IPv4 CIDRs).
+ * Empty by default: the limiter then ignores client-supplied X-Forwarded-For and keys on the
+ * socket peer, which prevents header spoofing from bypassing limits on directly-exposed panels.
+ */
+export function parseTrustedProxies(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let value = 0;
+  for (const part of parts) {
+    const n = Number(part);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+    value = (value << 8) + n;
+  }
+  return value >>> 0;
+}
+
+/**
+ * Whether the immediate socket peer is a trusted reverse proxy. Exact IPs and IPv4 CIDRs are
+ * supported; IPv6 is matched exactly. A trusted peer's X-Forwarded-For is honored, otherwise the
+ * limiter uses the socket address so an attacker cannot spoof the header to bypass limits.
+ */
+export function isIpTrustedByProxies(socketIp: string, trustedProxies: string[]): boolean {
+  const peer = (socketIp || '').trim();
+  if (!peer || trustedProxies.length === 0) return false;
+  const peerV4 = ipv4ToInt(peer);
+  for (const entry of trustedProxies) {
+    if (entry === peer) return true;
+    if (peerV4 === null) continue;
+    const slash = entry.indexOf('/');
+    if (slash === -1) continue;
+    const [base, prefixRaw] = entry.split('/');
+    const baseV4 = ipv4ToInt(base);
+    const prefix = Number(prefixRaw);
+    if (baseV4 === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) continue;
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    if ((peerV4 & mask) === (baseV4 & mask)) return true;
+  }
+  return false;
+}
+
 export function createRateLimiter(options: {
   windowMs: number;
   max: number;
   keyPrefix: string;
   message?: string;
+  trustedProxies?: string[];
 }) {
   const buckets = new Map<string, { count: number; resetAt: number }>();
 
@@ -45,11 +96,16 @@ export function createRateLimiter(options: {
   }, Math.max(options.windowMs, 60_000));
   if (typeof cleanupTimer.unref === 'function') cleanupTimer.unref();
 
+  const trustedProxies = options.trustedProxies ?? parseTrustedProxies(process.env.TRUSTED_PROXIES);
+
   return (req: Request, res: Response, next: NextFunction) => {
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      'unknown';
+    const socketIp = req.socket.remoteAddress || 'unknown';
+    // Only honor X-Forwarded-For when the immediate peer is a configured reverse proxy;
+    // otherwise a client could spoof the header to bypass rate limits on a directly-exposed panel.
+    const forwardedIp = isIpTrustedByProxies(socketIp, trustedProxies)
+      ? (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
+      : undefined;
+    const ip = forwardedIp || socketIp;
     const key = `${options.keyPrefix}:${ip}`;
     const now = Date.now();
     const entry = buckets.get(key);
@@ -356,6 +412,14 @@ export const SafeValidators = {
       throw new Error(
         'Invalid instance/container name: must be 2-63 alphanumeric, dash, underscore, or dot characters.'
       );
+    }
+    return val;
+  },
+
+  loadBalancerName(name: unknown): string {
+    const val = String(name || '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,59}$/.test(val)) {
+      throw new Error('Invalid load balancer name: use 2-60 alphanumeric, dash, or underscore characters.');
     }
     return val;
   },

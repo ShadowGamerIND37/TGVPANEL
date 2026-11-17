@@ -1810,6 +1810,182 @@ export const MIGRATIONS: MigrationDefinition[] = [
       }
     },
   },
+  {
+    version: 23,
+    name: 'v023_backup_encryption_at_rest',
+    up: async (db) => {
+      // Marks local LXC backup archives that are encrypted on disk (AES-256-GCM).
+      // Defaults to 0 so existing and remote-node backups remain unencrypted and compatible.
+      await ensureColumn(db, 'container_backups', 'encrypted', 'INTEGER NOT NULL DEFAULT 0');
+      await ensureColumn(db, 'container_backups', 'encryption_alg', 'TEXT');
+    },
+  },
+  {
+    version: 24,
+    name: 'v024_backup_destination_copies',
+    up: async (db) => {
+      // Records copies of a backup archive placed on a destination node (backup
+      // replication/offload). Each copy is verified against the source checksum.
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS backup_copies (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           backup_id INTEGER NOT NULL,
+           target_node_id INTEGER NOT NULL,
+           file_path TEXT NOT NULL,
+           checksum_sha256 TEXT,
+           size_bytes INTEGER DEFAULT 0,
+           status TEXT NOT NULL DEFAULT 'completed',
+           encrypted INTEGER NOT NULL DEFAULT 0,
+           encryption_alg TEXT,
+           created_by INTEGER,
+           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+           FOREIGN KEY(backup_id) REFERENCES container_backups(id) ON DELETE CASCADE,
+           FOREIGN KEY(target_node_id) REFERENCES nodes(id)
+         )`
+      );
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_backup_copies_backup_id ON backup_copies(backup_id)`);
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_backup_copies_target_node ON backup_copies(target_node_id)`);
+    },
+  },
+  {
+    version: 25,
+    name: 'v025_kvm_snapshot_allocated_gb',
+    up: async (db) => {
+      // Records the actual on-disk (allocated) consumption of a KVM QCOW2 snapshot
+      // alongside the existing size_gb. size_gb remains the snapshot disk's virtual
+      // capacity; allocated_gb is the honest bytes consumed on the host. Existing
+      // rows keep NULL until re-measured; additive and backward-compatible.
+      await ensureColumn(db, 'vm_snapshots', 'allocated_gb', 'REAL');
+    },
+  },
+  {
+    version: 26,
+    name: 'v026_webhook_last_error',
+    up: async (db) => {
+      // Records the most recent webhook delivery failure (HTTP status or network
+      // error) alongside the existing last_status_code/failure_count columns so
+      // operators can see why a webhook is not delivering. Cleared on success.
+      // Additive and backward-compatible.
+      await ensureColumn(db, 'webhooks', 'last_error', 'TEXT');
+    },
+  },
+  {
+    version: 27,
+    name: 'v027_firewall_profiles',
+    up: async (db) => {
+      // Reusable per-VPS firewall policy profiles (security-group style).
+      // A profile holds an ordered list of rules; applying a profile to an
+      // instance materializes instance-scoped firewall_rules rows enforced
+      // against that instance's IPs (Phase 24 enforcement path).
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS firewall_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT,
+          created_by INTEGER,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL
+        )`
+      );
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS firewall_profile_rules (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id INTEGER NOT NULL,
+          position INTEGER NOT NULL DEFAULT 0,
+          direction TEXT NOT NULL DEFAULT 'in',
+          action TEXT NOT NULL DEFAULT 'ACCEPT',
+          protocol TEXT NOT NULL DEFAULT 'tcp',
+          source_cidr TEXT,
+          dest_port TEXT,
+          priority INTEGER DEFAULT 100,
+          comment TEXT,
+          FOREIGN KEY(profile_id) REFERENCES firewall_profiles(id) ON DELETE CASCADE
+        )`
+      );
+    },
+  },
+  {
+    version: 28,
+    name: 'v028_instance_traffic',
+    up: async (db) => {
+      // Cumulative per-instance bandwidth ledger. A background loop reads each
+      // instance's real network counters and accumulates the delta since the
+      // last sample, so totals are measured traffic, not estimates.
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS instance_traffic (
+          instance_type TEXT NOT NULL,
+          instance_id INTEGER NOT NULL,
+          rx_bytes INTEGER NOT NULL DEFAULT 0,
+          tx_bytes INTEGER NOT NULL DEFAULT 0,
+          last_rx_bytes INTEGER,
+          last_tx_bytes INTEGER,
+          last_sampled_at DATETIME,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (instance_type, instance_id)
+        )`
+      );
+    },
+  },
+  {
+    version: 29,
+    name: 'v029_load_balancers',
+    up: async (db) => {
+      // HAProxy load balancer registry: frontends plus their backend pools.
+      // The panel renders the HAProxy config from these rows, validates it
+      // with `haproxy -c`, and starts/reloads the process on the target node.
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS load_balancers (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          node_id INTEGER NOT NULL DEFAULT 1,
+          listen_ip TEXT NOT NULL DEFAULT '0.0.0.0',
+          listen_port INTEGER NOT NULL,
+          protocol TEXT NOT NULL DEFAULT 'tcp',
+          algorithm TEXT NOT NULL DEFAULT 'roundrobin',
+          enabled INTEGER DEFAULT 1,
+          last_applied_at DATETIME,
+          last_validated_at DATETIME,
+          last_error TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+        )`
+      );
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS load_balancer_backends (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          load_balancer_id INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          target TEXT NOT NULL,
+          port INTEGER NOT NULL,
+          weight INTEGER DEFAULT 1,
+          enabled INTEGER DEFAULT 1,
+          position INTEGER NOT NULL DEFAULT 0,
+          FOREIGN KEY(load_balancer_id) REFERENCES load_balancers(id) ON DELETE CASCADE
+        )`
+      );
+    },
+  },
+  {
+    version: 30,
+    name: 'v030_sessions',
+    up: async (db) => {
+      // Persistent panel sessions so administrators can inventory and revoke
+      // active logins (the default express-session store is in-memory only).
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS sessions (
+          sid TEXT PRIMARY KEY,
+          data TEXT NOT NULL,
+          expires_at INTEGER NOT NULL,
+          created_at INTEGER NOT NULL,
+          last_seen_at INTEGER,
+          user_id INTEGER,
+          ip TEXT,
+          user_agent TEXT
+        )`
+      );
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`);
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

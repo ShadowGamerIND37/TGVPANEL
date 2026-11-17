@@ -417,7 +417,7 @@ export class InstanceManager {
     force = false
   ): Promise<InstanceTask> {
     const allowed: LifecycleAction[] = [
-      'start', 'stop', 'restart', 'freeze', 'unfreeze', 'suspend', 'unsuspend', 'delete',
+      'start', 'shutdown', 'stop', 'restart', 'freeze', 'unfreeze', 'suspend', 'unsuspend', 'delete',
     ];
     if (!allowed.includes(action)) {
       throw Object.assign(new Error(`Invalid lifecycle action: ${action}`), { statusCode: 400 });
@@ -498,6 +498,18 @@ export class InstanceManager {
     refId: number
   ): Promise<InstanceTelemetry> {
     await this.getAuthorizedInstance(principal, engine, refId);
+    return this.virt.getAdapter(engine).getTelemetry(refId);
+  }
+
+  /**
+   * Internal telemetry collection without a request principal. Used by the
+   * background traffic-accounting loop (monitoring service); never exposed
+   * through customer-facing routes.
+   */
+  public async collectInstanceTelemetry(
+    engine: VirtualizationEngine,
+    refId: number
+  ): Promise<InstanceTelemetry> {
     return this.virt.getAdapter(engine).getTelemetry(refId);
   }
 

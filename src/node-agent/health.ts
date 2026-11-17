@@ -19,6 +19,45 @@ export const AGENT_VERSION = '4.0.0';
 
 let cachedCapabilities: { data: HostCapabilities; expiresAt: number } | null = null;
 
+export function buildCapabilityWarnings(capabilities: HostCapabilities): string[] {
+  const warnings: string[] = [];
+
+  if (!capabilities.kvmAvailable && !capabilities.lxcAvailable) {
+    warnings.push(
+      'Neither QEMU/KVM nor LXC userland utilities are installed on this host. Management plane is online in controller-only mode until hypervisor packages are installed.'
+    );
+    return warnings;
+  }
+
+  if (capabilities.qemuSystemAvailable && !capabilities.kvmDevicePresent) {
+    warnings.push(
+      '/dev/kvm is unavailable on this host; QEMU instances will fall back to TCG software emulation.'
+    );
+  }
+  if (capabilities.qemuSystemAvailable && capabilities.qemuArchitectureMismatch) {
+    warnings.push(
+      'The selected QEMU system binary does not match this host CPU architecture. KVM guest startup may fail until a matching QEMU package is installed.'
+    );
+  }
+  if (capabilities.lxcAvailable && capabilities.lxcfsAvailable && !capabilities.lxcfsMounted) {
+    warnings.push(
+      'lxcfs is installed but not mounted at /var/lib/lxcfs. LXC guest /proc resource telemetry may not reflect per-container cgroup limits.'
+    );
+  }
+  if (capabilities.lxcAvailable && capabilities.lxcfsMounted && !capabilities.lxcfsAvailable) {
+    warnings.push(
+      'An lxcfs mount was detected but the lxcfs binary is not installed. LXC guest /proc resource telemetry may be inaccurate.'
+    );
+  }
+  if (capabilities.lxcAvailable && capabilities.cgroupVersion !== 2) {
+    warnings.push(
+      'LXC is available on a cgroup v1 or undetected-cgroup host. The native cgroup v2 delegation path used for per-container RAM/CPU enforcement may be unavailable.'
+    );
+  }
+
+  return warnings;
+}
+
 export async function getNodeHealthReport(
   forceRefresh = false,
   options?: { interactiveShellEnabled?: boolean }
@@ -30,24 +69,7 @@ export async function getNodeHealthReport(
   }
 
   const capabilities = cachedCapabilities.data;
-  const warnings: string[] = [];
-
-  if (!capabilities.kvmAvailable && !capabilities.lxcAvailable) {
-    warnings.push(
-      'Neither QEMU/KVM nor LXC userland utilities are installed on this host. Management plane is online in controller-only mode until hypervisor packages are installed.'
-    );
-  } else {
-    if (capabilities.qemuSystemAvailable && !capabilities.kvmDevicePresent) {
-      warnings.push(
-        '/dev/kvm is unavailable on this host; QEMU instances will fall back to TCG software emulation.'
-      );
-    }
-    if (capabilities.qemuSystemAvailable && capabilities.qemuArchitectureMismatch) {
-      warnings.push(
-        'The selected QEMU system binary does not match this host CPU architecture. KVM guest startup may fail until a matching QEMU package is installed.'
-      );
-    }
-  }
+  const warnings = buildCapabilityWarnings(capabilities);
 
   const interactiveShellEnabled =
     options?.interactiveShellEnabled ??

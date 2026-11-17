@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { UnifiedDatabase } from '../../db/database';
 import { NodeManager } from '../nodes/NodeClient';
@@ -184,6 +185,171 @@ export class StorageManager {
       throw new Error('Cannot delete a storage pool that still contains active volumes.');
     }
     await this.db.run(`DELETE FROM storage_pools WHERE id = ?`, [poolId]);
+  }
+
+  /**
+   * Lists the ISO images available in the managed ISO directory with honest
+   * file size and SHA-256 checksum. The checksum is computed from the real file
+   * contents (reusing the node-agent checksum helper) so operators can verify
+   * ISO integrity; it is null only when the checksum cannot be computed.
+   */
+  /**
+   * Report-only orphan image detection: scans **local** storage pool directories for
+   * disk image files (qcow2/raw/img/vmdk) that are not referenced by any live record —
+   * KVM VMs (`vms.disk_file` or `extra_disks_json` disk paths), LXC container rootfs
+   * directories (`lxc_instances.rootfs_path`, so files inside them are not flagged) or
+   * LXC OS templates (`lxc_templates.file_path`). This NEVER deletes or modifies
+   * anything; it only reports candidates so an operator can reconcile them
+   * deliberately. Remote pools are skipped (no agent-side directory listing is
+   * implemented), and pools whose path does not exist yield no entries.
+   */
+  public async listOrphanImages(): Promise<
+    Array<{
+      poolId: number;
+      poolName: string;
+      poolPath: string;
+      filePath: string;
+      sizeBytes: number;
+      reason: string;
+    }>
+  > {
+    const IMAGE_EXTENSIONS = new Set(['.qcow2', '.qcow', '.qcow3', '.raw', '.img', '.vmdk']);
+
+    // Collect referenced files and referenced directories from live instance records.
+    const referencedFiles = new Set<string>();
+    const referencedDirs: string[] = [];
+
+    const vms = await this.db.all<any>(`SELECT disk_file, extra_disks_json FROM vms`);
+    for (const vm of vms) {
+      if (vm.disk_file) {
+        referencedFiles.add(path.resolve(String(vm.disk_file)));
+      }
+      if (vm.extra_disks_json) {
+        try {
+          const parsed = JSON.parse(String(vm.extra_disks_json));
+          if (Array.isArray(parsed)) {
+            for (const dev of parsed) {
+              const devPath =
+                dev && typeof dev === 'object' && typeof dev.path === 'string'
+                  ? dev.path
+                  : typeof dev === 'string'
+                    ? dev
+                    : null;
+              if (devPath) referencedFiles.add(path.resolve(devPath));
+            }
+          }
+        } catch {
+          // Skip malformed device JSON; it must not crash the scan.
+        }
+      }
+    }
+
+    const lxcRows = await this.db.all<any>(
+      `SELECT rootfs_path FROM lxc_instances WHERE rootfs_path IS NOT NULL AND rootfs_path != ''`
+    );
+    for (const row of lxcRows) {
+      try {
+        referencedDirs.push(fs.realpathSync(String(row.rootfs_path)));
+      } catch {
+        // Missing rootfs directory: ignore rather than flag its contents.
+      }
+    }
+
+    const templateRows = await this.db.all<any>(
+      `SELECT file_path FROM lxc_templates WHERE file_path IS NOT NULL AND file_path != ''`
+    );
+    for (const row of templateRows) {
+      if (row.file_path) referencedFiles.add(path.resolve(String(row.file_path)));
+    }
+
+    const orphans: Array<{
+      poolId: number;
+      poolName: string;
+      poolPath: string;
+      filePath: string;
+      sizeBytes: number;
+      reason: string;
+    }> = [];
+
+    const pools = await this.listPools();
+    for (const pool of pools) {
+      const isLocal = Number(pool.node_is_local || 0) === 1 || Number(pool.node_id) === 1;
+      if (!isLocal || !pool.path) continue;
+      const poolPath = path.resolve(String(pool.path));
+      if (!fs.existsSync(poolPath)) continue;
+
+      for (const file of this.walkImageFiles(poolPath, IMAGE_EXTENSIONS)) {
+        if (referencedFiles.has(file)) continue;
+        if (referencedDirs.some((dir) => file === dir || file.startsWith(`${dir}${path.sep}`))) continue;
+        let sizeBytes = 0;
+        try {
+          sizeBytes = fs.statSync(file).size;
+        } catch {
+          continue;
+        }
+        orphans.push({
+          poolId: Number(pool.id),
+          poolName: String(pool.name),
+          poolPath,
+          filePath: file,
+          sizeBytes,
+          reason: 'Disk image is not referenced by any KVM VM, LXC container, or OS template.',
+        });
+      }
+    }
+
+    orphans.sort((a, b) => a.poolId - b.poolId || a.filePath.localeCompare(b.filePath));
+    return orphans;
+  }
+
+  /** Recursively collects image files under `rootDir`, skipping hidden entries. */
+  private walkImageFiles(rootDir: string, extensions: Set<string>): string[] {
+    const out: string[] = [];
+    const stack: string[] = [rootDir];
+    while (stack.length > 0) {
+      const dir = stack.pop()!;
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(full);
+        } else if (entry.isFile() && extensions.has(path.extname(entry.name).toLowerCase())) {
+          out.push(path.resolve(full));
+        }
+      }
+    }
+    return out;
+  }
+
+  public async listIsoFiles(): Promise<Array<{ filename: string; sizeBytes: number; sha256: string | null }>> {
+    const isoDir = path.join(os.homedir(), 'vms', 'iso');
+    let files: string[];
+    try {
+      files = fs.readdirSync(isoDir).filter((f) => f.toLowerCase().endsWith('.iso'));
+    } catch {
+      return [];
+    }
+    const out: Array<{ filename: string; sizeBytes: number; sha256: string | null }> = [];
+    for (const file of files.sort()) {
+      const full = path.join(isoDir, file);
+      try {
+        const stat = fs.statSync(full);
+        if (!stat.isFile()) continue;
+        const sha256 = this.nodeManager?.localRuntime?.snapshotManager
+          ? await this.nodeManager.localRuntime.snapshotManager.computeFileSha256(full).catch(() => null)
+          : null;
+        out.push({ filename: file, sizeBytes: stat.size, sha256 });
+      } catch {
+        // Skip files that disappear or cannot be stat'ed between listing and inspection.
+      }
+    }
+    return out;
   }
 
   public async verifyCapacityAvailable(

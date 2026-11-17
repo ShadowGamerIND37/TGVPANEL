@@ -284,4 +284,43 @@ export class LxcSnapshotAndBackupManager {
       stream.on('end', () => resolve(hash.digest('hex')));
     });
   }
+
+  /**
+   * Structurally inspects a tar.gz archive WITHOUT extracting it, for restore
+   * rehearsal. Lists entries via the allowlisted `tar -tzf` and reports the entry
+   * count, the top-level directory (the container name captured at backup time),
+   * and whether the archive is a valid, readable gzip tar. Does not modify the
+   * archive. Throws if the archive is missing or not a valid tar.gz.
+   */
+  public async inspectTarArchive(archivePath: string): Promise<{
+    valid: boolean;
+    entryCount: number;
+    topLevelDir: string | null;
+    sizeBytes: number;
+  }> {
+    const resolved = path.resolve(archivePath);
+    if (!fs.existsSync(resolved)) {
+      throw new Error(`Backup archive not found: ${resolved}`);
+    }
+    const st = fs.statSync(resolved);
+    const tarRes = await runAllowlistedCommand('tar', ['-tzf', resolved], {
+      timeoutMs: 300_000,
+      asRoot: true,
+    });
+    if (tarRes.exitCode !== 0) {
+      throw new Error(`Archive is not a readable tar.gz: ${tarRes.stderr || tarRes.stdout}`);
+    }
+    const entries = tarRes.stdout
+      .split('\n')
+      .map((line) => line.replace(/\/$/, '').trim())
+      .filter((line) => line.length > 0);
+    let topLevelDir: string | null = null;
+    if (entries.length > 0) {
+      const first = entries[0];
+      const slash = first.indexOf('/');
+      // First entry is either "<container>/" (dir) or "<container>/<child>".
+      topLevelDir = slash > 0 ? first.slice(0, slash) : first;
+    }
+    return { valid: true, entryCount: entries.length, topLevelDir, sizeBytes: st.size };
+  }
 }

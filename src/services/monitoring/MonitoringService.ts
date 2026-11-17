@@ -16,6 +16,7 @@ export class MonitoringService {
   private instanceManager: InstanceManager;
   private pollTimer: NodeJS.Timeout | null = null;
   private isPolling = false;
+  private trafficTimer: NodeJS.Timeout | null = null;
 
   constructor(
     db: UnifiedDatabase,
@@ -119,6 +120,173 @@ export class MonitoringService {
        LIMIT 500`,
       [targetType, targetId, `-${safeHours} hours`]
     );
+  }
+
+  /**
+   * Persists an instance telemetry sample to metrics_history (record-on-read).
+   * This builds honest instance (kvm/lxc) metrics history from real measured
+   * samples without a heavy background sweep of every instance. Failures are
+   * swallowed so a telemetry read never fails because history recording failed.
+   */
+  public async recordInstanceMetrics(
+    engine: 'kvm' | 'lxc',
+    targetId: number,
+    sample: {
+      cpuPercent: number;
+      ramUsedMb: number;
+      ramTotalMb: number;
+      diskUsedGb: number;
+      diskTotalGb: number;
+      netRxBytes: number | null;
+      netTxBytes: number | null;
+    }
+  ): Promise<void> {
+    await this.db.run(
+      `INSERT INTO metrics_history
+         (target_type, target_id, cpu_percent, ram_used_mb, ram_total_mb, disk_used_gb, disk_total_gb, net_rx_bytes, net_tx_bytes, load_avg_1)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      [
+        engine,
+        targetId,
+        sample.cpuPercent,
+        sample.ramUsedMb,
+        sample.ramTotalMb,
+        sample.diskUsedGb,
+        sample.diskTotalGb,
+        sample.netRxBytes,
+        sample.netTxBytes,
+      ]
+    );
+  }
+
+  /**
+   * Reads every instance's real network counters and accumulates the delta
+   * since the last sample into the instance_traffic ledger. Instances whose
+   * telemetry cannot be read are skipped (their ledger keeps its last value)
+   * so accounting never fabricates traffic.
+   */
+  public async accumulateInstanceTraffic(): Promise<{ sampled: number; skipped: number }> {
+    const instances = await this.db.all<any>(
+      `SELECT engine, ref_id FROM instances WHERE status IN ('running', 'frozen')`
+    );
+    let sampled = 0;
+    let skipped = 0;
+    for (const inst of instances) {
+      try {
+        const telemetry = await this.instanceManager.collectInstanceTelemetry(
+          inst.engine as 'kvm' | 'lxc',
+          Number(inst.ref_id)
+        );
+        const rx = telemetry.netRxBytes;
+        const tx = telemetry.netTxBytes;
+        if (typeof rx !== 'number' || typeof tx !== 'number') {
+          skipped++;
+          continue;
+        }
+        const existing = await this.db.get<any>(
+          `SELECT rx_bytes, tx_bytes, last_rx_bytes, last_tx_bytes
+           FROM instance_traffic WHERE instance_type = ? AND instance_id = ?`,
+          [inst.engine, Number(inst.ref_id)]
+        );
+        // First sample establishes the baseline (pre-accounting counter
+        // readings are not counted as usage); later samples accumulate only
+        // the positive delta, so a counter reset (reboot/rollover) never
+        // inflates or deflates the ledger.
+        const hasBaseline = existing && existing.last_rx_bytes !== null && existing.last_rx_bytes !== undefined;
+        const deltaRx = hasBaseline ? Math.max(0, rx - Number(existing.last_rx_bytes)) : 0;
+        const deltaTx = hasBaseline ? Math.max(0, tx - Number(existing.last_tx_bytes)) : 0;
+        const totalRx = Number(existing?.rx_bytes || 0) + deltaRx;
+        const totalTx = Number(existing?.tx_bytes || 0) + deltaTx;
+        await this.db.run(
+          `INSERT INTO instance_traffic
+             (instance_type, instance_id, rx_bytes, tx_bytes, last_rx_bytes, last_tx_bytes, last_sampled_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+           ON CONFLICT(instance_type, instance_id) DO UPDATE SET
+             rx_bytes = excluded.rx_bytes,
+             tx_bytes = excluded.tx_bytes,
+             last_rx_bytes = excluded.last_rx_bytes,
+             last_tx_bytes = excluded.last_tx_bytes,
+             last_sampled_at = excluded.last_sampled_at,
+             updated_at = excluded.updated_at`,
+          [inst.engine, Number(inst.ref_id), totalRx, totalTx, rx, tx]
+        );
+        sampled++;
+      } catch {
+        skipped++;
+      }
+    }
+    return { sampled, skipped };
+  }
+
+  /**
+   * Cumulative bandwidth totals from the ledger plus measured period usage
+   * computed from real metrics_history samples (delta between consecutive
+   * samples; honest nulls where no samples exist).
+   */
+  public async getInstanceTraffic(
+    engine: 'kvm' | 'lxc',
+    refId: number,
+    hours = 24
+  ) {
+    const safeHours = Math.min(168, Math.max(1, Number(hours || 24)));
+    const ledger = await this.db.get<any>(
+      `SELECT rx_bytes, tx_bytes, last_sampled_at, updated_at
+       FROM instance_traffic WHERE instance_type = ? AND instance_id = ?`,
+      [engine, refId]
+    );
+    const samples = await this.db.all<any>(
+      `SELECT net_rx_bytes, net_tx_bytes, recorded_at
+       FROM metrics_history
+       WHERE target_type = ? AND target_id = ?
+         AND datetime(recorded_at) >= datetime('now', ?)
+       ORDER BY id ASC`,
+      [engine, refId, `-${safeHours} hours`]
+    );
+    let periodRx = 0;
+    let periodTx = 0;
+    let prevRx: number | null = null;
+    let prevTx: number | null = null;
+    for (const sample of samples) {
+      const rx = sample.net_rx_bytes === null || sample.net_rx_bytes === undefined ? null : Number(sample.net_rx_bytes);
+      const tx = sample.net_tx_bytes === null || sample.net_tx_bytes === undefined ? null : Number(sample.net_tx_bytes);
+      if (rx !== null && prevRx !== null) periodRx += Math.max(0, rx - prevRx);
+      if (tx !== null && prevTx !== null) periodTx += Math.max(0, tx - prevTx);
+      if (rx !== null) prevRx = rx;
+      if (tx !== null) prevTx = tx;
+    }
+    return {
+      rxBytes: Number(ledger?.rx_bytes || 0),
+      txBytes: Number(ledger?.tx_bytes || 0),
+      lastSampledAt: ledger?.last_sampled_at || null,
+      updatedAt: ledger?.updated_at || null,
+      periodHours: safeHours,
+      periodRxBytes: periodRx,
+      periodTxBytes: periodTx,
+      sampleCount: samples.length,
+    };
+  }
+
+  public startTrafficLoop(intervalMs = 300_000): void {
+    if (this.trafficTimer) return;
+    const tick = async () => {
+      try {
+        await this.accumulateInstanceTraffic().catch(() => undefined);
+      } finally {
+        this.trafficTimer = setTimeout(tick, intervalMs);
+      }
+    };
+    // Small boot delay so the panel finishes starting before the first sweep.
+    this.trafficTimer = setTimeout(tick, 5_000);
+    if (typeof this.trafficTimer === 'object' && this.trafficTimer && 'unref' in this.trafficTimer) {
+      (this.trafficTimer as any).unref?.();
+    }
+  }
+
+  public stopTrafficLoop(): void {
+    if (this.trafficTimer) {
+      clearTimeout(this.trafficTimer);
+      this.trafficTimer = null;
+    }
   }
 
   private async evaluateAlertRules(
@@ -252,13 +420,54 @@ export class MonitoringService {
     }
   }
 
+  /** Maximum delivery attempts (1 initial + 2 retries) for a webhook event. */
+  private static readonly WEBHOOK_MAX_ATTEMPTS = 3;
+
+  /** Base backoff between attempts (ms); grows linearly with the failed attempt number. */
+  private static readonly WEBHOOK_RETRY_BASE_MS = 2000;
+
+  /**
+   * Delivers a webhook POST with bounded retries. A delivery that receives a
+   * non-2xx response or fails at the network level is retried with linear
+   * backoff (2s, 4s) up to WEBHOOK_MAX_ATTEMPTS total attempts. Each attempt
+   * updates last_triggered_at/last_status_code/failure_count; last_error
+   * records the failure reason and is cleared on success. Delivery is
+   * non-blocking: the returned promise settles after the attempt decision,
+   * and retries continue in the background.
+   */
   private postWebhookNonBlocking(
     hookId: number,
     urlStr: string,
     bodyStr: string,
-    signatureHex: string
+    signatureHex: string,
+    attempt = 1
   ): Promise<void> {
     return new Promise((resolve) => {
+      const recordFailure = (errorText: string) => {
+        void this.db
+          .run(
+            `UPDATE webhooks
+                SET last_triggered_at = datetime('now'),
+                    last_status_code = 0,
+                    last_error = ?,
+                    failure_count = failure_count + 1
+              WHERE id = ?`,
+            [errorText, hookId]
+          )
+          .then(() => {
+            if (attempt >= MonitoringService.WEBHOOK_MAX_ATTEMPTS) {
+              resolve();
+              return;
+            }
+            const delay = MonitoringService.WEBHOOK_RETRY_BASE_MS * attempt;
+            setTimeout(() => {
+              this.postWebhookNonBlocking(hookId, urlStr, bodyStr, signatureHex, attempt + 1)
+                .catch(() => undefined);
+            }, delay);
+            resolve();
+          });
+      };
+
       try {
         const u = new URL(urlStr);
         const isHttps = u.protocol === 'https:';
@@ -279,23 +488,33 @@ export class MonitoringService {
           },
           (res) => {
             res.resume();
-            this.db
-              .run(
-                `UPDATE webhooks SET last_triggered_at = datetime('now'), last_status_code = ? WHERE id = ?`,
-                [res.statusCode || 0, hookId]
-              )
-              .finally(() => resolve());
+            const code = res.statusCode || 0;
+            if (code >= 200 && code < 300) {
+              void this.db
+                .run(
+                  `UPDATE webhooks
+                      SET last_triggered_at = datetime('now'),
+                          last_status_code = ?,
+                          last_error = NULL,
+                          failure_count = 0
+                    WHERE id = ?`,
+                  [code, hookId]
+                )
+                .finally(() => resolve());
+            } else {
+              recordFailure(`HTTP ${code}`);
+            }
           }
         );
-        req.on('error', () => resolve());
+        req.on('error', (err: any) => recordFailure(String(err?.message || err)));
         req.on('timeout', () => {
           req.destroy();
-          resolve();
+          recordFailure('Request timed out');
         });
         req.write(bodyStr);
         req.end();
-      } catch {
-        resolve();
+      } catch (err: any) {
+        recordFailure(String(err?.message || err));
       }
     });
   }

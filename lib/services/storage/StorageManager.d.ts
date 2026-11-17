@@ -22,6 +22,37 @@ export declare class StorageManager {
         overcommitRatio?: number;
     }): Promise<any>;
     deletePool(poolId: number): Promise<void>;
+    /**
+     * Lists the ISO images available in the managed ISO directory with honest
+     * file size and SHA-256 checksum. The checksum is computed from the real file
+     * contents (reusing the node-agent checksum helper) so operators can verify
+     * ISO integrity; it is null only when the checksum cannot be computed.
+     */
+    /**
+     * Report-only orphan image detection: scans **local** storage pool directories for
+     * disk image files (qcow2/raw/img/vmdk) that are not referenced by any live record —
+     * KVM VMs (`vms.disk_file` or `extra_disks_json` disk paths), LXC container rootfs
+     * directories (`lxc_instances.rootfs_path`, so files inside them are not flagged) or
+     * LXC OS templates (`lxc_templates.file_path`). This NEVER deletes or modifies
+     * anything; it only reports candidates so an operator can reconcile them
+     * deliberately. Remote pools are skipped (no agent-side directory listing is
+     * implemented), and pools whose path does not exist yield no entries.
+     */
+    listOrphanImages(): Promise<Array<{
+        poolId: number;
+        poolName: string;
+        poolPath: string;
+        filePath: string;
+        sizeBytes: number;
+        reason: string;
+    }>>;
+    /** Recursively collects image files under `rootDir`, skipping hidden entries. */
+    private walkImageFiles;
+    listIsoFiles(): Promise<Array<{
+        filename: string;
+        sizeBytes: number;
+        sha256: string | null;
+    }>>;
     verifyCapacityAvailable(nodeId: number, engine: 'kvm' | 'lxc', requestedGb: number): Promise<{
         ok: boolean;
         reason?: string;

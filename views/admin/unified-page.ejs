@@ -770,10 +770,10 @@
           <thead>
             <tr>
               <th><input type="checkbox" id="chkAll" onclick="document.querySelectorAll('.inst-chk').forEach(c=>c.checked=this.checked)"></th>
-              <th>Engine</th><th>Name</th><th>Owner</th><th>Node</th><th>Specs</th><th>IP</th><th>Status</th><th>Actions</th>
+              <th>Engine</th><th>Name</th><th>Owner</th><th>Node</th><th>Specs</th><th>IP</th><th>Status</th><th>Traffic</th><th>Actions</th>
             </tr>
           </thead>
-          <tbody id="instTableBody"><tr><td colspan="9">Loading instances...</td></tr></tbody>
+          <tbody id="instTableBody"><tr><td colspan="10">Loading instances...</td></tr></tbody>
         </table>
       </div>
       <% } %>
@@ -1840,6 +1840,7 @@
         <h3>Add Firewall Rule</h3>
         <form onsubmit="submitFwRule(event)" class="v3-form-grid">
           <div class="v3-field"><label>Node</label><select id="fwNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select></div>
+          <div class="v3-field"><label>Target VPS (Optional)</label><select id="fwInstance"><option value="">(node-wide)</option></select></div>
           <div class="v3-field"><label>Direction</label><select id="fwDir"><option value="in">Ingress (IN)</option><option value="out">Egress (OUT)</option></select></div>
           <div class="v3-field"><label>Action</label><select id="fwAct"><option value="ACCEPT">ACCEPT</option><option value="DROP">DROP</option><option value="REJECT">REJECT</option></select></div>
           <div class="v3-field"><label>Protocol</label><select id="fwProto"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option><option value="all">ALL</option></select></div>
@@ -1851,8 +1852,57 @@
       </div>
       <div class="v3-card v3-table-wrap">
         <table class="v3-table">
-          <thead><tr><th>ID</th><th>Node</th><th>Direction</th><th>Action</th><th>Proto</th><th>Source</th><th>Port</th><th>Comment</th><th>Delete</th></tr></thead>
+          <thead><tr><th>ID</th><th>Node</th><th>Target VPS</th><th>Direction</th><th>Action</th><th>Proto</th><th>Source</th><th>Port</th><th>Comment</th><th>Delete</th></tr></thead>
           <tbody id="fwBody"></tbody>
+        </table>
+      </div>
+      <div class="v3-card">
+        <h3>Reusable VPS Firewall Profiles</h3>
+        <p style="margin:0 0 12px;color:var(--text-muted);font-size:12px;">Apply a profile to a VPS to materialize its rules as instance-scoped rules enforced against that VPS's IPs.</p>
+        <form onsubmit="submitFwProfile(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Profile Name</label><input id="fwpName" placeholder="web-standard"></div>
+          <div class="v3-field"><label>Description</label><input id="fwpDesc" placeholder="Optional"></div>
+          <div class="v3-field" style="grid-column:1/-1;"><label>Rules</label><div id="fwpRules"></div>
+            <button type="button" class="btn btn-outline" onclick="addFwProfileRule()" style="margin-top:8px;">+ Add rule</button>
+          </div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Profile</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Profile</th><th>Rules</th><th>Apply to VPS</th><th>Delete</th></tr></thead>
+          <tbody id="fwpBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
+      <!-- SECTION: LOAD BALANCERS -->
+      <% if (section === 'load-balancers') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">HAProxy Load Balancers</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Frontends with backend pools, enforced with validated HAProxy configs on the target node.</p>
+        </div>
+      </div>
+      <div class="v3-card">
+        <h3>Add Load Balancer</h3>
+        <form onsubmit="submitLoadBalancer(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Name</label><input id="lbName" placeholder="web-frontend"></div>
+          <div class="v3-field"><label>Node</label><select id="lbNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select></div>
+          <div class="v3-field"><label>Listen IP</label><input id="lbIp" placeholder="0.0.0.0"></div>
+          <div class="v3-field"><label>Listen Port</label><input id="lbPort" type="number" min="1" max="65535" placeholder="80"></div>
+          <div class="v3-field"><label>Protocol</label><select id="lbProto"><option value="tcp">TCP</option><option value="http">HTTP</option></select></div>
+          <div class="v3-field"><label>Algorithm</label><select id="lbAlgo"><option value="roundrobin">Round Robin</option><option value="leastconn">Least Connections</option><option value="source">Source</option></select></div>
+          <div class="v3-field" style="grid-column:1/-1;"><label>Backends</label><div id="lbBackends"></div>
+            <button type="button" class="btn btn-outline" onclick="addLbBackendRow()" style="margin-top:8px;">+ Add backend</button>
+          </div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Load Balancer</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Name</th><th>Listen</th><th>Mode</th><th>Backends</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="lbBody"></tbody>
         </table>
       </div>
       <% } %>
@@ -2168,6 +2218,25 @@
         <div class="v3-table-wrap" style="margin-top:14px;">
           <table class="v3-table"><thead><tr><th>Name</th><th>URL</th><th>Events</th><th>Last HTTP Status</th><th>Delete</th></tr></thead><tbody id="whBody"></tbody></table>
         </div>
+      </div>
+      <% } %>
+
+      <!-- SECTION: SESSIONS -->
+      <% if (section === 'sessions') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Active Sessions</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Persisted panel logins. Revoke a session to force immediate logout, or clear all sessions for a user.</p>
+        </div>
+        <div class="v3-btn-row">
+          <button class="btn btn-outline" onclick="loadSessions()">Refresh</button>
+        </div>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>User</th><th>Session ID</th><th>Created</th><th>Last seen</th><th>IP</th><th>User agent</th><th>Actions</th></tr></thead>
+          <tbody id="sessionsBody"></tbody>
+        </table>
       </div>
       <% } %>
 
@@ -2669,9 +2738,7 @@ async function manageKvmRescueIso(id) {
     }
     const isos = await hkvmApi('/api/iso-list');
     if (!Array.isArray(isos) || !isos.length) return hkvmToast('No managed ISO files found. Upload a bootable rescue ISO to ~/vms/iso first.', 'warning');
-    const filename = prompt(`Choose an ISO filename from the managed list:
-${isos.join('
-')}`);
+    const filename = prompt(`Choose an ISO filename from the managed list:\n${isos.join('\n')}`);
     if (!filename || !isos.includes(filename.trim())) return;
     if (!confirm('This configures the operator-supplied ISO for the next boot. Rescue software and bootability are not provided by TGVPANEL. Stop the VM first; start it after configuration and use its serial/VNC console.')) return;
     await hkvmApi(`/api/v1/instances/kvm/${id}/rescue`, { method: 'POST', body: { enabled: true, isoFilename: filename.trim() } });
@@ -2738,6 +2805,31 @@ async function instAction(engine, id, action) {
   }
 }
 
+function formatTrafficBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let val = bytes;
+  let idx = 0;
+  while (val >= 1024 && idx < units.length - 1) { val /= 1024; idx++; }
+  return val.toFixed(idx === 0 ? 0 : 1) + ' ' + units[idx];
+}
+
+async function fillInstanceTraffic(tbody) {
+  const cells = [...tbody.querySelectorAll('.inst-traffic')];
+  await Promise.all(cells.map(async (cell) => {
+    const engine = cell.getAttribute('data-engine');
+    const ref = cell.getAttribute('data-ref');
+    try {
+      const data = await hkvmApi(`/api/v1/instances/${engine}/${ref}/traffic`);
+      const t = data.traffic;
+      cell.textContent = `↓${formatTrafficBytes(t.rxBytes)} ↑${formatTrafficBytes(t.txBytes)}`;
+      cell.title = `Cumulative since accounting started${t.lastSampledAt ? ' (last sampled ' + t.lastSampledAt + ')' : ''}`;
+    } catch (err) {
+      cell.textContent = '—';
+    }
+  }));
+}
+
 async function loadUnifiedInstances() {
   const engine = document.getElementById('instEngineFilter').value;
   const search = document.getElementById('instSearch').value;
@@ -2772,6 +2864,7 @@ async function loadUnifiedInstances() {
       <td>${i.cpuCores} vCPU • ${i.ramMb} MB • ${i.diskGb} GB</td>
       <td><code>${hkvmEsc(i.primaryIp || '-')}</code></td>
       <td><span class="v3-pill ${i.status}">${hkvmEsc(i.status)}</span></td>
+      <td class="inst-traffic" data-engine="${i.engine}" data-ref="${i.refId}" style="font-size:11px;color:var(--text-muted);">—</td>
       <td class="v3-btn-row">
         <a class="btn btn-primary" href="${manageHref}">Manage</a>
         <button class="btn btn-outline" onclick="instAction('${i.engine}',${i.refId},'start')" ${i.serviceLocked ? 'disabled title="Administrative service lock is active"' : ''}>Start</button>
@@ -2785,8 +2878,9 @@ async function loadUnifiedInstances() {
         <button class="btn btn-outline" style="color:#ef4444;" onclick="instAction('${i.engine}',${i.refId},'delete')">Delete</button>
       </td>
     </tr>`;
-  }).join('');
+  }).join('');  fillInstanceTraffic(tbody);
 }
+
 
 async function bulkSelected(action) {
   const targets = Array.from(document.querySelectorAll('.inst-chk:checked')).map(c => c.value);
@@ -4776,17 +4870,147 @@ async function delPort(id) {
   loadPorts();
 }
 
+function addLbBackendRow() {
+  const wrap = document.getElementById('lbBackends');
+  if (!wrap) return;
+  const row = document.createElement('div');
+  row.className = 'v3-form-grid';
+  row.style.marginBottom = '8px';
+  row.innerHTML = `
+    <div class="v3-field"><label>Name</label><input class="lbBkName" placeholder="app-1"></div>
+    <div class="v3-field"><label>Target</label><input class="lbBkTarget" placeholder="10.88.10.5"></div>
+    <div class="v3-field"><label>Port</label><input class="lbBkPort" type="number" min="1" max="65535" placeholder="8080"></div>
+    <div class="v3-field"><label>Weight</label><input class="lbBkWeight" type="number" min="1" max="256" value="1"></div>
+    <div class="v3-field" style="display:flex;align-items:flex-end;gap:8px;"><button type="button" class="btn btn-outline" onclick="this.closest('div').remove()">Remove</button></div>`;
+  wrap.appendChild(row);
+}
+
+function collectLbBackends() {
+  return [...document.querySelectorAll('#lbBackends .v3-form-grid')].map((row) => ({
+    name: row.querySelector('.lbBkName').value,
+    target: row.querySelector('.lbBkTarget').value,
+    port: Number(row.querySelector('.lbBkPort').value),
+    weight: Number(row.querySelector('.lbBkWeight').value || 1),
+  }));
+}
+
+async function loadLoadBalancers() {
+  const data = await hkvmApi('/api/v1/load-balancers');
+  document.getElementById('lbBody').innerHTML = data.loadBalancers.length
+    ? data.loadBalancers.map(lb => `<tr>
+        <td>#${lb.id}</td><td><strong>${hkvmEsc(lb.name)}</strong></td>
+        <td><code>${hkvmEsc(lb.listen_ip)}:${lb.listen_port}</code></td>
+        <td>${hkvmEsc(lb.protocol)} / ${hkvmEsc(lb.algorithm)}</td>
+        <td>${lb.backend_count}</td>
+        <td class="lb-status" data-id="${lb.id}" style="font-size:11px;">loading…</td>
+        <td class="v3-btn-row">
+          <button class="btn btn-outline" onclick="applyLoadBalancer(${lb.id}, 'start', this)">Apply</button>
+          <button class="btn btn-outline" onclick="applyLoadBalancer(${lb.id}, 'reload', this)">Reload</button>
+          <button class="btn btn-outline" onclick="applyLoadBalancer(${lb.id}, 'stop', this)">Stop</button>
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="delLoadBalancer(${lb.id})">Delete</button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" style="color:var(--text-muted);">No load balancers configured.</td></tr>';
+  document.querySelectorAll('.lb-status').forEach(async (cell) => {
+    try {
+      const res = await hkvmApi(`/api/v1/load-balancers/${cell.getAttribute('data-id')}/status`);
+      const st = res.status;
+      cell.textContent = st.running ? 'running' : (st.lastError ? 'error' : 'stopped');
+      cell.style.color = st.running ? 'var(--ok)' : (st.lastError ? '#ef4444' : 'var(--text-muted)');
+      if (st.lastError) cell.title = st.lastError;
+    } catch (err) { cell.textContent = '—'; }
+  });
+}
+
+async function submitLoadBalancer(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi('/api/v1/load-balancers', {
+      method: 'POST',
+      body: {
+        name: document.getElementById('lbName').value,
+        nodeId: Number(document.getElementById('lbNode').value),
+        listenIp: document.getElementById('lbIp').value || '0.0.0.0',
+        listenPort: Number(document.getElementById('lbPort').value),
+        protocol: document.getElementById('lbProto').value,
+        algorithm: document.getElementById('lbAlgo').value,
+        backends: collectLbBackends(),
+      },
+    });
+    document.getElementById('lbName').value = '';
+    document.getElementById('lbBackends').innerHTML = '';
+    hkvmToast('Load balancer created');
+    loadLoadBalancers();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function delLoadBalancer(id) {
+  await hkvmApi('/api/v1/load-balancers/' + id, { method: 'DELETE' });
+  loadLoadBalancers();
+}
+
+async function applyLoadBalancer(id, mode, btn) {
+  btn.disabled = true;
+  try {
+    const res = await hkvmApi(`/api/v1/load-balancers/${id}/apply`, { method: 'POST', body: { mode } });
+    hkvmToast(mode + ': ' + (res.applied ? 'applied' : 'failed') + (res.error ? ' — ' + res.error : ''), res.applied ? 'success' : 'error');
+    loadLoadBalancers();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+  btn.disabled = false;
+}
+
+async function loadSessions() {
+  const data = await hkvmApi('/api/v1/sessions');
+  document.getElementById('sessionsBody').innerHTML = data.sessions.length
+    ? data.sessions.map(s => `<tr>
+        <td><strong>${hkvmEsc(s.username || '#' + (s.user_id || '?'))}</strong></td>
+        <td><code>${hkvmEsc(String(s.sid).slice(0, 12))}…</code></td>
+        <td>${hkvmEsc(s.created_at || '-')}</td>
+        <td>${hkvmEsc(s.last_seen_at || '-')}</td>
+        <td><code>${hkvmEsc(s.ip || '-')}</code></td>
+        <td style="font-size:11px;color:var(--text-muted);">${hkvmEsc((s.user_agent || '').slice(0, 60))}</td>
+        <td class="v3-btn-row">
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="revokeSession('${hkvmEsc(s.sid)}')">Revoke</button>
+          ${s.user_id ? `<button class="btn btn-outline" style="color:#ef4444;" onclick="revokeUserSessions(${s.user_id})">Revoke all for user</button>` : ''}
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" style="color:var(--text-muted);">No active sessions.</td></tr>';
+}
+
+async function revokeSession(sid) {
+  await hkvmApi('/api/v1/sessions/' + encodeURIComponent(sid), { method: 'DELETE' });
+  hkvmToast('Session revoked');
+  loadSessions();
+}
+
+async function revokeUserSessions(userId) {
+  if (!confirm('Revoke ALL active sessions for this user? They will be logged out immediately.')) return;
+  await hkvmApi('/api/v1/sessions?userId=' + userId, { method: 'DELETE' });
+  hkvmToast('All user sessions revoked');
+  loadSessions();
+}
+
 async function loadFirewall() {
   const data = await hkvmApi('/api/v1/network/firewall');
   document.getElementById('fwBody').innerHTML = data.rules.length
     ? data.rules.map(r => `<tr>
-        <td>#${r.id}</td><td>${hkvmEsc(r.node_name || '#' + r.node_id)}</td><td>${hkvmEsc(r.direction.toUpperCase())}</td>
+        <td>#${r.id}</td><td>${hkvmEsc(r.node_name || '#' + r.node_id)}</td><td>${r.instance_type ? `<code>[${hkvmEsc(r.instance_type.toUpperCase())}] #${r.instance_ref_id}</code>` : '<span style="color:var(--text-muted);">node-wide</span>'}</td><td>${hkvmEsc(r.direction.toUpperCase())}</td>
         <td><span class="v3-pill ${r.action === 'ACCEPT' ? 'running' : 'warning'}">${hkvmEsc(r.action)}</span></td>
         <td>${hkvmEsc(r.protocol)}</td><td><code>${hkvmEsc(r.source_cidr || 'any')}</code></td>
         <td><code>${hkvmEsc(r.dest_port || 'any')}</code></td><td>${hkvmEsc(r.comment || '')}</td>
         <td><button class="btn btn-outline" onclick="delFw(${r.id})">Delete</button></td>
       </tr>`).join('')
-    : '<tr><td colspan="9" style="color:var(--text-muted);">No firewall rules configured.</td></tr>';
+    : '<tr><td colspan="10" style="color:var(--text-muted);">No firewall rules configured.</td></tr>';
+}
+
+async function populateFirewallInstanceSelect() {
+  const sel = document.getElementById('fwInstance');
+  if (!sel) return;
+  try {
+    const data = await hkvmApi('/api/v1/instances');
+    sel.innerHTML = '<option value="">(node-wide)</option>' + data.instances.map(i =>
+      `<option value="${i.engine}:${i.refId}">[${i.engine.toUpperCase()}] ${hkvmEsc(i.name)} (#${i.refId})</option>`).join('');
+  } catch (err) { /* leave the node-wide-only option */ }
 }
 
 async function submitFwRule(e) {
@@ -4794,15 +5018,24 @@ async function submitFwRule(e) {
   try {
     await hkvmApi('/api/v1/network/firewall', {
       method: 'POST',
-      body: {
-        nodeId: Number(document.getElementById('fwNode').value),
-        direction: document.getElementById('fwDir').value,
-        action: document.getElementById('fwAct').value,
-        protocol: document.getElementById('fwProto').value,
-        sourceCidr: document.getElementById('fwSrc').value || null,
-        destPort: document.getElementById('fwPort').value || null,
-        comment: document.getElementById('fwComment').value
-      }
+      body: (() => {
+        const fwInstVal = document.getElementById('fwInstance').value;
+        const body = {
+          nodeId: Number(document.getElementById('fwNode').value),
+          direction: document.getElementById('fwDir').value,
+          action: document.getElementById('fwAct').value,
+          protocol: document.getElementById('fwProto').value,
+          sourceCidr: document.getElementById('fwSrc').value || null,
+          destPort: document.getElementById('fwPort').value || null,
+          comment: document.getElementById('fwComment').value,
+        };
+        if (fwInstVal) {
+          const [instanceType, instanceRefId] = fwInstVal.split(':');
+          body.instanceType = instanceType;
+          body.instanceRefId = Number(instanceRefId);
+        }
+        return body;
+      })()
     });
     loadFirewall();
   } catch (err) { hkvmToast(err.message, 'error'); }
@@ -5919,7 +6152,97 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (CURRENT_SECTION === 'lxc-templates') loadLxcTemplates();
   if (CURRENT_SECTION === 'networking') loadNetworking();
   if (CURRENT_SECTION === 'ports') loadPorts();
-  if (CURRENT_SECTION === 'firewall') loadFirewall();
+  if (CURRENT_SECTION === 'firewall') {
+    await populateFirewallInstanceSelect();
+    loadFirewall();
+    loadFirewallProfiles();
+  }
+  if (CURRENT_SECTION === 'load-balancers') loadLoadBalancers();
+  if (CURRENT_SECTION === 'sessions') loadSessions();
+
+  function addFwProfileRule() {
+    const wrap = document.getElementById('fwpRules');
+    if (!wrap) return;
+    const row = document.createElement('div');
+    row.className = 'v3-form-grid';
+    row.style.marginBottom = '8px';
+    row.innerHTML = `
+      <div class="v3-field"><label>Direction</label><select class="fwpDir"><option value="in">Ingress (IN)</option><option value="out">Egress (OUT)</option></select></div>
+      <div class="v3-field"><label>Action</label><select class="fwpAct"><option value="ACCEPT">ACCEPT</option><option value="DROP">DROP</option><option value="REJECT">REJECT</option></select></div>
+      <div class="v3-field"><label>Protocol</label><select class="fwpProto"><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option><option value="all">ALL</option></select></div>
+      <div class="v3-field"><label>Source CIDR</label><input class="fwpSrc" placeholder="0.0.0.0/0"></div>
+      <div class="v3-field"><label>Dest Port</label><input class="fwpPort" placeholder="443"></div>
+      <div class="v3-field" style="display:flex;align-items:flex-end;gap:8px;"><button type="button" class="btn btn-outline" onclick="this.closest('div').remove()">Remove</button></div>`;
+    wrap.appendChild(row);
+  }
+
+  function collectFwProfileRules() {
+    return [...document.querySelectorAll('#fwpRules .v3-form-grid')].map((row) => ({
+      direction: row.querySelector('.fwpDir').value,
+      action: row.querySelector('.fwpAct').value,
+      protocol: row.querySelector('.fwpProto').value,
+      sourceCidr: row.querySelector('.fwpSrc').value || null,
+      destPort: row.querySelector('.fwpPort').value || null,
+    }));
+  }
+
+  async function loadFirewallProfiles() {
+    const data = await hkvmApi('/api/v1/network/firewall-profiles');
+    document.getElementById('fwpBody').innerHTML = data.profiles.length
+      ? data.profiles.map(p => `<tr>
+        <td>#${p.id}</td><td><strong>${hkvmEsc(p.name)}</strong>${p.description ? '<br><span style="color:var(--text-muted);font-size:12px;">' + hkvmEsc(p.description) + '</span>' : ''}</td>
+        <td>${p.rule_count}</td>
+        <td><select class=\"fwpApplySel\" data-profile=\"${p.id}\">${''}</select>
+          <button class=\"btn btn-outline\" onclick=\"applyFwProfile(${p.id}, this)\">Apply</button></td>
+        <td><button class=\"btn btn-outline\" style=\"color:#ef4444;\" onclick=\"delFwProfile(${p.id})\">Delete</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" style="color:var(--text-muted);">No firewall profiles configured.</td></tr>';
+    const instances = await hkvmApi('/api/v1/instances').then((d) => d.instances).catch(() => []);
+    document.querySelectorAll('.fwpApplySel').forEach((sel) => {
+      sel.innerHTML = '<option value="">Select VPS…</option>' + instances.map(i =>
+        `<option value=\"${i.engine}:${i.refId}\">[${i.engine.toUpperCase()}] ${hkvmEsc(i.name)} (#${i.refId})</option>`).join('');
+    });
+  }
+
+  async function submitFwProfile(e) {
+    e.preventDefault();
+    try {
+      await hkvmApi('/api/v1/network/firewall-profiles', {
+        method: 'POST',
+        body: {
+          name: document.getElementById('fwpName').value,
+          description: document.getElementById('fwpDesc').value || null,
+          rules: collectFwProfileRules(),
+        },
+      });
+      document.getElementById('fwpName').value = '';
+      document.getElementById('fwpDesc').value = '';
+      document.getElementById('fwpRules').innerHTML = '';
+      addFwProfileRule();
+      hkvmToast('Firewall profile created');
+      loadFirewallProfiles();
+    } catch (err) { hkvmToast(err.message, 'error'); }
+  }
+
+  async function delFwProfile(id) {
+    await hkvmApi('/api/v1/network/firewall-profiles/' + id, { method: 'DELETE' });
+    loadFirewallProfiles();
+  }
+
+  async function applyFwProfile(id, btn) {
+    const sel = btn.parentElement.querySelector('.fwpApplySel');
+    const val = sel.value;
+    if (!val) { hkvmToast('Select a VPS first', 'error'); return; }
+    const [instanceType, instanceRefId] = val.split(':');
+    try {
+      const res = await hkvmApi(`/api/v1/network/firewall-profiles/${id}/apply`, {
+        method: 'POST',
+        body: { instanceType, instanceRefId: Number(instanceRefId) },
+      });
+      hkvmToast(`Applied: ${res.created.length} rule(s) materialized` + (res.created.some((r) => !r.applied) ? ' (some not applied on host)' : ''));
+      loadFirewall();
+    } catch (err) { hkvmToast(err.message, 'error'); }
+  }
   if (CURRENT_SECTION === 'snapshots') { await populateInstanceDropdown('snapInstSelect'); loadAdminSnapshots(); loadSnapshotSchedules(); loadSelectedSnapshotSchedule(); }
   if (CURRENT_SECTION === 'backups') { await populateInstanceDropdown('bkpInstSelect'); loadBackups(); loadBackupSchedules(); loadSelectedBackupSchedule(); }
   if (CURRENT_SECTION === 'migrations') { await populateInstanceDropdown('migLxcSelect', 'lxc'); loadMigrations(); }

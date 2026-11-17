@@ -101,6 +101,12 @@ export declare class InstanceManager {
     }>>;
     getTelemetry(principal: AuthenticatedPrincipal, engine: VirtualizationEngine, refId: number): Promise<InstanceTelemetry>;
     /**
+     * Internal telemetry collection without a request principal. Used by the
+     * background traffic-accounting loop (monitoring service); never exposed
+     * through customer-facing routes.
+     */
+    collectInstanceTelemetry(engine: VirtualizationEngine, refId: number): Promise<InstanceTelemetry>;
+    /**
      * Background check that suspends expired LXC instances when `auto_suspend_enabled = 1`
      * and `whitelisted = 0`.
      */

@@ -772,6 +772,15 @@ export class LXCAdapter implements VirtualizationAdapter {
     const row = await this.getRawLxcRow(refId);
     if (!row) throw new Error(`LXC container #${refId} not found.`);
 
+    // LXC containers have no graceful guest-shutdown lifecycle; only the host can stop them.
+    // Reject instead of silently no-op'ing so callers never mistake a no-op for a shutdown.
+    if (action === 'shutdown') {
+      throw Object.assign(
+        new Error('Graceful shutdown is not supported for LXC containers; use stop.'),
+        { statusCode: 501 }
+      );
+    }
+
     const isLocal = Boolean(row.is_local);
     const cname = row.container_name;
 
@@ -1289,6 +1298,99 @@ export class LXCAdapter implements VirtualizationAdapter {
       [refId, nextIso, days, refId]
     );
     return (await this.getInstance(refId))!;
+  }
+
+  /**
+   * Expiration sweeper: finds LXC instances whose `vps_expiration.expires_at` has
+   * passed with `auto_suspend_enabled = 1` and suspends them through the normal
+   * lifecycle path (host-verified stop, `suspended` flag, suspension history).
+   * `warned_at` is stamped on first evaluation. Instances that are already
+   * suspended, not running/frozen, or whose host refuses the stop are skipped
+   * honestly (the skip reason is recorded on the expiration row's `notes`).
+   * Returns a summary so callers (manual route or background loop) can notify
+   * affected owners.
+   */
+  public async sweepExpiredInstances(): Promise<{
+    evaluated: number;
+    suspended: Array<{
+      lxcId: number;
+      containerName: string;
+      ownerUserId: number;
+      expiresAt: string;
+    }>;
+    skipped: Array<{ lxcId: number; reason: string }>;
+  }> {
+    const expired = await this.db.all<any>(
+      `SELECT e.lxc_id, e.expires_at, e.warned_at,
+              l.container_name, l.status, l.suspended, l.user_id
+       FROM vps_expiration e
+       JOIN lxc_instances l ON l.id = e.lxc_id
+       WHERE e.expires_at IS NOT NULL
+         AND datetime(e.expires_at) <= datetime('now')
+         AND e.auto_suspend_enabled = 1
+         AND l.suspended = 0
+         AND l.status IN ('running', 'frozen')
+       ORDER BY e.lxc_id ASC`
+    );
+
+    const suspended: Array<{ lxcId: number; containerName: string; ownerUserId: number; expiresAt: string }> = [];
+    const skipped: Array<{ lxcId: number; reason: string }> = [];
+
+    for (const row of expired) {
+      await this.db.run(
+        `UPDATE vps_expiration
+            SET warned_at = COALESCE(warned_at, datetime('now')), updated_at = datetime('now')
+          WHERE lxc_id = ?`,
+        [row.lxc_id]
+      );
+      const reason = `VPS expired on ${row.expires_at}`;
+      try {
+        await this.performLifecycleAction(row.lxc_id, 'suspend', { reason });
+        suspended.push({
+          lxcId: row.lxc_id,
+          containerName: row.container_name,
+          ownerUserId: row.user_id,
+          expiresAt: row.expires_at,
+        });
+      } catch (err: any) {
+        const skipReason = `Suspension skipped: ${err?.message || err}`;
+        await this.db.run(
+          `UPDATE vps_expiration SET notes = ?, updated_at = datetime('now') WHERE lxc_id = ?`,
+          [skipReason, row.lxc_id]
+        );
+        skipped.push({ lxcId: row.lxc_id, reason: skipReason });
+      }
+    }
+
+    return { evaluated: expired.length, suspended, skipped };
+  }
+
+  private expirationTimer: NodeJS.Timeout | null = null;
+  private expirationBootTimer: NodeJS.Timeout | null = null;
+
+  /** Starts the periodic expiration sweep loop (default 5 minutes). */
+  public startExpirationLoop(intervalMs = 300_000): void {
+    if (this.expirationTimer) return;
+    this.expirationBootTimer = setTimeout(() => {
+      this.expirationBootTimer = null;
+      this.sweepExpiredInstances().catch((err) => {
+        console.error('[Expiration] Initial sweep failed:', err?.message || err);
+      });
+    }, 5000);
+    this.expirationBootTimer.unref?.();
+    this.expirationTimer = setInterval(() => {
+      this.sweepExpiredInstances().catch((err) => {
+        console.error('[Expiration] Sweep failed:', err?.message || err);
+      });
+    }, intervalMs);
+    this.expirationTimer.unref?.();
+  }
+
+  public stopExpirationLoop(): void {
+    if (this.expirationTimer) clearInterval(this.expirationTimer);
+    if (this.expirationBootTimer) clearTimeout(this.expirationBootTimer);
+    this.expirationTimer = null;
+    this.expirationBootTimer = null;
   }
 
   public async transferOwnership(refId: number, newUserId: number): Promise<UnifiedInstanceRecord> {

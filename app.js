@@ -4,6 +4,7 @@ const WebSocket = require('ws');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const session = require('express-session');
+const { SqliteSessionStore } = require('./lib/security/session-store');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -479,18 +480,41 @@ app.get('/js/hkvm-v3.js', (_req, res) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
+const panelSessionStore = new SqliteSessionStore(dbPath);
 const sessionParser = session({
   secret: getSecretBundle().sessionSecret,
+  store: panelSessionStore,
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: false,
+    // Secure cookies are opt-in: default false preserves plain-HTTP deployments, but operators
+    // behind HTTPS should set SESSION_COOKIE_SECURE=1 so session cookies are never sent in clear.
+    secure: String(process.env.SESSION_COOKIE_SECURE || '0') === '1',
     httpOnly: true,
     sameSite: 'lax',
     maxAge: 24 * 60 * 60 * 1000
   }
 });
 app.use(sessionParser);
+
+// Record lightweight session activity (user, IP, user agent, last seen) for
+// the administrative session inventory and revocation controls.
+app.use((req, res, next) => {
+  try {
+    if (req.sessionID && req.session && panelSessionStore instanceof SqliteSessionStore) {
+      panelSessionStore.recordActivity(
+        req.sessionID,
+        req.session.userId ?? null,
+        req.ip || '',
+        String(req.get('user-agent') || '')
+      );
+    }
+  } catch (err) {
+    // Inventory metadata is best-effort; never break the request path.
+  }
+  next();
+});
+
 app.use(securityHeadersAndCsrfMiddleware);
 
 app.use((req, res, next) => {
@@ -859,7 +883,16 @@ app.post('/api/login', (req, res) => {
         .catch(() => undefined);
     }
     console.log(`[Auth Success] User ${user.id} (${user.username}) logged in with role: ${user.role}`);
-    res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
+    // Persist the session before responding so the client's next request can
+    // never race the async SQLite write (a request arriving in that window
+    // would see no session and be treated as unauthenticated).
+    req.session.save((saveErr) => {
+      if (saveErr) {
+        console.error('[Auth Error] Failed to persist session for user', user.id, saveErr);
+        return res.status(500).json({ error: 'Failed to persist session' });
+      }
+      res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
+    });
   });
 });
 
@@ -3332,6 +3365,94 @@ app.post('/api/vms/:vm_id/stop', checkAuth, trackLegacyKvmMutation('stop'), (req
       res.json({ success: true, message: `VM ${vm.vm_name} (ID:${vm.vm_id}) stopped` });
     } catch (error) {
       console.error(`[API Error] Exception stopping VM ${vm.vm_id}:`, error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+// VM GRACEFUL SHUTDOWN (Using VM ID)
+// Distinct from stop: sends SIGTERM with a longer grace period and never escalates to SIGKILL.
+function isProcessAlive(pid) {
+  if (!pid || Number(pid) <= 0) return false;
+  try {
+    process.kill(Number(pid), 0);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+app.post('/api/vms/:vm_id/shutdown', checkAuth, trackLegacyKvmMutation('shutdown'), (req, res) => {
+  const userId = req.session.userId;
+  let query = `SELECT * FROM vms WHERE vm_id = ?`;
+  let params = [req.params.vm_id];
+
+  if (req.session.role !== 'admin') {
+    query += ` AND owner_id = ?`;
+    params.push(userId);
+  }
+
+  db.get(query, params, (err, vm) => {
+    if (err || !vm) {
+      console.error(`[API Error] /api/vms/${req.params.vm_id}/shutdown: VM not found or access denied`);
+      return res.status(404).json({ error: 'VM not found or access denied' });
+    }
+
+    if (vm.status === 'stopped') {
+      console.log(`[API] VM ${vm.vm_id} already stopped`);
+      return res.json({ success: true, message: 'VM already stopped' });
+    }
+
+    try {
+      console.log(`[API] Shutting down VM ${vm.vm_id} (${vm.vm_name}) by user ${userId}`);
+      const pidFile = path.join(VM_DIR, `vm-${vm.vm_id}.pid`);
+      let pid = vmProcesses.get(vm.vm_id) || null;
+      if (!pid && fs.existsSync(pidFile)) {
+        pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim());
+      }
+
+      const deadlineMs = Date.now() + 15000;
+      if (pid && !isWindows) {
+        try {
+          // Signal the process group (negative pid) so the whole guest tree gets SIGTERM.
+          process.kill(-pid, 'SIGTERM');
+        } catch (e) {
+          // Process may already be exiting; fall through to the wait loop.
+        }
+      } else if (pid && isWindows) {
+        try {
+          // Graceful first; taskkill without /F so the guest can exit on its own.
+          exec(`taskkill /PID ${pid}`, { shell: 'cmd' });
+        } catch (e) {}
+      }
+
+      const waitForExit = () => new Promise((resolve) => {
+        const check = () => {
+          if (!pid) return resolve();
+          if (!isProcessAlive(pid)) return resolve();
+          if (Date.now() >= deadlineMs) return resolve(false);
+          setTimeout(check, 100);
+        };
+        check();
+      });
+
+      waitForExit().then((exited) => {
+        if (exited === false) {
+          // Never force-kill during a graceful shutdown; report the failure honestly.
+          console.error(`[API Error] VM ${vm.vm_id} did not exit within the 15s grace period`);
+          return res.status(500).json({ error: 'VM did not shut down within the grace period; use Stop to force it.' });
+        }
+        vmProcesses.delete(vm.vm_id);
+        qemuStdins.delete(vm.vm_id);
+        db.run(`UPDATE vms SET status = 'stopped', pid = NULL WHERE vm_id = ?`, [vm.vm_id], () => {
+          if (hkvmV3Context) hkvmV3Context.kvmAdapter.syncRegistryRow(vm.vm_id).catch(() => undefined);
+        });
+        logVMAction(vm.vm_id, 'shutdown', 'stopped', `VM shut down gracefully`);
+        console.log(`[API Success] VM ${vm.vm_id} shut down successfully`);
+        res.json({ success: true, message: `VM ${vm.vm_name} (ID:${vm.vm_id}) shut down` });
+      });
+    } catch (error) {
+      console.error(`[API Error] Exception shutting down VM ${vm.vm_id}:`, error);
       res.status(500).json({ error: error.message });
     }
   });

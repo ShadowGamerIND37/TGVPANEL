@@ -21,11 +21,24 @@ declare global {
 /**
  * Sliding-window in-memory rate limiter for auth, terminal, and mutation endpoints.
  */
+/**
+ * Parse a comma-separated list of trusted reverse-proxy addresses (exact IPs or IPv4 CIDRs).
+ * Empty by default: the limiter then ignores client-supplied X-Forwarded-For and keys on the
+ * socket peer, which prevents header spoofing from bypassing limits on directly-exposed panels.
+ */
+export declare function parseTrustedProxies(raw: string | undefined): string[];
+/**
+ * Whether the immediate socket peer is a trusted reverse proxy. Exact IPs and IPv4 CIDRs are
+ * supported; IPv6 is matched exactly. A trusted peer's X-Forwarded-For is honored, otherwise the
+ * limiter uses the socket address so an attacker cannot spoof the header to bypass limits.
+ */
+export declare function isIpTrustedByProxies(socketIp: string, trustedProxies: string[]): boolean;
 export declare function createRateLimiter(options: {
     windowMs: number;
     max: number;
     keyPrefix: string;
     message?: string;
+    trustedProxies?: string[];
 }): (req: Request, res: Response, next: NextFunction) => void | Response<any, Record<string, any>>;
 /**
  * Security response headers & CSRF token injection into `res.locals.csrfToken`.
@@ -50,6 +63,7 @@ export declare function requireRole(allowedRoles: Array<'admin' | 'subadmin' | '
  */
 export declare const SafeValidators: {
     containerName(name: unknown): string;
+    loadBalancerName(name: unknown): string;
     snapshotName(name: unknown): string;
     bridgeOrIface(name: unknown): string;
     ipv4(ip: unknown): string;

@@ -17,6 +17,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const sqlite3 = require('sqlite3');
 const WebSocket = require('ws');
+const { isEncryptedArchive } = require('../lib/services/backup/backup-crypto');
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tgvpanel-acceptance-'));
 const testDbPath = path.join(tmpRoot, 'tgvpanel.db');
@@ -49,6 +50,10 @@ process.env.TGVPANEL_BACKUP_DIR = path.join(tmpRoot, 'local-backups');
 process.env.PORT = String(TEST_PORT);
 process.env.TGVPANEL_DISABLE_BACKGROUND_POLLER = 'true';
 process.env.TGVPANEL_ENABLE_NODE_SHELL = 'true';
+// Test-only: treat the loopback peer as a trusted proxy so the per-step
+// X-Forwarded-For headers used throughout this suite key rate limits
+// per test instead of sharing one 127.0.0.1 bucket across the whole run.
+process.env.TRUSTED_PROXIES = '127.0.0.1';
 
 const {
   getSecretBundle,
@@ -67,7 +72,7 @@ const { UnifiedDatabase, resolveAndMigrateDatabasePath } = require('../lib/db/da
 const { runMigrations } = require('../lib/db/migrations');
 const { KVMAdapter } = require('../lib/services/virtualization/KVMAdapter');
 const { LXCAdapter } = require('../lib/services/virtualization/LXCAdapter');
-const { importHvmDatabase } = require('../lib/db/hvm-importer');
+const { importHvmDatabase, dryRunHvmImport } = require('../lib/db/hvm-importer');
 const { createNodeAgentServer } = require('../lib/node-agent/agent');
 const { runAllowlistedCommand, buildSafeSpawnEnv } = require('../lib/node-agent/command-runner');
 const {
@@ -78,7 +83,14 @@ const {
 } = require('../lib/node-agent/container-manager');
 
 const results = [];
+// The harness acts as a trusted reverse proxy (TRUSTED_PROXIES=127.0.0.1), so the
+// rate limiter honors X-Forwarded-For. Give each test step a unique XFF so every step
+// gets a fresh limiter bucket instead of sharing one 120/min window across the whole
+// suite. T09 still exercises the real limiter within its own step via a shared XFF.
+let currentTestXff = null;
+let testStepCounter = 0;
 async function runStep(name, fn) {
+  currentTestXff = `10.${(testStepCounter++) % 250}.0.1`;
   const start = Date.now();
   try {
     await fn();
@@ -101,6 +113,7 @@ class SessionClient {
 
   async request(method, urlPath, body = undefined, extraHeaders = {}) {
     const headers = { ...extraHeaders };
+    if (currentTestXff && !headers['X-Forwarded-For']) headers['X-Forwarded-For'] = currentTestXff;
     if (this.cookie) headers['Cookie'] = this.cookie;
     if (this.csrfToken && !headers['X-CSRF-Token'] && !headers['Authorization']) {
       headers['X-CSRF-Token'] = this.csrfToken;
@@ -167,6 +180,8 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
   let httpsAgentServer = null;
   let app = null;
   let remoteNodeId = null;
+  let agentApiKey = null;
+  let agentHmacSecret = null;
   const installedLxcShims = [];
   const rootOwnedCleanupDirs = [];
 
@@ -310,6 +325,9 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
     });
 
     // 3. Boot full HKVM V3 Express + WebSocket Server
+    // The test harness acts as a trusted reverse proxy on localhost, so X-Forwarded-For is
+    // honored here (matching a real proxy deployment). The limiter ignores XFF by default.
+    process.env.TRUSTED_PROXIES = '127.0.0.1';
     app = require('../app');
     await app.hkvmReadyPromise;
     await new Promise((r) => setTimeout(r, 250));
@@ -340,6 +358,21 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       await execSql(`INSERT INTO vps VALUES (5, 'ct-alice-01', 'alice-web', 10, 2, 2, 2048, 25, '10.0.3.55', 'ubuntu:24.04', 'stopped', 0)`);
       await execSql(`INSERT INTO port_forwards VALUES (1, 5, 'tcp', 22055, 22)`);
       await new Promise((res) => ldb.close(() => res()));
+
+      // Phase 11: dry-run / preflight must validate the source WITHOUT importing.
+      const dryRun = await dryRunHvmImport(ctx.db, legacyDbFile);
+      assert.strictEqual(dryRun.dryRun, true);
+      assert.strictEqual(dryRun.requiredTablesPresent, true);
+      assert.strictEqual(dryRun.ready, true);
+      assert.deepStrictEqual(dryRun.sourceTables.sort(), ['nodes', 'port_forwards', 'users', 'vps']);
+      assert.strictEqual(dryRun.counts.users, 1);
+      assert.strictEqual(dryRun.counts.nodes, 1);
+      assert.strictEqual(dryRun.counts.vps, 1);
+      assert.strictEqual(dryRun.counts.portForwards, 1);
+      assert.strictEqual(dryRun.passwordHashFormats.pbkdf2, 1);
+      assert.strictEqual(dryRun.passwordHashFormats.unrecognized, 0);
+      assert.strictEqual(dryRun.existingUserCollisions, 0, 'No collisions before import');
+      assert.deepStrictEqual(dryRun.warnings, []);
 
       const report = await importHvmDatabase(ctx.db, legacyDbFile);
       assert.strictEqual(report.usersCreated, 1);
@@ -568,6 +601,8 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       assert.strictEqual(regRes.status, 201, `Node register failed: ${regRes.text}`);
       remoteNodeId = regRes.json.node.id;
       const { apiKey, hmacSecret } = regRes.json.bootstrapCredentials;
+      agentApiKey = apiKey;
+      agentHmacSecret = hmacSecret;
 
       const agentInst = createNodeAgentServer({
         host: '127.0.0.1',
@@ -639,6 +674,59 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       assert.strictEqual(qemuBinaryMatchesArchitecture('qemu-system-x86_64', 'x86_64'), true);
       assert.strictEqual(qemuBinaryMatchesArchitecture('qemu-system-aarch64', 'x86_64'), false);
 
+      const { buildCapabilityWarnings } = require('../lib/node-agent/health');
+      const makeCaps = (overrides = {}) => ({
+        kvmDevicePresent: true,
+        qemuSystemAvailable: true,
+        qemuImgAvailable: true,
+        kvmAvailable: true,
+        lxcCreateAvailable: true,
+        lxcStartAvailable: true,
+        lxcInfoAvailable: true,
+        lxcAvailable: true,
+        lxcfsAvailable: true,
+        lxcfsMounted: true,
+        cgroupVersion: 2,
+        storageBackends: ['dir'],
+        networkBackends: [],
+        qemuVersion: 'QEMU 8.2.0',
+        lxcVersion: '5.0.3',
+        kernelVersion: '6.8',
+        architecture: 'x86_64',
+        qemuArchitectureMismatch: false,
+        ...overrides,
+      });
+      assert.deepStrictEqual(buildCapabilityWarnings(makeCaps()), [], 'Healthy host should produce no capability warnings');
+      assert.ok(
+        buildCapabilityWarnings(makeCaps({ lxcfsAvailable: true, lxcfsMounted: false })).some(
+          (w) => w.includes('lxcfs is installed but not mounted')
+        ),
+        'LXC host with lxcfs installed but unmounted must warn about inaccurate guest telemetry'
+      );
+      assert.ok(
+        buildCapabilityWarnings(makeCaps({ lxcfsAvailable: false, lxcfsMounted: true })).some(
+          (w) => w.includes('lxcfs binary is not installed')
+        ),
+        'LXC host with an lxcfs mount but missing binary must warn about inaccurate telemetry'
+      );
+      assert.ok(
+        buildCapabilityWarnings(makeCaps({ cgroupVersion: 1 })).some(
+          (w) => w.includes('cgroup v1')
+        ),
+        'LXC host on cgroup v1 must warn that v2 delegation may be unavailable'
+      );
+      assert.ok(
+        buildCapabilityWarnings(makeCaps({ kvmDevicePresent: false })).some(
+          (w) => w.includes('/dev/kvm is unavailable')
+        ),
+        'QEMU host without /dev/kvm must warn about TCG fallback'
+      );
+      assert.deepStrictEqual(
+        buildCapabilityWarnings(makeCaps({ kvmAvailable: false, lxcAvailable: false })),
+        ['Neither QEMU/KVM nor LXC userland utilities are installed on this host. Management plane is online in controller-only mode until hypervisor packages are installed.'],
+        'Controller-only host must produce a single clear warning'
+      );
+
       const vm = await ctx.db.get(`SELECT vm_id, ipv4_address FROM vms LIMIT 1`);
       const noHookKvm = new KVMAdapter(ctx.db);
       await assert.rejects(
@@ -658,6 +746,233 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       });
       await hookedKvm.performLifecycleAction(vm.vm_id, 'restart');
       assert.deepStrictEqual(restartCalls, [`stop:${vm.vm_id}`, `start:${vm.vm_id}`]);
+
+      // Graceful KVM shutdown is distinct from stop: it must never force-kill and uses the
+      // longer grace period, and must refuse when no hook and no live PID are available.
+      const shutdownCalls = [];
+      const hookedShutdownKvm = new KVMAdapter(ctx.db, {
+        stopVmById: async (id, force) => {
+          shutdownCalls.push(`stop:${id}:${force}`);
+          await ctx.db.run(`UPDATE vms SET status = 'stopped', pid = NULL WHERE vm_id = ?`, [id]);
+        },
+      });
+      await hookedShutdownKvm.performLifecycleAction(vm.vm_id, 'shutdown');
+      assert.deepStrictEqual(shutdownCalls, [`stop:${vm.vm_id}:false`], 'Shutdown must use the hook without force');
+
+      const staleShutdownStatements = [];
+      const staleShutdownRow = {
+        vm_id: 900004,
+        status: 'running',
+        pid: null,
+        suspended: 0,
+      };
+      const staleShutdownKvm = new KVMAdapter(
+        {
+          get: async () => staleShutdownRow,
+          run: async (sql) => {
+            staleShutdownStatements.push(String(sql));
+            return { changes: 1, lastID: 0 };
+          },
+        },
+        {}
+      );
+      await assert.rejects(
+        staleShutdownKvm.performLifecycleAction(staleShutdownRow.vm_id, 'shutdown'),
+        /Cannot shutdown KVM VM #900004: status is running but no stop hook or live PID is available\./,
+        'KVM shutdown must refuse on a stale running VM with no hook and no live PID'
+      );
+      assert.strictEqual(
+        staleShutdownStatements.length,
+        0,
+        'Rejected stale-state KVM shutdown must not mutate the record'
+      );
+
+      // LXC has no graceful guest shutdown; it must reject rather than pretend to succeed.
+      const lxcShutdownRow = {
+        id: 900002,
+        node_id: 1,
+        container_name: 'shutdown-guard-lxc',
+        is_local: true,
+        suspended: 0,
+        suspension_history: '[]',
+      };
+      const lxcShutdownAdapter = new LXCAdapter(
+        {
+          get: async () => lxcShutdownRow,
+          run: async () => ({ changes: 1, lastID: 0 }),
+        },
+        {}
+      );
+      await assert.rejects(
+        lxcShutdownAdapter.performLifecycleAction(lxcShutdownRow.id, 'shutdown'),
+        (err) => err.statusCode === 501 && /not supported for LXC/.test(err.message),
+        'LXC must reject graceful shutdown instead of silently no-op'
+      );
+
+      // Clone rollback: when a clone fails after the host artifact is created, the panel must
+      // remove the inserted records AND destroy the host container so neither is left behind.
+      const lxcCloneSourceRow = {
+        id: 900006,
+        user_id: 1,
+        node_id: 1,
+        container_name: 'clone-rollback-source',
+        hostname: 'clone-rollback-source',
+        os_template: 'ubuntu',
+        os_family: 'ubuntu',
+        arch: 'amd64',
+        cpu_cores: 1,
+        cpu_shares: 1024,
+        cpu_limit_pct: 100,
+        cpu_pinning: null,
+        ram_mb: 1024,
+        swap_mb: 0,
+        disk_gb: 20,
+        rootfs_storage_type: 'dir',
+        privileged: 0,
+        nesting: 0,
+        kvm_nesting: 0,
+        autostart: 0,
+        root_password_enc: null,
+        bridge: null,
+        ip_address: null,
+        gateway: null,
+        ipv6_address: null,
+        mac_address: null,
+        vlan_id: null,
+        status: 'stopped',
+        bandwidth_quota_gb: 0,
+        notes: '',
+        expires_at: null,
+        expiration_days: 30,
+        auto_suspend_enabled: 0,
+        last_renewed_at: null,
+        is_local: true,
+        suspended: 0,
+        suspension_history: '[]',
+      };
+      const lxcCloneRollbackStatements = [];
+      let lxcCloneDestroyed = false;
+      const lxcCloneRollbackDb = {
+        get: async (sql, params) => {
+          if (/FROM lxc_instances l/i.test(sql)) return lxcCloneSourceRow;
+          if (/SELECT id FROM lxc_instances WHERE LOWER\(container_name\)/i.test(sql)) return undefined;
+          return undefined;
+        },
+        run: async (sql, params) => {
+          lxcCloneRollbackStatements.push({ sql: String(sql), params });
+          if (/INSERT INTO lxc_instances/i.test(sql)) return { lastID: 900007, changes: 1 };
+          if (/INSERT OR REPLACE INTO vps_expiration/i.test(sql)) throw new Error('simulated expiration insert failure');
+          return { changes: 1, lastID: 0 };
+        },
+        all: async () => [],
+      };
+      const lxcCloneRollbackAdapter = new LXCAdapter(
+        lxcCloneRollbackDb,
+        {
+          localRuntime: {
+            containerManager: {
+              cloneContainer: async () => ({ name: 'clone-rollback-clone', state: 'stopped', pid: null, ips: [] }),
+              destroyContainer: async () => { lxcCloneDestroyed = true; },
+            },
+          },
+        }
+      );
+      await assert.rejects(
+        lxcCloneRollbackAdapter.cloneStoppedLxcInstance(lxcCloneSourceRow.id, 'clone-rollback-clone'),
+        /simulated expiration insert failure/,
+        'LXC clone must surface the failure instead of reporting success'
+      );
+      assert.ok(lxcCloneDestroyed, 'LXC clone rollback must destroy the created host container');
+      assert.ok(
+        lxcCloneRollbackStatements.some((s) => /DELETE FROM lxc_instances WHERE id = \?/i.test(s.sql) && Number(s.params[0]) === 900007),
+        'LXC clone rollback must remove the inserted lxc_instances row'
+      );
+      assert.ok(
+        lxcCloneRollbackStatements.some((s) => /DELETE FROM instances WHERE engine = 'lxc' AND ref_id = \?/i.test(s.sql) && Number(s.params[0]) === 900007),
+        'LXC clone rollback must remove the inserted unified registry row'
+      );
+
+      // KVM clone rollback: when the registry sync fails after the disk image is created, the
+      // adapter must remove the inserted VM/registry rows AND delete the created disk image.
+      const kvmCloneSizeBytes = 10737418240;
+      const kvmCloneSourceDisk = path.join(os.homedir(), 'vms', `tgv-clone-rollback-src-${Date.now()}.qcow2`);
+      fs.writeFileSync(kvmCloneSourceDisk, 'source-disk');
+      try {
+        const kvmCloneSourceRow = {
+          vm_id: 900010,
+          vm_name: 'clone-rollback-source-kvm',
+          hostname: 'clone-rollback-source-kvm',
+          owner_id: 1,
+          node_id: 1,
+          status: 'stopped',
+          pid: null,
+          suspended: 0,
+          network_type: 'nat',
+          extra_disks_json: '[]',
+          extra_nics_json: '[]',
+          disk_file: kvmCloneSourceDisk,
+          img_file: null,
+          http_port: 80,
+          os_type: 'ubuntu',
+          template_type: '',
+          clone_of: null,
+        };
+        const kvmCloneRollbackStatements = [];
+        let kvmCloneTargetPathValue = '';
+        const kvmCloneRollbackDb = {
+          get: async (sql, params) => {
+            if (/FROM vms WHERE vm_name = ?/i.test(sql)) return undefined;
+            if (params && params[0] === 900011 && /SELECT \* FROM vms WHERE vm_id = \?/i.test(sql)) {
+              return { vm_id: 900011, vm_name: 'clone-rollback-kvm', hostname: 'clone-rollback-kvm', owner_id: 1, node_id: 1, status: 'stopped', suspended: 0, os_type: 'KVM Guest', cpus: 1, memory: 1024, disk_size: '10G', ipv4_address: null, shared_with: '[]' };
+            }
+            return kvmCloneSourceRow;
+          },
+          run: async (sql, params) => {
+            kvmCloneRollbackStatements.push({ sql: String(sql), params });
+            if (/INSERT INTO vms/i.test(sql)) return { lastID: 900011, changes: 1 };
+            if (/INSERT INTO instances/i.test(sql)) throw new Error('simulated registry sync failure');
+            return { changes: 1, lastID: 0 };
+          },
+          all: async () => [],
+        };
+        const kvmCloneRollbackAdapter = new KVMAdapter(
+          kvmCloneRollbackDb,
+          {},
+          async (cmd, args) => {
+            if (cmd === 'qemu-img' && args[0] === 'info') {
+              const target = JSON.stringify({ format: 'qcow2', 'virtual-size': kvmCloneSizeBytes });
+              return { exitCode: 0, timedOut: false, stdout: target, stderr: '' };
+            }
+            if (cmd === 'qemu-img' && args[0] === 'convert') {
+              const targetPath = args[args.length - 1];
+              kvmCloneTargetPathValue = targetPath;
+              fs.writeFileSync(targetPath, 'clone-disk');
+              return { exitCode: 0, timedOut: false, stdout: '', stderr: '' };
+            }
+            return { exitCode: 1, timedOut: false, stdout: '', stderr: 'unexpected command' };
+          }
+        );
+        await assert.rejects(
+          kvmCloneRollbackAdapter.cloneStoppedVm(kvmCloneSourceRow.vm_id, 'clone-rollback-kvm'),
+          /simulated registry sync failure/,
+          'KVM clone must surface the registry sync failure instead of reporting success'
+        );
+        assert.ok(
+          kvmCloneRollbackStatements.some((s) => /DELETE FROM vms WHERE vm_id = \?/i.test(s.sql) && Number(s.params[0]) === 900011),
+          'KVM clone rollback must remove the inserted vms row'
+        );
+        assert.ok(
+          kvmCloneRollbackStatements.some((s) => /DELETE FROM instances WHERE engine = 'kvm' AND ref_id = \?/i.test(s.sql) && Number(s.params[0]) === 900011),
+          'KVM clone rollback must remove the inserted unified registry row'
+        );
+        assert.ok(kvmCloneTargetPathValue, 'KVM clone should have created a target disk image');
+        assert.ok(
+          !fs.existsSync(kvmCloneTargetPathValue),
+          'KVM clone rollback must delete the created disk image'
+        );
+      } finally {
+        try { fs.unlinkSync(kvmCloneSourceDisk); } catch { /* cleanup best effort */ }
+      }
 
       const hookedGuardRow = {
         vm_id: 900003,
@@ -1237,9 +1552,13 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const fakeDisk = path.join(resizeRoot, 'disk.qcow2');
       fs.writeFileSync(fakeDisk, 'test image fixture');
       let virtualSizeBytes = 20 * 1024 ** 3;
+      // Honest allocated (on-disk) size reported by qemu-img; intentionally different
+      // from the tiny fixture file so telemetry tests prove diskUsedGb comes from
+      // qemu-img disk-size rather than a statSync of the image file.
+      let diskSizeBytes = 5 * 1024 ** 3;
       const fakeQemuRunner = async (_binary, args) => {
         if (args[0] === 'info') {
-          return { exitCode: 0, stdout: JSON.stringify({ format: 'qcow2', 'virtual-size': virtualSizeBytes }), stderr: '', timedOut: false, durationMs: 0 };
+          return { exitCode: 0, stdout: JSON.stringify({ format: 'qcow2', 'virtual-size': virtualSizeBytes, 'disk-size': diskSizeBytes }), stderr: '', timedOut: false, durationMs: 0 };
         }
         if (args[0] === 'resize') {
           virtualSizeBytes = Number(args[2]);
@@ -1253,6 +1572,10 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         if (args[0] === 'convert') {
           fs.mkdirSync(path.dirname(args[4]), { recursive: true });
           fs.copyFileSync(args[3], args[4]);
+          return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 0 };
+        }
+        if (args[0] === 'snapshot') {
+          // qemu-img snapshot -c/-a/-d: succeed without touching the fixture image.
           return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 0 };
         }
         return { exitCode: 2, stdout: '', stderr: 'unexpected qemu-img command', timedOut: false, durationMs: 0 };
@@ -1390,6 +1713,42 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         assert.strictEqual(resizeResponse.json.diskSize, '30G');
         assert.strictEqual(resizeResponse.json.virtualSizeBytes, 30 * 1024 ** 3);
         assert.strictEqual(resizeResponse.json.guestFilesystemResizeRequired, true, 'Guest partition/filesystem expansion must be explicitly left to the guest');
+
+        // Phase 12: KVM telemetry must report honest qemu-img disk-image stats rather than the
+        // raw image-file size. After the resize to 30G, diskTotalGb must reflect the virtual
+        // size (30), diskUsedGb the qemu-img allocated disk-size (5), and diskFormat the format.
+        const kvmDiskTel = await ctx.instanceManager.virt.kvm.getTelemetry(vm.vm_id);
+        assert.strictEqual(kvmDiskTel.diskFormat, 'qcow2', 'KVM telemetry must report the qemu-img image format');
+        assert.strictEqual(kvmDiskTel.diskTotalGb, 30, `KVM diskTotalGb must reflect qemu-img virtual-size (expected 30), got ${kvmDiskTel.diskTotalGb}`);
+        assert.strictEqual(kvmDiskTel.diskUsedGb, Number((diskSizeBytes / 1024 ** 3).toFixed(2)), `KVM diskUsedGb must reflect qemu-img allocated disk-size (expected ${Number((diskSizeBytes / 1024 ** 3).toFixed(2))}), got ${kvmDiskTel.diskUsedGb}`);
+
+        // Phase 17: fetching instance telemetry must persist the real measured
+        // sample to metrics_history so the metrics history endpoint returns honest data.
+        const httpTel = await adminClient.request('GET', `/api/v1/instances/kvm/${vm.vm_id}/telemetry`);
+        assert.strictEqual(httpTel.status, 200, `KVM telemetry HTTP failed: ${httpTel.text}`);
+        const metricsHist = await adminClient.request('GET', `/api/v1/instances/kvm/${vm.vm_id}/metrics`);
+        assert.strictEqual(metricsHist.status, 200, `KVM metrics history failed: ${metricsHist.text}`);
+        assert.ok(metricsHist.json.history.length >= 1, 'Fetching telemetry must record a metrics_history sample');
+        const rec = metricsHist.json.history[metricsHist.json.history.length - 1];
+        assert.strictEqual(rec.disk_total_gb, httpTel.json.telemetry.diskTotalGb, `Recorded history disk_total_gb must match the telemetry sample (expected ${httpTel.json.telemetry.diskTotalGb}, got ${rec.disk_total_gb})`);
+        assert.strictEqual(rec.disk_used_gb, httpTel.json.telemetry.diskUsedGb, `Recorded history disk_used_gb must match the telemetry sample (expected ${httpTel.json.telemetry.diskUsedGb}, got ${rec.disk_used_gb})`);
+
+        // Phase 13: KVM QCOW2 snapshot sizing must be honest (qemu-img virtual-size for
+        // capacity and allocated disk-size for consumption) rather than the raw image-file
+        // size, and the snapshot listing must expose both figures.
+        const snapName = `phase13-snap-${Date.now()}`;
+        const snapCreate = await ctx.instanceManager.virt.kvm.createQcow2Snapshot(vm.vm_id, snapName, 'Phase 13 honest sizing');
+        assert.strictEqual(snapCreate.name, snapName, 'Snapshot should be created with the requested name');
+        const snapRow = await ctx.db.get(`SELECT size_gb, allocated_gb FROM vm_snapshots WHERE snapshot_id = ?`, [snapCreate.id]);
+        assert.strictEqual(snapRow.size_gb, 30, `KVM snapshot size_gb must reflect qemu-img virtual-size (expected 30), got ${snapRow.size_gb}`);
+        assert.strictEqual(snapRow.allocated_gb, Number((diskSizeBytes / 1024 ** 3).toFixed(2)), `KVM snapshot allocated_gb must reflect qemu-img allocated disk-size (expected ${Number((diskSizeBytes / 1024 ** 3).toFixed(2))}), got ${snapRow.allocated_gb}`);
+        const snapList = await ctx.backupManager.listSnapshots('kvm', vm.vm_id);
+        const snapListed = snapList.find((sn) => sn.id === snapCreate.id);
+        assert.ok(snapListed, 'Created snapshot must appear in the KVM snapshot listing');
+        assert.strictEqual(snapListed.sizeGb, 30, `Listed snapshot sizeGb must be honest (expected 30), got ${snapListed.sizeGb}`);
+        assert.strictEqual(snapListed.allocatedGb, Number((diskSizeBytes / 1024 ** 3).toFixed(2)), `Listed snapshot allocatedGb must be honest (expected ${Number((diskSizeBytes / 1024 ** 3).toFixed(2))}), got ${snapListed.allocatedGb}`);
+        await ctx.instanceManager.virt.kvm.deleteQcow2Snapshot(vm.vm_id, snapCreate.id);
+
         const shrinkResponse = await adminClient.request(
           'POST',
           `/api/v1/instances/kvm/${vm.vm_id}/disk/resize`,
@@ -1511,6 +1870,69 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       }
     });
 
+    // Phase 19: storage orphan image detection — report-only scan of local pool
+    // directories for unreferenced disk images. It must report the orphan, skip
+    // referenced VM disks and images inside referenced LXC rootfs dirs, and never
+    // delete anything.
+    await runStep('T35: Storage orphan image detection reports unreferenced pool images without deleting them', async () => {
+      const poolDir = path.join(tmpRoot, 'orphan-pool');
+      fs.mkdirSync(poolDir, { recursive: true });
+      const orphanImage = path.join(poolDir, 'orphan.qcow2');
+      const usedImage = path.join(poolDir, 'used.qcow2');
+      fs.writeFileSync(orphanImage, crypto.randomBytes(4096));
+      fs.writeFileSync(usedImage, crypto.randomBytes(4096));
+      // An image inside a referenced LXC rootfs directory must not be reported.
+      const rootfsDir = path.join(poolDir, 'ctr-rootfs');
+      fs.mkdirSync(rootfsDir, { recursive: true });
+      const rootfsImage = path.join(rootfsDir, 'inside.qcow2');
+      fs.writeFileSync(rootfsImage, crypto.randomBytes(1024));
+
+      await ctx.db.run(
+        `INSERT INTO storage_pools (name, node_id, engine, pool_type, path) VALUES (?, 1, 'kvm', 'dir', ?)`,
+        ['orphan-test-pool', poolDir]
+      );
+      const poolRow = await ctx.db.get(`SELECT id FROM storage_pools WHERE name = 'orphan-test-pool'`);
+      assert.ok(poolRow, 'Test pool row must be created');
+
+      const vm = await ctx.db.get(`SELECT vm_id, disk_file FROM vms LIMIT 1`);
+      const savedDiskFile = vm.disk_file;
+      await ctx.db.run(`UPDATE vms SET disk_file = ? WHERE vm_id = ?`, [usedImage, vm.vm_id]);
+      await ctx.db.run(
+        `INSERT INTO lxc_instances (user_id, node_id, container_name, hostname, os_template, rootfs_path)
+         VALUES (1, 1, 'orphan-test-ctr', 'orphan-test-ctr', 'ubuntu:22.04', ?)`,
+        [rootfsDir]
+      );
+
+      try {
+        const orphansRes = await adminClient.request(
+          'GET',
+          '/api/v1/storage/orphans',
+          {},
+          { 'X-Forwarded-For': '198.51.100.52' }
+        );
+        assert.strictEqual(orphansRes.status, 200, `Orphan scan failed: ${orphansRes.text}`);
+        const orphans = orphansRes.json.orphans;
+
+        const orphanEntry = orphans.find((o) => o.filePath === orphanImage);
+        assert.ok(orphanEntry, 'Unreferenced pool image must be reported as an orphan');
+        assert.strictEqual(orphanEntry.poolId, Number(poolRow.id));
+        assert.strictEqual(orphanEntry.poolName, 'orphan-test-pool');
+        assert.strictEqual(orphanEntry.sizeBytes, 4096);
+        assert.ok(orphanEntry.reason, 'Orphan entry must carry an explanatory reason');
+
+        assert.ok(!orphans.some((o) => o.filePath === usedImage), 'A VM-referenced disk image must not be reported');
+        assert.ok(!orphans.some((o) => o.filePath === rootfsImage), 'An image inside a referenced LXC rootfs must not be reported');
+
+        // Report-only contract: detection must never delete or modify files.
+        assert.ok(fs.existsSync(orphanImage), 'Orphan detection must not delete the reported file');
+        assert.ok(fs.existsSync(usedImage), 'Orphan detection must not touch referenced files');
+      } finally {
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE container_name = 'orphan-test-ctr'`);
+        await ctx.db.run(`UPDATE vms SET disk_file = ? WHERE vm_id = ?`, [savedDiskFile, vm.vm_id]);
+        await ctx.db.run(`DELETE FROM storage_pools WHERE id = ?`, [poolRow.id]);
+      }
+    });
+
     // 10. Rootfs Path Traversal Defense & Command Runner Allowlist
     await runStep('T09: Container rootfs traversal confinement & command-runner allowlist enforcement', async () => {
       await assert.rejects(
@@ -1580,6 +2002,41 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         () => cm.readRootfsFile('ct-jail-test', '/../../../etc/passwd'),
         /traversal|escapes|outside|ENOENT/i
       );
+
+      // Rate-limiter proxy trust: X-Forwarded-For must only be honored from configured
+      // reverse proxies so a directly-exposed client cannot spoof the header to bypass limits.
+      const { parseTrustedProxies, isIpTrustedByProxies, createRateLimiter } = require('../lib/security/middleware');
+      assert.deepStrictEqual(parseTrustedProxies(undefined), [], 'No trusted proxies configured by default');
+      assert.deepStrictEqual(parseTrustedProxies('10.0.0.1, 10.0.0.0/8 ,'), ['10.0.0.1', '10.0.0.0/8'], 'Trusted proxies are trimmed and empty entries dropped');
+      assert.strictEqual(isIpTrustedByProxies('203.0.113.9', []), false, 'No trusted proxies means no peer is trusted');
+      assert.strictEqual(isIpTrustedByProxies('203.0.113.9', ['203.0.113.9']), true, 'Exact IP match is trusted');
+      assert.strictEqual(isIpTrustedByProxies('10.1.2.3', ['10.0.0.0/8']), true, 'IPv4 CIDR match is trusted');
+      assert.strictEqual(isIpTrustedByProxies('192.168.1.1', ['10.0.0.0/8']), false, 'Out-of-range IP is not trusted');
+      assert.strictEqual(isIpTrustedByProxies('2001:db8::1', ['2001:db8::1']), true, 'IPv6 exact match is trusted');
+      assert.strictEqual(isIpTrustedByProxies('2001:db8::1', ['2001:db8::/32']), false, 'IPv6 CIDR is not required for this guard');
+
+      const makeLimiterRequest = (remoteAddress, xff) => {
+        const headers = {};
+        if (xff) headers['x-forwarded-for'] = xff;
+        return { headers, socket: { remoteAddress } };
+      };
+      const runLimiter = async (limiter, req, max) => {
+        const seen = [];
+        let status = 200;
+        for (let i = 0; i < max + 1; i += 1) {
+          limiter(req, { setHeader: () => {}, status: (code) => { status = code; return { json: () => ({}) }; } }, () => { seen.push(i); });
+          if (status === 429) break;
+        }
+        return status;
+      };
+      // Without trusted proxies, spoofing XFF must not bypass the limit (keyed on socket IP).
+      const noProxyLimiter = createRateLimiter({ windowMs: 60_000, max: 2, keyPrefix: 'test-noproxy' });
+      const spoofedReq = makeLimiterRequest('198.51.100.10', '1.2.3.4');
+      assert.strictEqual(await runLimiter(noProxyLimiter, spoofedReq, 2), 429, 'Spoofed XFF must not bypass the limit without a trusted proxy');
+      // With a trusted proxy, the forwarded IP is honored and the limit is per forwarded client.
+      const proxyLimiter = createRateLimiter({ windowMs: 60_000, max: 2, keyPrefix: 'test-proxy', trustedProxies: ['10.0.0.5'] });
+      const proxiedReq = makeLimiterRequest('10.0.0.5', '203.0.113.77');
+      assert.strictEqual(await runLimiter(proxyLimiter, proxiedReq, 2), 429, 'Trusted proxy XFF is honored for rate limiting');
     });
 
     // 11. Storage, Templates, Networking, IPv4/IPv6 Pools, Ports & Firewall
@@ -1617,6 +2074,14 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       assert.strictEqual(listPools.status, 200);
       assert.ok(listPools.json.ips.some((i) => i.ip_address === '10.88.10.2'));
 
+      // Phase 16: each network pool must report honest IP capacity computed from
+      // real ip_allocations counts (total/available/used), not a stale recorded value.
+      const poolWithCap = listPools.json.pools.find((pl) => pl.id === netPool.json.pool.id);
+      assert.ok(poolWithCap, 'Expected the created pool in the listing');
+      assert.strictEqual(poolWithCap.ipTotal, 2, `Pool ipTotal must reflect real ip_allocations count (expected 2), got ${poolWithCap.ipTotal}`);
+      assert.strictEqual(poolWithCap.ipAvailable, 2, `Pool ipAvailable must reflect available IPs (expected 2), got ${poolWithCap.ipAvailable}`);
+      assert.strictEqual(poolWithCap.ipUsed, 0, `Pool ipUsed must be total minus available (expected 0), got ${poolWithCap.ipUsed}`);
+
       const aliceLxc = await ctx.db.get(`SELECT id FROM lxc_instances WHERE container_name = 'ct-alice-01'`);
       const portAlloc = await adminClient.request('POST', '/api/v1/network/ports', {
         instanceType: 'lxc',
@@ -1638,6 +2103,22 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
         comment: 'Allow Panel HTTP',
       });
       assert.strictEqual(fwRes.status, 201, `Firewall rule failed: ${fwRes.text}`);
+
+      // Phase 14: ISO library inventory must report honest file size and SHA-256 checksum.
+      const isoDir = path.join(os.homedir(), 'vms', 'iso');
+      fs.mkdirSync(isoDir, { recursive: true });
+      const testIsoName = `tgvpanel-phase14-test-${Date.now()}.iso`;
+      const testIsoPath = path.join(isoDir, testIsoName);
+      const isoContent = 'TGVPANEL-ISO-TEST-CONTENT-1234567890';
+      fs.writeFileSync(testIsoPath, isoContent);
+      const expectedSha = crypto.createHash('sha256').update(isoContent).digest('hex');
+      const isoInv = await adminClient.request('GET', '/api/v1/iso/inventory');
+      assert.strictEqual(isoInv.status, 200, `ISO inventory failed: ${isoInv.text}`);
+      const isoEntry = isoInv.json.isoFiles.find((f) => f.filename === testIsoName);
+      assert.ok(isoEntry, `Expected ${testIsoName} in ISO inventory`);
+      assert.strictEqual(isoEntry.sizeBytes, Buffer.byteLength(isoContent), `ISO sizeBytes must reflect the real file size, got ${isoEntry.sizeBytes}`);
+      assert.strictEqual(isoEntry.sha256, expectedSha, 'ISO sha256 must reflect the real file checksum');
+      try { fs.unlinkSync(testIsoPath); } catch { /* cleanup best effort */ }
     });
 
     // 12. Backups SHA-256, Monitoring, Alerts, Audit Logs & Impersonation
@@ -1658,6 +2139,26 @@ function makeWerkzeugPbkdf2Hash(password, salt = 'testsalt1234', iterations = 60
       const verRes = await adminClient.request('POST', `/api/v1/backups/${bkId}/verify`, {});
       assert.strictEqual(verRes.status, 200, `Verify failed: ${verRes.text}`);
       assert.strictEqual(verRes.json.valid, true);
+
+      // Phase 18: KVM disk backups are encrypted at rest (AES-256-GCM, TGVENC1).
+      assert.strictEqual(bkRes.json.backup.encrypted, true, 'KVM backup response must report encryption');
+      assert.strictEqual(bkRes.json.backup.encryptionAlg, 'aes-256-gcm');
+      const kvmBkpRow = await ctx.db.get(
+        `SELECT encrypted, encryption_alg, file_path FROM container_backups WHERE id = ?`,
+        [bkId]
+      );
+      assert.strictEqual(Number(kvmBkpRow.encrypted), 1, 'KVM backup must be marked encrypted');
+      assert.strictEqual(kvmBkpRow.encryption_alg, 'aes-256-gcm');
+      assert.ok(
+        isEncryptedArchive(kvmBkpRow.file_path),
+        'Stored KVM backup archive must be encrypted on disk'
+      );
+      // Rehearsal validates the encrypted archive but honestly refuses KVM live restore.
+      const kvmRehearse = await adminClient.request('POST', `/api/v1/backups/${bkId}/rehearse`, {});
+      assert.strictEqual(kvmRehearse.status, 200, `KVM rehearsal failed: ${kvmRehearse.text}`);
+      assert.strictEqual(kvmRehearse.json.encrypted, true);
+      assert.strictEqual(kvmRehearse.json.checksumValid, true);
+      assert.strictEqual(kvmRehearse.json.restorable, false, 'KVM archive live restore must be refused');
 
       await ctx.monitoringService.collectCycle();
       const monRes = await adminClient.request('GET', '/api/v1/monitoring/overview');
@@ -2945,9 +3446,108 @@ exec "$@"
       const lxcBkpId = bkpCreate.json.backup.backupId;
       assert.strictEqual(bkpCreate.json.backup.checksumSha256.length, 64);
 
+      // Phase 7: local LXC backup archives are encrypted at rest (AES-256-GCM).
+      const { isEncryptedArchive } = require('../lib/services/backup/backup-crypto');
+      const lxcBkpRow = await ctx.db.get(
+        `SELECT encrypted, encryption_alg, file_path FROM container_backups WHERE id = ?`,
+        [lxcBkpId]
+      );
+      assert.strictEqual(Number(lxcBkpRow.encrypted), 1, 'Local LXC backup must be marked encrypted');
+      assert.strictEqual(lxcBkpRow.encryption_alg, 'aes-256-gcm');
+      assert.ok(isEncryptedArchive(lxcBkpRow.file_path), 'Stored backup archive must be encrypted on disk');
+      assert.ok(
+        !fs.existsSync(lxcBkpRow.file_path.replace(/\.enc$/, '')),
+        'Original plaintext archive must be removed after encryption'
+      );
+
+      // Direct crypto round-trip + tamper detection (AES-GCM authentication).
+      const { encryptArchive, decryptArchive } = require('../lib/services/backup/backup-crypto');
+      const rtStamp = Date.now();
+      const rtPlain = path.join(tmpRoot, `bkp-rt-${rtStamp}.tar.gz`);
+      const rtCipher = `${rtPlain}.enc`;
+      const rtOut = path.join(tmpRoot, `bkp-rt-${rtStamp}-out.tar.gz`);
+      const rtPayload = crypto.randomBytes(4096);
+      fs.writeFileSync(rtPlain, rtPayload);
+      encryptArchive(rtPlain);
+      assert.ok(fs.existsSync(rtCipher), 'encryptArchive must write a .enc file');
+      assert.ok(!fs.existsSync(rtPlain), 'encryptArchive must remove the plaintext');
+      decryptArchive(rtCipher, rtOut);
+      assert.ok(Buffer.compare(fs.readFileSync(rtOut), rtPayload) === 0, 'Decrypt must recover the original bytes');
+      // Tamper with the ciphertext -> GCM tag verification must fail.
+      const tampered = Buffer.from(fs.readFileSync(rtCipher));
+      tampered[tampered.length - 1] ^= 0xff;
+      fs.writeFileSync(rtCipher, tampered);
+      let tamperCaught = false;
+      try {
+        decryptArchive(rtCipher, rtOut);
+      } catch {
+        tamperCaught = true;
+      }
+      assert.ok(tamperCaught, 'Tampered encrypted archive must fail to decrypt (AES-GCM tag mismatch)');
+
       const bkpVerify = await adminClient.request('POST', `/api/v1/backups/${lxcBkpId}/verify`, {});
       assert.strictEqual(bkpVerify.status, 200);
       assert.strictEqual(bkpVerify.json.valid, true);
+
+      // Phase 9: restore rehearsal (dry-run) on the encrypted local backup — must
+      // report restorable without performing the restore, and decrypt + inspect the archive.
+      const bkpRehearse = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${lxcBkpId}/rehearse`,
+        {}
+      );
+      assert.strictEqual(bkpRehearse.status, 200, `Rehearsal failed: ${bkpRehearse.text}`);
+      assert.strictEqual(bkpRehearse.json.restorable, true, `Backup should be restorable: ${bkpRehearse.text}`);
+      assert.strictEqual(bkpRehearse.json.encrypted, true);
+      assert.strictEqual(bkpRehearse.json.checksumValid, true);
+      assert.strictEqual(bkpRehearse.json.archiveValid, true);
+      assert.ok(bkpRehearse.json.entryCount > 0, 'Rehearsal must report archive entries');
+      assert.ok(bkpRehearse.json.topLevelDir, 'Rehearsal must report the top-level container dir');
+
+      // Phase 9 negative case: a tampered (corrupt) encrypted archive must fail rehearsal.
+      const negBkpCreate = await adminClient.request('POST', '/api/v1/backups', {
+        engine: 'lxc',
+        refId: e2eUbuntuId,
+        label: 'pre_mig_neg',
+      });
+      assert.strictEqual(negBkpCreate.status, 201, `Neg-case backup failed: ${negBkpCreate.text}`);
+      const negBkpId = negBkpCreate.json.backup.backupId;
+      const negBkpRow = await ctx.db.get(
+        `SELECT file_path FROM container_backups WHERE id = ?`,
+        [negBkpId]
+      );
+      const negEncBuf = Buffer.from(fs.readFileSync(negBkpRow.file_path));
+      negEncBuf[negEncBuf.length - 1] ^= 0xff; // corrupt the ciphertext
+      fs.writeFileSync(negBkpRow.file_path, negEncBuf);
+      const negRehearse = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${negBkpId}/rehearse`,
+        {}
+      );
+      assert.strictEqual(negRehearse.status, 200, `Neg rehearsal failed: ${negRehearse.text}`);
+      assert.strictEqual(negRehearse.json.restorable, false, 'Tampered archive must not be restorable');
+      assert.strictEqual(negRehearse.json.checksumValid, false);
+      await adminClient.request('DELETE', `/api/v1/backups/${negBkpId}`);
+
+      // Phase 10: backup destination — copy the encrypted local backup to the remote
+      // node (backup replication) and verify the copy's integrity + list it.
+      const bkpCopy = await adminClient.request('POST', `/api/v1/backups/${lxcBkpId}/copy`, {
+        targetNodeId: remoteNodeId,
+      });
+      assert.strictEqual(bkpCopy.status, 201, `Backup copy failed: ${bkpCopy.text}`);
+      assert.strictEqual(bkpCopy.json.copy.backupId, lxcBkpId);
+      assert.strictEqual(bkpCopy.json.copy.targetNodeId, remoteNodeId);
+      assert.strictEqual(bkpCopy.json.copy.status, 'completed');
+      assert.strictEqual(bkpCopy.json.copy.encrypted, true, 'Copy must preserve encryption');
+      assert.strictEqual(
+        bkpCopy.json.copy.checksumSha256,
+        bkpCreate.json.backup.checksumSha256,
+        'Copy checksum must match the source backup'
+      );
+      const bkpCopies = await adminClient.request('GET', `/api/v1/backups/${lxcBkpId}/copies`);
+      assert.strictEqual(bkpCopies.status, 200);
+      assert.ok(bkpCopies.json.copies.length >= 1, 'Copies list must include the new copy');
+      assert.strictEqual(bkpCopies.json.copies[0].target_node_id, remoteNodeId);
 
       // Mutate existing file AND add post-backup junk file, then restore archive backup!
       await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/files/content`, {
@@ -2978,6 +3578,35 @@ exec "$@"
         `/api/v1/lxc/${e2eUbuntuId}/files/content?path=/etc/post-backup-stale.txt`
       );
       assert.strictEqual(staleCheck.status, 400, 'Post-backup stale file must be wiped by clean restore');
+
+      // Phase 20: restore from a recorded backup copy on the remote node — the panel
+      // must download + decrypt + verify the encrypted copy, then restore from it.
+      await adminClient.request('POST', `/api/v1/lxc/${e2eUbuntuId}/files/content`, {
+        path: '/etc/app-version.txt',
+        content: 'corrupted-again\n',
+      });
+      const copyRestore = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${lxcBkpId}/restore`,
+        { copyId: bkpCopy.json.copy.copyId }
+      );
+      assert.strictEqual(copyRestore.status, 200, `Restore from copy failed: ${copyRestore.text}`);
+      assert.strictEqual(copyRestore.json.restored, true);
+      assert.strictEqual(copyRestore.json.sourceCopyId, bkpCopy.json.copy.copyId);
+      const copyAfterVer = await adminClient.request(
+        'GET',
+        `/api/v1/lxc/${e2eUbuntuId}/files/content?path=/etc/app-version.txt`
+      );
+      assert.strictEqual(copyAfterVer.json.content.trim(), 'release-v1.0-stable', 'Restore from copy must recover the backed-up content');
+
+      // Negative: a copy id that does not belong to this backup must be rejected.
+      const badCopyRestore = await adminClient.request(
+        'POST',
+        `/api/v1/backups/${lxcBkpId}/restore`,
+        { copyId: 999999 }
+      );
+      assert.strictEqual(badCopyRestore.status, 400, `Unknown copy must be rejected: ${badCopyRestore.text}`);
+      assert.match(badCopyRestore.json.error, /copy not found/i);
 
       // 14c. Local WebSocket LXC PTY Console (/ws/lxc/:id/console) + Unauth Rejection
       await new Promise((resolve, reject) => {
@@ -3040,6 +3669,35 @@ exec "$@"
       assert.ok(reinstRes.json.rootPassword.length >= 16);
 
       // 14e. 7-Stage Verified Offline Migration: First test automatic pre-commit ROLLBACK on target conflict!
+      // Phase 8: duplicate-run fencing — an active migration must block a second one.
+      // Tested at the manager level (not via HTTP) so it exercises the exact fencing guard
+      // without adding a mutation request that would count against the shared rate limiter.
+      const lxcRowForFence = await ctx.db.get(
+        `SELECT node_id, container_name FROM lxc_instances WHERE id = ?`,
+        [e2eUbuntuId]
+      );
+      await ctx.db.run(
+        `INSERT INTO vps_migrations
+           (lxc_id, instance_type, instance_ref_id, container_name, source_node_id, target_node_id,
+            strategy, migration_mode, status, progress, initiated_by)
+         VALUES (?, 'lxc', ?, ?, ?, ?, 'offline_snapshot_transfer', 'offline_snapshot', 'exporting', 25, 1)`,
+        [e2eUbuntuId, e2eUbuntuId, lxcRowForFence.container_name, lxcRowForFence.node_id, remoteNodeId]
+      );
+      let fenceError = null;
+      try {
+        await ctx.migrationManager.startOfflineLxcMigration({
+          lxcId: e2eUbuntuId,
+          targetNodeId: remoteNodeId,
+          initiatedByUserId: 1,
+        });
+      } catch (e) {
+        fenceError = e.message;
+      }
+      assert.ok(fenceError, 'Expected fencing guard to reject a second active migration');
+      assert.match(fenceError, /active migration/i, `Fencing error expected: ${fenceError}`);
+      // Remove the injected active row so the real migration below can run.
+      await ctx.db.run(`DELETE FROM vps_migrations WHERE lxc_id = ? AND status = 'exporting'`, [e2eUbuntuId]);
+
       const conflictDir = path.join(tmpRoot, 'agent-lxc', 'e2e-ubuntu-01');
       fs.mkdirSync(conflictDir, { recursive: true });
       fs.writeFileSync(path.join(conflictDir, 'config'), 'lxc.uts.name = e2e-ubuntu-01\n');
@@ -3190,6 +3848,844 @@ exec "$@"
     });
 
     // 15. KVM Nesting (/dev/kvm passthrough), WSL2 /proc telemetry fallback & redesigned LXC Detail Control Center
+    // Phase 21: deleting a backup must clean up its recorded copies (rows +
+    // files on their target nodes) so nothing is orphaned behind the deletion.
+    await runStep('T36: Deleting a backup removes its copies (rows and node files)', async () => {
+      const vm = await ctx.db.get(`SELECT vm_id FROM vms LIMIT 1`);
+      assert.ok(vm, 'A KVM VM is required for the backup-deletion cleanup test');
+      const dummyDisk = path.join(tmpRoot, `t36-disk-${vm.vm_id}.qcow2`);
+      fs.writeFileSync(dummyDisk, crypto.randomBytes(65536));
+      const savedDisk = (await ctx.db.get(`SELECT disk_file FROM vms WHERE vm_id = ?`, [vm.vm_id]))?.disk_file;
+      await ctx.db.run(`UPDATE vms SET disk_file = ? WHERE vm_id = ?`, [dummyDisk, vm.vm_id]);
+
+      try {
+        const bkRes = await adminClient.request('POST', '/api/v1/backups', {
+          engine: 'kvm',
+          refId: vm.vm_id,
+        });
+        assert.strictEqual(bkRes.status, 201, `Backup creation failed: ${bkRes.text}`);
+        const bkId = bkRes.json.backup.backupId || bkRes.json.backup.id;
+        const backupFilePath = bkRes.json.backup.filePath;
+        assert.ok(backupFilePath, 'Backup response must include the archive file path');
+
+        const copyRes = await adminClient.request('POST', `/api/v1/backups/${bkId}/copy`, {
+          targetNodeId: remoteNodeId,
+        });
+        assert.strictEqual(copyRes.status, 201, `Backup copy failed: ${copyRes.text}`);
+        const copyId = copyRes.json.copy.copyId;
+        const copyFilePath = copyRes.json.copy.filePath;
+        assert.ok(copyFilePath, 'Copy response must include the copy file path');
+        assert.ok(fs.existsSync(copyFilePath), 'Copy file must exist on the target node before deletion');
+
+        const delRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/backups/${bkId}`,
+          {},
+          { 'X-Forwarded-For': '198.51.100.53' }
+        );
+        assert.strictEqual(delRes.status, 200, `Backup deletion failed: ${delRes.text}`);
+
+        const bkRow = await ctx.db.get(`SELECT id FROM container_backups WHERE id = ?`, [bkId]);
+        assert.strictEqual(bkRow, undefined, 'Deleted backup row must be removed');
+        assert.ok(!fs.existsSync(backupFilePath), 'Deleted backup archive file must be removed');
+
+        const copyRow = await ctx.db.get(`SELECT id FROM backup_copies WHERE id = ?`, [copyId]);
+        assert.strictEqual(copyRow, undefined, 'Copy row must be removed with its backup');
+        assert.ok(!fs.existsSync(copyFilePath), 'Copy file must be removed from the target node');
+      } finally {
+        await ctx.db.run(`UPDATE vms SET disk_file = ? WHERE vm_id = ?`, [savedDisk, vm.vm_id]);
+        try { fs.unlinkSync(dummyDisk); } catch { /* best effort */ }
+      }
+    });
+
+    // Phase 22: webhook delivery retries — a failing delivery is retried with
+    // bounded attempts + backoff, and the outcome (status, error, failure count)
+    // is recorded honestly on the webhook row.
+    await runStep('T37: Webhook deliveries retry with backoff and record honest delivery status', async () => {
+      // Local hook receiver: fails (500) the first two attempts, then succeeds.
+      let requestCount = 0;
+      let capturedBody = '';
+      let capturedSignature = '';
+      const hookServer = http.createServer((req, res) => {
+        requestCount += 1;
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          capturedBody = body;
+          capturedSignature = String(req.headers['x-hkvm-signature-256'] || '');
+          if (requestCount <= 2) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end('{"error":"temporary"}');
+          } else {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end('{"ok":true}');
+          }
+        });
+      });
+      await new Promise((resolve) => hookServer.listen(0, '127.0.0.1', resolve));
+      const hookPort = hookServer.address().port;
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      try {
+        const whRes = await adminClient.request('POST', '/api/v1/webhooks', {
+          name: 't37-retry-hook',
+          url: `http://127.0.0.1:${hookPort}/hook`,
+          events: ['test.retry'],
+          secret: 't37-signing-secret',
+        });
+        assert.strictEqual(whRes.status, 201, `Webhook creation failed: ${whRes.text}`);
+        const retryHookId = whRes.json.id;
+
+        // Unreachable receiver: connection refused on every attempt.
+        const badWhRes = await adminClient.request('POST', '/api/v1/webhooks', {
+          name: 't37-failing-hook',
+          url: 'http://127.0.0.1:1/hook',
+          events: ['test.retry'],
+          secret: 't37-signing-secret',
+        });
+        assert.strictEqual(badWhRes.status, 201, `Webhook creation failed: ${badWhRes.text}`);
+        const badHookId = badWhRes.json.id;
+
+        await ctx.monitoringService.dispatchWebhookEvent('test.retry', { hello: 'world' });
+
+        // Wait for both delivery chains (2s + 4s backoff) to settle.
+        let retryRow = null;
+        let badRow = null;
+        for (let i = 0; i < 40; i += 1) {
+          await sleep(500);
+          retryRow = await ctx.db.get(`SELECT last_status_code, last_error, failure_count FROM webhooks WHERE id = ?`, [retryHookId]);
+          badRow = await ctx.db.get(`SELECT last_status_code, last_error, failure_count FROM webhooks WHERE id = ?`, [badHookId]);
+          if (retryRow?.last_status_code === 200 && badRow?.failure_count >= 3) break;
+        }
+
+        assert.strictEqual(requestCount, 3, 'Receiver must see the initial attempt plus two retries');
+        assert.strictEqual(retryRow?.last_status_code, 200, 'Webhook must succeed after retries');
+        assert.strictEqual(retryRow?.last_error, null, 'last_error must be cleared on success');
+        assert.strictEqual(retryRow?.failure_count, 0, 'failure_count must reset on success');
+        const expectedSig = `sha256=${crypto.createHmac('sha256', 't37-signing-secret').update(capturedBody).digest('hex')}`;
+        assert.strictEqual(capturedSignature, expectedSig, 'Retried delivery must carry the valid HMAC signature');
+
+        assert.strictEqual(badRow?.last_status_code, 0, 'Unreachable webhook must record a zero status code');
+        assert.ok(badRow?.last_error, 'Unreachable webhook must record the failure reason');
+        assert.strictEqual(badRow?.failure_count, 3, 'Unreachable webhook must stop after the bounded attempt count');
+      } finally {
+        await new Promise((resolve) => hookServer.close(() => resolve()));
+        await ctx.db.run(`DELETE FROM webhooks WHERE name IN ('t37-retry-hook', 't37-failing-hook')`);
+      }
+    });
+
+    // Phase 23: VPS expiration sweeper — expired LXC instances with
+    // auto-suspend enabled are suspended through the normal lifecycle path,
+    // warned_at is stamped, and owners receive an in-panel notification.
+    await runStep('T38: Expiration sweeper suspends expired LXC VPSes and notifies owners', async () => {
+      // Provision a dedicated local LXC instance for the sweep (T14's migration
+      // removes the shared e2e containers before this point).
+      const createRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 't38-expiry-ctr',
+        hostname: 't38-expiry-ctr.hkvm.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 5,
+        bridge: 'lxcbr0',
+        ipv4Address: '10.88.10.99/24',
+        ipv4Gateway: '10.88.10.1',
+        autostart: true,
+        nesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(createRes.status, 201, `LXC provisioning failed: ${createRes.text}`);
+      const lxcId = createRes.json.instance.refId;
+      const lxcOwner = (await ctx.db.get(`SELECT user_id FROM lxc_instances WHERE id = ?`, [lxcId])).user_id;
+      assert.strictEqual(createRes.json.instance.status, 'running');
+
+      // Host container operations are stubbed so the sweep's host-verified
+      // suspension is deterministic (same pattern as the T34 clone mocks).
+      const cm = ctx.nodeManager.localRuntime.containerManager;
+      const origStop = cm.stopContainer;
+      const origInspect = cm.inspectContainer;
+      cm.stopContainer = async () => {};
+      cm.inspectContainer = async () => ({ state: 'stopped' });
+
+      try {
+        await ctx.db.run(
+          `INSERT INTO vps_expiration (lxc_id, expires_at, expiration_days, auto_suspend_enabled)
+           VALUES (?, datetime('now', '-1 day'), 30, 0)`,
+          [lxcId]
+        );
+
+        // Negative first: auto-suspend disabled must leave the instance untouched.
+        const sweepOff = await adminClient.request(
+          'POST',
+          '/api/v1/lxc/expirations/sweep',
+          {},
+          { 'X-Forwarded-For': '198.51.100.54' }
+        );
+        assert.strictEqual(sweepOff.status, 200, `Sweep failed: ${sweepOff.text}`);
+        assert.strictEqual(sweepOff.json.evaluated, 0, 'Disabled auto-suspend must not be evaluated');
+        const notSuspended = await ctx.db.get(`SELECT suspended FROM lxc_instances WHERE id = ?`, [lxcId]);
+        assert.strictEqual(Number(notSuspended.suspended), 0, 'Instance must remain unsuspended');
+
+        // Enable auto-suspend and sweep again — the instance must be suspended.
+        await ctx.db.run(`UPDATE vps_expiration SET auto_suspend_enabled = 1 WHERE lxc_id = ?`, [lxcId]);
+        const sweepOn = await adminClient.request(
+          'POST',
+          '/api/v1/lxc/expirations/sweep',
+          {},
+          { 'X-Forwarded-For': '198.51.100.55' }
+        );
+        assert.strictEqual(sweepOn.status, 200, `Sweep failed: ${sweepOn.text}`);
+        assert.strictEqual(sweepOn.json.evaluated, 1, 'Expired instance must be evaluated');
+        assert.strictEqual(sweepOn.json.suspended.length, 1, 'Expired instance must be suspended');
+        assert.strictEqual(sweepOn.json.suspended[0].lxcId, lxcId);
+        assert.strictEqual(sweepOn.json.suspended[0].ownerUserId, lxcOwner);
+
+        const suspendedRow = await ctx.db.get(
+          `SELECT suspended, suspended_reason, status FROM lxc_instances WHERE id = ?`,
+          [lxcId]
+        );
+        assert.strictEqual(Number(suspendedRow.suspended), 1, 'Instance must be marked suspended');
+        assert.match(suspendedRow.suspended_reason, /VPS expired/i, 'Suspension reason must record expiry');
+        assert.strictEqual(suspendedRow.status, 'stopped', 'Suspended instance status must be stopped');
+
+        const expRow = await ctx.db.get(`SELECT warned_at FROM vps_expiration WHERE lxc_id = ?`, [lxcId]);
+        assert.ok(expRow.warned_at, 'warned_at must be stamped on evaluation');
+
+        const notification = await ctx.db.get(
+          `SELECT type, title FROM notifications WHERE user_id = ? AND type = 'warning' ORDER BY id DESC LIMIT 1`,
+          [lxcOwner]
+        );
+        assert.ok(notification, 'Owner must receive an in-panel expiration notification');
+        assert.match(notification.title, /expired and suspended/i);
+      } finally {
+        cm.stopContainer = origStop;
+        cm.inspectContainer = origInspect;
+        await ctx.db.run(`DELETE FROM vps_expiration WHERE lxc_id = ?`, [lxcId]);
+        await ctx.db.run(`DELETE FROM notifications WHERE user_id = ? AND title LIKE 'VPS expired%'`, [lxcOwner]);
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [lxcId]).catch(() => undefined);
+      }
+    });
+
+    // Phase 24: Per-VPS firewall policy — rules scoped to an instance are
+    // enforced against that instance's concrete IPs (local iptables or the
+    // node agent), with honest applied reporting and validation.
+    await runStep('T39: Per-VPS firewall rules are instance-scoped, validated and enforced', async () => {
+      // Provision a dedicated local LXC instance to scope rules against.
+      const createRes = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 't39-fw-ctr',
+        hostname: 't39-fw-ctr.hkvm.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 5,
+        bridge: 'lxcbr0',
+        ipv4Address: '10.88.10.98/24',
+        ipv4Gateway: '10.88.10.1',
+        autostart: true,
+        nesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(createRes.status, 201, `LXC provisioning failed: ${createRes.text}`);
+      const lxcId = createRes.json.instance.refId;
+
+      try {
+        // Create a per-VPS ingress rule scoped to the instance.
+        const ruleRes = await adminClient.request(
+          'POST',
+          `/api/v1/instances/lxc/${lxcId}/firewall-rules`,
+          { direction: 'in', action: 'ACCEPT', protocol: 'tcp', destPort: '443', sourceCidr: '0.0.0.0/0', comment: 'Allow HTTPS' },
+          { 'X-Forwarded-For': '198.51.100.56' }
+        );
+        assert.strictEqual(ruleRes.status, 201, `Per-VPS rule failed: ${ruleRes.text}`);
+        const rule = ruleRes.json.rule;
+        assert.strictEqual(rule.instance_type, 'lxc', 'Rule must be scoped to the lxc instance');
+        assert.strictEqual(rule.instance_ref_id, lxcId, 'Rule must reference the instance id');
+        assert.strictEqual(typeof rule.applied, 'boolean', 'Enforcement result must be reported honestly');
+
+        // Per-instance listing and the global listing both surface the rule.
+        const instRules = await adminClient.request('GET', `/api/v1/instances/lxc/${lxcId}/firewall-rules`);
+        assert.strictEqual(instRules.status, 200, `Instance rule listing failed: ${instRules.text}`);
+        assert.ok(instRules.json.rules.some((r) => r.id === rule.id), 'Rule must appear in per-instance listing');
+        const allRules = await adminClient.request('GET', '/api/v1/network/firewall');
+        assert.strictEqual(allRules.status, 200, `Global rule listing failed: ${allRules.text}`);
+        assert.ok(allRules.json.rules.some((r) => r.id === rule.id), 'Rule must appear in global listing');
+
+        // Honest validation: unknown instance and invalid engine are rejected.
+        const badInstance = await adminClient.request(
+          'POST',
+          '/api/v1/instances/lxc/999999/firewall-rules',
+          { direction: 'in', action: 'ACCEPT', protocol: 'all' },
+          { 'X-Forwarded-For': '198.51.100.57' }
+        );
+        assert.strictEqual(badInstance.status, 400, `Unknown instance must be rejected: ${badInstance.text}`);
+        const badEngine = await adminClient.request(
+          'POST',
+          '/api/v1/instances/xyz/1/firewall-rules',
+          { direction: 'in', action: 'ACCEPT', protocol: 'all' },
+          { 'X-Forwarded-For': '198.51.100.58' }
+        );
+        assert.strictEqual(badEngine.status, 400, `Invalid engine must be rejected: ${badEngine.text}`);
+
+        // The node agent enforces instance-scoped rules per concrete IP and
+        // rejects invalid IPs before touching iptables.
+        const agentFw = (body) =>
+          new Promise((resolve, reject) => {
+            const data = JSON.stringify(body);
+            const signed = signAgentRequest({
+              nodeId: 'local-loopback-agent',
+              apiKey: agentApiKey,
+              hmacSecret: agentHmacSecret,
+              method: 'POST',
+              pathWithQuery: '/api/v1/network/firewall',
+              bodyBuffer: data,
+            });
+            const r = http.request(
+              {
+                hostname: '127.0.0.1',
+                port: AGENT_PORT,
+                path: '/api/v1/network/firewall',
+                method: 'POST',
+                headers: { ...signed, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+              },
+              (res) => {
+                let txt = '';
+                res.on('data', (c) => (txt += c));
+                res.on('end', () => resolve({ status: res.statusCode, text: txt }));
+              }
+            );
+            r.on('error', reject);
+            r.end(data);
+          });
+        const badIp = await agentFw({ mode: 'add', direction: 'in', action: 'ACCEPT', protocol: 'tcp', instanceIps: ['not-an-ip'] });
+        assert.strictEqual(badIp.status, 400, `Agent must reject invalid instance IPs: ${badIp.text}`);
+        const goodIp = await agentFw({ mode: 'add', direction: 'in', action: 'ACCEPT', protocol: 'tcp', destPort: '8443', instanceIps: ['10.88.10.98'] });
+        assert.strictEqual(goodIp.status, 200, `Agent must accept valid instance IPs: ${goodIp.text}`);
+        const goodIpJson = JSON.parse(goodIp.text);
+        assert.strictEqual(typeof goodIpJson.applied, 'boolean', 'Agent must report applied honestly');
+
+        // Delete the rule and confirm it disappears from both listings.
+        const delRes = await adminClient.request('DELETE', `/api/v1/network/firewall/${rule.id}`, undefined, { 'X-Forwarded-For': '198.51.100.59' });
+        assert.strictEqual(delRes.status, 200, `Rule deletion failed: ${delRes.text}`);
+        const afterDel = await adminClient.request('GET', `/api/v1/instances/lxc/${lxcId}/firewall-rules`);
+        assert.strictEqual(afterDel.status, 200, `Instance rule listing failed after delete: ${afterDel.text}`);
+        assert.ok(!afterDel.json.rules.some((r) => r.id === rule.id), 'Deleted rule must not appear in listing');
+      } finally {
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM firewall_rules WHERE instance_type = 'lxc' AND instance_ref_id = ?`, [lxcId]).catch(() => undefined);
+      }
+    });
+
+    // Phase 25: Reusable per-VPS firewall rule profiles — profiles hold an
+    // ordered rule set; applying a profile to an instance materializes
+    // instance-scoped firewall_rules rows enforced via the Phase 24 path.
+    await runStep('T40: Reusable VPS firewall profiles create, validate, apply and cascade', async () => {
+      // Create a profile with two rules.
+      const createRes = await adminClient.request(
+        'POST',
+        '/api/v1/network/firewall-profiles',
+        {
+          name: 't40-web-standard',
+          description: 'Standard web VPS policy',
+          rules: [
+            { direction: 'in', action: 'ACCEPT', protocol: 'tcp', destPort: '80', sourceCidr: '0.0.0.0/0' },
+            { direction: 'in', action: 'ACCEPT', protocol: 'tcp', destPort: '443', sourceCidr: '0.0.0.0/0' },
+          ],
+        },
+        { 'X-Forwarded-For': '198.51.100.60' }
+      );
+      assert.strictEqual(createRes.status, 201, `Profile creation failed: ${createRes.text}`);
+      const profile = createRes.json.profile;
+      assert.ok(profile.id, 'Profile must have an id');
+      assert.strictEqual(profile.rules.length, 2, 'Profile must persist both rules');
+
+      // Listing and detail expose the profile.
+      const listRes = await adminClient.request('GET', '/api/v1/network/firewall-profiles');
+      assert.strictEqual(listRes.status, 200, `Profile listing failed: ${listRes.text}`);
+      const listed = listRes.json.profiles.find((p) => p.id === profile.id);
+      assert.ok(listed, 'Profile must appear in listing');
+      assert.strictEqual(Number(listed.rule_count), 2, 'Listing must report rule count');
+      const detailRes = await adminClient.request('GET', `/api/v1/network/firewall-profiles/${profile.id}`);
+      assert.strictEqual(detailRes.status, 200, `Profile detail failed: ${detailRes.text}`);
+      assert.strictEqual(detailRes.json.profile.rules.length, 2, 'Detail must include rules');
+
+      // Validation: invalid rule input is rejected.
+      const badProfile = await adminClient.request(
+        'POST',
+        '/api/v1/network/firewall-profiles',
+        { name: 't40-bad', rules: [{ direction: 'sideways', action: 'ACCEPT', protocol: 'tcp' }] },
+        { 'X-Forwarded-For': '198.51.100.61' }
+      );
+      assert.strictEqual(badProfile.status, 400, `Invalid profile rule must be rejected: ${badProfile.text}`);
+
+      // Provision a local LXC to apply the profile to.
+      const lxcCreate = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 't40-fwprof-ctr',
+        hostname: 't40-fwprof-ctr.hkvm.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 5,
+        bridge: 'lxcbr0',
+        ipv4Address: '10.88.10.97/24',
+        ipv4Gateway: '10.88.10.1',
+        autostart: true,
+        nesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(lxcCreate.status, 201, `LXC provisioning failed: ${lxcCreate.text}`);
+      const lxcId = lxcCreate.json.instance.refId;
+
+      try {
+        // Apply the profile — both rules materialize as instance-scoped rules.
+        const applyRes = await adminClient.request(
+          'POST',
+          `/api/v1/network/firewall-profiles/${profile.id}/apply`,
+          { instanceType: 'lxc', instanceRefId: lxcId },
+          { 'X-Forwarded-For': '198.51.100.62' }
+        );
+        assert.strictEqual(applyRes.status, 200, `Profile apply failed: ${applyRes.text}`);
+        assert.strictEqual(applyRes.json.created.length, 2, 'Both profile rules must be materialized');
+        for (const created of applyRes.json.created) {
+          assert.ok(Number.isInteger(created.ruleId), 'Each applied rule must have a rule id');
+          assert.strictEqual(typeof created.applied, 'boolean', 'Enforcement result must be reported honestly');
+        }
+        const scopedRows = await ctx.db.all(
+          `SELECT id, instance_type, instance_ref_id, direction, action FROM firewall_rules
+           WHERE instance_type = 'lxc' AND instance_ref_id = ? ORDER BY id`,
+          [lxcId]
+        );
+        assert.strictEqual(scopedRows.length, 2, 'Instance must hold the two materialized rules');
+        assert.ok(scopedRows.every((r) => r.instance_type === 'lxc' && r.instance_ref_id === lxcId), 'Rules must be instance-scoped');
+
+        // Honest validation: unknown instance and unknown profile are rejected.
+        const badApply = await adminClient.request(
+          'POST',
+          `/api/v1/network/firewall-profiles/${profile.id}/apply`,
+          { instanceType: 'lxc', instanceRefId: 999999 },
+          { 'X-Forwarded-For': '198.51.100.63' }
+        );
+        assert.strictEqual(badApply.status, 400, `Apply to unknown instance must be rejected: ${badApply.text}`);
+        const badProfileApply = await adminClient.request(
+          'POST',
+          '/api/v1/network/firewall-profiles/999999/apply',
+          { instanceType: 'lxc', instanceRefId: lxcId },
+          { 'X-Forwarded-For': '198.51.100.64' }
+        );
+        assert.strictEqual(badProfileApply.status, 400, `Apply of unknown profile must be rejected: ${badProfileApply.text}`);
+
+        // Deleting the profile cascades to its rule definitions.
+        const delRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/network/firewall-profiles/${profile.id}`,
+          undefined,
+          { 'X-Forwarded-For': '198.51.100.65' }
+        );
+        assert.strictEqual(delRes.status, 200, `Profile deletion failed: ${delRes.text}`);
+        const afterDel = await adminClient.request('GET', '/api/v1/network/firewall-profiles');
+        assert.strictEqual(afterDel.status, 200, `Profile listing failed after delete: ${afterDel.text}`);
+        assert.ok(!afterDel.json.profiles.some((p) => p.id === profile.id), 'Deleted profile must not appear');
+        const orphanRules = await ctx.db.all(`SELECT id FROM firewall_profile_rules WHERE profile_id = ?`, [profile.id]);
+        assert.strictEqual(orphanRules.length, 0, 'Profile rules must cascade on delete');
+        // Materialized instance rules from the deleted profile remain enforced
+        // until explicitly removed (they are live host policy, not profile data).
+        const stillScoped = await ctx.db.all(
+          `SELECT id FROM firewall_rules WHERE instance_type = 'lxc' AND instance_ref_id = ?`,
+          [lxcId]
+        );
+        assert.strictEqual(stillScoped.length, 2, 'Materialized rules must persist after profile deletion');
+      } finally {
+        await ctx.db.run(`DELETE FROM firewall_rules WHERE instance_type = 'lxc' AND instance_ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM firewall_profile_rules WHERE profile_id = ?`, [profile.id]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM firewall_profiles WHERE id = ?`, [profile.id]).catch(() => undefined);
+      }
+    });
+
+    // Phase 26: Per-instance bandwidth accounting — a cumulative traffic
+    // ledger fed by real telemetry counters (baseline first sample, delta
+    // accumulation, honest skips) exposed via API with measured period usage.
+    await runStep('T41: Per-instance bandwidth accounting ledger, API and honest period usage', async () => {
+      const lxcCreate = await adminClient.request('POST', '/api/v1/lxc', {
+        containerName: 't41-traffic-ctr',
+        hostname: 't41-traffic-ctr.hkvm.local',
+        templateSlug: 'ubuntu:24.04',
+        nodeId: 1,
+        cpuCores: 1,
+        ramMb: 512,
+        diskGb: 5,
+        bridge: 'lxcbr0',
+        ipv4Address: '10.88.10.96/24',
+        ipv4Gateway: '10.88.10.1',
+        autostart: true,
+        nesting: true,
+        provisionOnHost: true,
+      });
+      assert.strictEqual(lxcCreate.status, 201, `LXC provisioning failed: ${lxcCreate.text}`);
+      const lxcId = lxcCreate.json.instance.refId;
+
+      // Deterministic telemetry: controlled counters for our instance, skip
+      // every other instance (their telemetry collection is not under test).
+      const im = ctx.instanceManager;
+      const origCollect = im.collectInstanceTelemetry;
+      let counters = { rx: 1000, tx: 500 };
+      im.collectInstanceTelemetry = async (engine, refId) => {
+        if (engine === 'lxc' && Number(refId) === lxcId) {
+          return { netRxBytes: counters.rx, netTxBytes: counters.tx };
+        }
+        throw new Error('not under test');
+      };
+
+      try {
+        // First accumulation establishes the baseline: no usage counted yet.
+        const acc1 = await ctx.monitoringService.accumulateInstanceTraffic();
+        assert.ok(acc1.sampled >= 1, 'At least the test instance must be sampled');
+        const ledger1 = await ctx.db.get(
+          `SELECT rx_bytes, tx_bytes, last_rx_bytes, last_tx_bytes FROM instance_traffic
+           WHERE instance_type = 'lxc' AND instance_id = ?`,
+          [lxcId]
+        );
+        assert.ok(ledger1, 'Ledger row must exist after accumulation');
+        assert.strictEqual(Number(ledger1.rx_bytes), 0, 'First sample must be a baseline (no usage counted)');
+        assert.strictEqual(Number(ledger1.tx_bytes), 0, 'First sample must be a baseline (no usage counted)');
+        assert.strictEqual(Number(ledger1.last_rx_bytes), 1000, 'Baseline must record the counter reading');
+
+        // Second accumulation with increased counters adds only the delta.
+        counters = { rx: 1500, tx: 800 };
+        await ctx.monitoringService.accumulateInstanceTraffic();
+        const ledger2 = await ctx.db.get(
+          `SELECT rx_bytes, tx_bytes FROM instance_traffic WHERE instance_type = 'lxc' AND instance_id = ?`,
+          [lxcId]
+        );
+        assert.strictEqual(Number(ledger2.rx_bytes), 500, 'Ledger must accumulate the rx delta');
+        assert.strictEqual(Number(ledger2.tx_bytes), 300, 'Ledger must accumulate the tx delta');
+
+        // Counter reset (lower reading) must not reduce the ledger.
+        counters = { rx: 100, tx: 50 };
+        await ctx.monitoringService.accumulateInstanceTraffic();
+        const ledger3 = await ctx.db.get(
+          `SELECT rx_bytes, tx_bytes FROM instance_traffic WHERE instance_type = 'lxc' AND instance_id = ?`,
+          [lxcId]
+        );
+        assert.strictEqual(Number(ledger3.rx_bytes), 500, 'Counter reset must not reduce cumulative rx');
+        assert.strictEqual(Number(ledger3.tx_bytes), 300, 'Counter reset must not reduce cumulative tx');
+
+        // Seed real metrics_history samples and verify the API reports honest
+        // cumulative totals plus measured period usage from sample deltas.
+        await ctx.db.run(
+          `INSERT INTO metrics_history
+             (target_type, target_id, cpu_percent, ram_used_mb, ram_total_mb, disk_used_gb, disk_total_gb, net_rx_bytes, net_tx_bytes, load_avg_1)
+           VALUES ('lxc', ?, 1, 1, 1, 1, 1, 200, 100, 0),
+                  ('lxc', ?, 1, 1, 1, 1, 1, 500, 260, 0)`,
+          [lxcId, lxcId]
+        );
+        const trafficRes = await adminClient.request('GET', `/api/v1/instances/lxc/${lxcId}/traffic`);
+        assert.strictEqual(trafficRes.status, 200, `Traffic API failed: ${trafficRes.text}`);
+        const traffic = trafficRes.json.traffic;
+        assert.strictEqual(Number(traffic.rxBytes), 500, 'API must report cumulative rx from the ledger');
+        assert.strictEqual(Number(traffic.txBytes), 300, 'API must report cumulative tx from the ledger');
+        assert.strictEqual(Number(traffic.periodRxBytes), 300, 'Period rx must be the sum of positive sample deltas');
+        assert.strictEqual(Number(traffic.periodTxBytes), 160, 'Period tx must be the sum of positive sample deltas');
+        assert.strictEqual(Number(traffic.sampleCount), 2, 'API must report the sample count');
+
+        // Honest validation: unknown instance and invalid engine rejected.
+        const badTraffic = await adminClient.request('GET', '/api/v1/instances/lxc/999999/traffic');
+        assert.notStrictEqual(badTraffic.status, 200, 'Unknown instance traffic must not succeed');
+        const badEngine = await adminClient.request('GET', `/api/v1/instances/xyz/${lxcId}/traffic`);
+        assert.strictEqual(badEngine.status, 400, `Invalid engine must be rejected: ${badEngine.text}`);
+      } finally {
+        im.collectInstanceTelemetry = origCollect;
+        await ctx.db.run(`DELETE FROM instance_traffic WHERE instance_type = 'lxc' AND instance_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM metrics_history WHERE target_type = 'lxc' AND target_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM instances WHERE engine = 'lxc' AND ref_id = ?`, [lxcId]).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM lxc_instances WHERE id = ?`, [lxcId]).catch(() => undefined);
+      }
+    });
+
+    // Phase 27: HAProxy load balancer manager — registry, rendered config
+    // validation, start/reload/stop lifecycle, honest capability gating and
+    // remote-node enforcement through the node agent.
+    await runStep('T42: HAProxy load balancers render, validate, apply and gate honestly', async () => {
+      const cmdRunner = require('../lib/node-agent/command-runner');
+      const origRun = cmdRunner.runAllowlistedCommand;
+      const origAvailable = cmdRunner.isBinaryAvailable;
+      const haproxyDir = path.join(process.env.TGVPANEL_DATA_DIR || os.homedir(), 'haproxy');
+      const calls = [];
+      let haproxyPresent = true;
+      let failValidation = false;
+
+      cmdRunner.isBinaryAvailable = (binary) => (binary === 'haproxy' ? haproxyPresent : origAvailable(binary));
+      cmdRunner.runAllowlistedCommand = async (binary, args, options) => {
+        calls.push({ binary, args });
+        if (binary === 'haproxy' && args[0] === '-c') {
+          if (failValidation) return { exitCode: 1, stdout: '', stderr: 'parse error on line 3', timedOut: false, durationMs: 1 };
+          return { exitCode: 0, stdout: 'Configuration file is valid', stderr: '', timedOut: false, durationMs: 1 };
+        }
+        if (binary === 'haproxy' && args[0] === '-D') {
+          // Simulate HAProxy creating its pidfile.
+          const pidIdx = args.indexOf('-p');
+          if (pidIdx >= 0) fs.writeFileSync(args[pidIdx + 1], String(12345), { mode: 0o640 });
+          return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 1 };
+        }
+        return { exitCode: 0, stdout: '', stderr: '', timedOut: false, durationMs: 1 };
+      };
+
+      try {
+        // Create a load balancer with two backends.
+        const createRes = await adminClient.request(
+          'POST',
+          '/api/v1/load-balancers',
+          {
+            name: 't42-web-lb',
+            nodeId: 1,
+            listenIp: '0.0.0.0',
+            listenPort: 8080,
+            protocol: 'tcp',
+            algorithm: 'roundrobin',
+            backends: [
+              { name: 'app-1', target: '10.88.10.5', port: 8081, weight: 2 },
+              { name: 'app-2', target: '10.88.10.6', port: 8081, weight: 1 },
+            ],
+          },
+          { 'X-Forwarded-For': '198.51.100.70' }
+        );
+        assert.strictEqual(createRes.status, 201, `LB creation failed: ${createRes.text}`);
+        const lb = createRes.json.loadBalancer;
+        assert.strictEqual(lb.backends.length, 2, 'Both backends must persist');
+        assert.strictEqual(lb.backends[0].target, '10.88.10.5');
+
+        // Apply: config is written, validated and the process started.
+        calls.length = 0;
+        const applyRes = await adminClient.request(
+          'POST',
+          `/api/v1/load-balancers/${lb.id}/apply`,
+          { mode: 'start' },
+          { 'X-Forwarded-For': '198.51.100.71' }
+        );
+        assert.strictEqual(applyRes.status, 200, `LB apply failed: ${applyRes.text}`);
+        assert.strictEqual(applyRes.json.applied, true, 'Apply must succeed with a valid config');
+        assert.strictEqual(applyRes.json.validated, true, 'Config must validate');
+        const cfgPath = path.join(haproxyDir, 't42-web-lb.cfg');
+        const cfg = fs.readFileSync(cfgPath, 'utf8');
+        assert.match(cfg, /frontend t42-web-lb_fe/, 'Rendered config must contain the frontend');
+        assert.match(cfg, /bind 0.0.0.0:8080/, 'Rendered config must bind the listen address');
+        assert.match(cfg, /server app-1 10.88.10.5:8081 weight 2 check/, 'Rendered config must contain backend servers');
+        assert.ok(calls.some((c) => c.binary === 'haproxy' && c.args[0] === '-c'), 'Validation command must run');
+        assert.ok(calls.some((c) => c.binary === 'haproxy' && c.args[0] === '-D'), 'Daemon start command must run');
+
+        // Status reflects the running process (pidfile created by the stubbed start).
+        const statusRes = await adminClient.request('GET', `/api/v1/load-balancers/${lb.id}/status`);
+        assert.strictEqual(statusRes.status, 200, `LB status failed: ${statusRes.text}`);
+        assert.strictEqual(statusRes.json.status.running, true, 'Status must report the running process');
+
+        // Validation failure is recorded honestly and the process is not started.
+        failValidation = true;
+        const badApply = await adminClient.request(
+          'POST',
+          `/api/v1/load-balancers/${lb.id}/apply`,
+          { mode: 'reload' },
+          { 'X-Forwarded-For': '198.51.100.72' }
+        );
+        assert.strictEqual(badApply.status, 200, `LB apply must return 200 with honest failure: ${badApply.text}`);
+        assert.strictEqual(badApply.json.applied, false, 'Failed validation must not apply');
+        assert.strictEqual(badApply.json.validated, false, 'Failed validation must be reported');
+        assert.match(badApply.json.error, /validation failed/i, 'Validation error must be surfaced');
+        const errStatus = await adminClient.request('GET', `/api/v1/load-balancers/${lb.id}/status`);
+        assert.match(errStatus.json.status.lastError, /validation failed/i, 'Last error must be recorded on the LB');
+
+        // Capability gating: no haproxy binary means an honest refusal.
+        failValidation = false;
+        haproxyPresent = false;
+        const noBinary = await adminClient.request(
+          'POST',
+          `/api/v1/load-balancers/${lb.id}/apply`,
+          { mode: 'start' },
+          { 'X-Forwarded-For': '198.51.100.73' }
+        );
+        assert.strictEqual(noBinary.status, 200, `LB apply must return 200 with honest refusal: ${noBinary.text}`);
+        assert.strictEqual(noBinary.json.applied, false, 'Missing binary must refuse apply');
+        assert.match(noBinary.json.error, /haproxy binary is not available/i);
+
+        // Validation rejects malformed input.
+        haproxyPresent = true;
+        const badCreate = await adminClient.request(
+          'POST',
+          '/api/v1/load-balancers',
+          { name: 't42-bad', listenPort: 70000, backends: [] },
+          { 'X-Forwarded-For': '198.51.100.74' }
+        );
+        assert.strictEqual(badCreate.status, 400, `Invalid listenPort must be rejected: ${badCreate.text}`);
+
+        // Update and delete cascade backends.
+        const updRes = await adminClient.request(
+          'PUT',
+          `/api/v1/load-balancers/${lb.id}`,
+          { listenPort: 8443, backends: [{ name: 'only', target: '10.88.10.9', port: 9000, weight: 1 }] },
+          { 'X-Forwarded-For': '198.51.100.75' }
+        );
+        assert.strictEqual(updRes.status, 200, `LB update failed: ${updRes.text}`);
+        assert.strictEqual(updRes.json.loadBalancer.backends.length, 1, 'Backends must be replaced on update');
+
+        // Remote-node enforcement: the agent validates and applies the config.
+        const remoteApply = () =>
+          new Promise((resolve, reject) => {
+            const body = JSON.stringify({ name: 't42-remote-lb', config: 'frontend x\n    bind 0.0.0.0:9000\n', mode: 'start' });
+            const signed = signAgentRequest({
+              nodeId: 'local-loopback-agent',
+              apiKey: agentApiKey,
+              hmacSecret: agentHmacSecret,
+              method: 'POST',
+              pathWithQuery: '/api/v1/load-balancers/apply',
+              bodyBuffer: body,
+            });
+            const r = http.request(
+              {
+                hostname: '127.0.0.1',
+                port: AGENT_PORT,
+                path: '/api/v1/load-balancers/apply',
+                method: 'POST',
+                headers: { ...signed, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+              },
+              (res) => {
+                let txt = '';
+                res.on('data', (c) => (txt += c));
+                res.on('end', () => resolve({ status: res.statusCode, text: txt }));
+              }
+            );
+            r.on('error', reject);
+            r.end(body);
+          });
+        const agentLb = await remoteApply();
+        assert.strictEqual(agentLb.status, 200, `Agent LB apply failed: ${agentLb.text}`);
+        const agentLbJson = JSON.parse(agentLb.text);
+        assert.strictEqual(agentLbJson.applied, true, 'Agent must apply a valid remote config');
+        assert.strictEqual(agentLbJson.validated, true, 'Agent must validate the remote config');
+
+        const delRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/load-balancers/${lb.id}`,
+          undefined,
+          { 'X-Forwarded-For': '198.51.100.76' }
+        );
+        assert.strictEqual(delRes.status, 200, `LB delete failed: ${delRes.text}`);
+        const afterDel = await ctx.db.all(`SELECT id FROM load_balancer_backends WHERE load_balancer_id = ?`, [lb.id]);
+        assert.strictEqual(afterDel.length, 0, 'Backends must cascade on delete');
+      } finally {
+        cmdRunner.runAllowlistedCommand = origRun;
+        cmdRunner.isBinaryAvailable = origAvailable;
+        await ctx.db.run(`DELETE FROM load_balancer_backends`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM load_balancers`).catch(() => undefined);
+        if (fs.existsSync(path.join(haproxyDir, 't42-web-lb.cfg'))) fs.unlinkSync(path.join(haproxyDir, 't42-web-lb.cfg'));
+        if (fs.existsSync(path.join(haproxyDir, 't42-web-lb.pid'))) fs.unlinkSync(path.join(haproxyDir, 't42-web-lb.pid'));
+        if (fs.existsSync(path.join(haproxyDir, 't42-remote-lb.cfg'))) fs.unlinkSync(path.join(haproxyDir, 't42-remote-lb.cfg'));
+      }
+    });
+
+    // Phase 28: Session inventory & revocation — panel sessions are now
+    // persisted, enumerable by administrators and revocable (single or
+    // per-user), replacing the in-memory-only default store.
+    await runStep('T43: Session inventory lists active logins; revocation forces logout', async () => {
+      // bob_user (no 2FA) logs in fresh, creating a persistent session.
+      const bobClient = new SessionClient(baseUrl);
+      const loginRes = await bobClient.request('POST', '/api/login', {
+        username: 'bob_user',
+        password: 'BobPass!123',
+      });
+      assert.strictEqual(loginRes.status, 200, `Bob login failed: ${loginRes.text}`);
+      assert.strictEqual(loginRes.json.success, true, 'Bob login must complete without 2FA');
+
+      const bobRow = await ctx.db.get(`SELECT id FROM users WHERE username = 'bob_user'`);
+      const bobId = bobRow.id;
+
+      // The SQLite session save commits asynchronously; poll for the row that
+      // matches the client's actual cookie session id so assertions never race
+      // the write (a stale row from an earlier test would be a false positive).
+      const waitForSession = async () => {
+        const cookieSid = decodeURIComponent(
+          bobClient.cookie.replace(/^connect\.sid=s%3A/, '').split('.')[0]
+        );
+        for (let i = 0; i < 40; i++) {
+          const row = await ctx.db.get(`SELECT sid FROM sessions WHERE sid = ?`, [cookieSid]);
+          if (row) return row;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return null;
+      };
+
+      try {
+        // The session is persisted in the store.
+        const storeRow = await waitForSession();
+        assert.ok(storeRow, 'Bob session must be persisted in the sessions table');
+
+        // Customers cannot inventory or revoke sessions. This authenticated
+        // request also triggers activity metadata (last seen / IP / user agent).
+        const forbidden = await bobClient.request('GET', '/api/v1/sessions');
+        assert.strictEqual(forbidden.status, 403, `Customer session inventory must be forbidden: ${forbidden.text}`);
+
+        // Activity metadata is written asynchronously; poll briefly for it.
+        let storeRowFull = null;
+        for (let i = 0; i < 40; i++) {
+          storeRowFull = await ctx.db.get(
+            `SELECT sid, user_id, ip, user_agent, last_seen_at FROM sessions WHERE user_id = ?`,
+            [bobId]
+          );
+          if (storeRowFull && storeRowFull.last_seen_at) break;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        assert.ok(storeRowFull && storeRowFull.last_seen_at, 'Session activity must be recorded');
+        assert.ok(storeRowFull.ip, 'Session IP must be recorded');
+
+        // Administrator inventory includes both the admin and Bob sessions.
+        const invRes = await adminClient.request('GET', '/api/v1/sessions');
+        assert.strictEqual(invRes.status, 200, `Session inventory failed: ${invRes.text}`);
+        const sessions = invRes.json.sessions;
+        assert.ok(sessions.length >= 2, 'Inventory must list the admin and Bob sessions');
+        const bobSession = sessions.find((s) => s.user_id === bobId);
+        assert.ok(bobSession, 'Bob session must appear in the inventory');
+        assert.strictEqual(bobSession.username, 'bob_user', 'Inventory must join the user name');
+
+        // Revoking a single session forces an immediate logout.
+        const revokeRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/sessions/${encodeURIComponent(bobSession.sid)}`,
+          undefined,
+          { 'X-Forwarded-For': '198.51.100.80' }
+        );
+        assert.strictEqual(revokeRes.status, 200, `Session revocation failed: ${revokeRes.text}`);
+        assert.strictEqual(revokeRes.json.revoked, 1, 'Revocation must report the destroyed session');
+        const afterRevoke = await bobClient.request('GET', '/api/v1/instances');
+        assert.notStrictEqual(afterRevoke.status, 200, 'Revoked session must not authenticate');
+
+        // Log back in and verify per-user revocation clears every session.
+        const login2 = await bobClient.request('POST', '/api/login', {
+          username: 'bob_user',
+          password: 'BobPass!123',
+        });
+        assert.strictEqual(login2.status, 200, `Bob re-login failed: ${login2.text}`);
+        await waitForSession();
+        const revokeAllRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/sessions?userId=${bobId}`,
+          undefined,
+          { 'X-Forwarded-For': '198.51.100.81' }
+        );
+        assert.strictEqual(revokeAllRes.status, 200, `Per-user revocation failed: ${revokeAllRes.text}`);
+        assert.ok(revokeAllRes.json.revoked >= 1, 'Per-user revocation must destroy the session');
+        const afterRevokeAll = await bobClient.request('GET', '/api/v1/instances');
+        assert.notStrictEqual(afterRevokeAll.status, 200, 'All-revoked user must not authenticate');
+        const remaining = await ctx.db.get(`SELECT sid FROM sessions WHERE user_id = ?`, [bobId]);
+        assert.strictEqual(remaining, undefined, 'No sessions must remain for the revoked user');
+      } finally {
+        await ctx.db.run(`DELETE FROM sessions WHERE user_id = ?`, [bobId]).catch(() => undefined);
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');
@@ -5406,6 +6902,7 @@ fi
     if (app && app.getHkvmV3Context()) {
       app.getHkvmV3Context().monitoringService.stopBackgroundLoop();
       app.getHkvmV3Context().backupManager.stopScheduleLoop();
+      app.getHkvmV3Context().lxcAdapter.stopExpirationLoop();
       await app.getHkvmV3Context().db.close().catch(() => {});
     }
     if (app && app.server) {

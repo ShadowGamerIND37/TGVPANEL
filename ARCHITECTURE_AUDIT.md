@@ -1,5 +1,7 @@
 # TGVPANEL Architecture Audit
 
+**Audit baseline:** active branch `arena/1339f942-tgvpanel`, based on `97e5d76c41f10ebbd0066230fb4917d14e27c6df` (`main`, merge of PR #40). Audited against the complete Virtualizor-level upgrade roadmap (sections A–R). Audit-only pass: no production functionality was modified.
+
 ## Product and runtime
 
 - **Repository/product:** `ShadowGamerIND37/TGVPANEL`; existing product, TGVPANEL branding. This change must preserve it and extend in place.
@@ -54,13 +56,14 @@
 - KVM telemetry fidelity: Phase 0 found `KVMAdapter.getTelemetry()` returning constant-zero network RX/TX and `mapRowToUnified()` substituting `127.0.0.1` for a missing IP. Phase 1 changed those unavailable fields to null; KVM network traffic is still not measured. KVM CPU/RAM remain host-process `/proc` observations and disk-used is the disk-image file size, not guest-level metrics. LXC/node metrics have separate real host/cgroup collection paths, with coverage limits recorded in `FEATURE_GAP_ANALYSIS.md`.
 - Controller timer loops cannot provide distributed job locking or cluster HA guarantees. Keep those gaps visible and do not claim safe failover.
 
-## Audit verification (2026-10-30)
+## Audit verification (2026-10-30, refreshed against the full A–R roadmap)
 
 - `npm run build`: passed.
 - `node --check app.js`: passed.
-- `npm test`: passed, 33/33 acceptance suites (including SQLite migration preservation, integration tests, host-dependent LXC/cgroup cases, and reseller T33). Some cases use command harnesses/stubs when host hypervisor binaries are unavailable (notably T13/T24); this is not evidence of live QEMU/Proxmox operation or production-scale performance.
+- `npm test`: passed, **34/34** acceptance suites (including SQLite migration preservation, integration tests, host-dependent LXC/cgroup cases, reseller T33, and the Phase 1/6 additions in T08/T09). Some cases use command harnesses/stubs when host hypervisor binaries are unavailable (notably T13/T24); this is not evidence of live QEMU/Proxmox operation or production-scale performance.
+- Code-level audit confirmed the absence of Docker management, HAProxy load-balancing, billing/payment/invoice, and PowerDNS zone-management services (only comment/relay/string references exist). Storage, networking, migration, and monitoring scopes are bounded as recorded in `FEATURE_GAP_ANALYSIS.md`.
 - `npm ci` surfaced two moderate dependency advisories and deprecated dependency notices; no dependency upgrades were made as part of this audit.
-- No production code, database, or runtime behavior was changed during Phase 0; only the three audit documents were edited.
+- This audit-only pass changed **only documentation** (`FEATURE_GAP_ANALYSIS.md`, `FEATURE_STATUS.md`, `ARCHITECTURE_AUDIT.md`); no production code, database, or runtime behavior was modified. Prior phase work on this branch (Phase 1 shutdown + clone rollback, Phase 6 rate-limiter/cookie hardening) is already committed and tested.
 
 ## Phase 1 implementation progress (not complete)
 
