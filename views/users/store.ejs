@@ -256,7 +256,7 @@
             try {
                 const data = await window.hkvmApi('/api/v1/store/purchase', {
                     method: 'POST',
-                    body: JSON.stringify({ planId: selectedPlan.id, gatewayId: selectedGatewayId })
+                    body: { planId: selectedPlan.id, gatewayId: selectedGatewayId }
                 });
 
                 const order = data.order;
