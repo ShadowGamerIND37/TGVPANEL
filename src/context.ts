@@ -15,6 +15,7 @@ import { NetworkManager } from './services/network/NetworkManager';
 import { LoadBalancerManager } from './services/network/LoadBalancerManager';
 import { DockerManager } from './services/docker/DockerManager';
 import { BillingManager } from './services/billing/BillingManager';
+import { DdosManager } from './services/ddos/DdosManager';
 import { SqliteSessionStore } from './security/session-store';
 import { BackupSnapshotManager } from './services/backup/BackupSnapshotManager';
 import { MigrationManager } from './services/migration/MigrationManager';
@@ -33,6 +34,7 @@ export interface HkvmRuntimeContext {
   loadBalancerManager: LoadBalancerManager;
   dockerManager: DockerManager;
   billingManager: BillingManager;
+  ddosManager: DdosManager;
   sessionStore: SqliteSessionStore;
   backupManager: BackupSnapshotManager;
   migrationManager: MigrationManager;
@@ -98,9 +100,18 @@ export async function initializeUnifiedHkvmRuntime(
   const loadBalancerManager = new LoadBalancerManager(db, nodeManager);
   const dockerManager = new DockerManager(db, nodeManager);
   const billingManager = new BillingManager(db);
+  const ddosManager = new DdosManager(db);
   // Shared persistent session store (inventory + revocation; also backs the
   // express-session parser wired in app.js against the same database file).
   const sessionStore = new SqliteSessionStore(dbPath);
+
+  // Real-time DDoS monitoring (ss/netstat + iptables blocking) - Linux only.
+  if (
+    process.env.TGVPANEL_DISABLE_BACKGROUND_POLLER !== 'true' &&
+    process.env.HKVM_DISABLE_BACKGROUND_POLLER !== 'true'
+  ) {
+    await ddosManager.start();
+  }
 
   if (
     process.env.TGVPANEL_DISABLE_BACKGROUND_POLLER !== 'true' &&
@@ -127,6 +138,7 @@ export async function initializeUnifiedHkvmRuntime(
     loadBalancerManager,
     dockerManager,
     billingManager,
+    ddosManager,
     sessionStore,
     backupManager,
     migrationManager,

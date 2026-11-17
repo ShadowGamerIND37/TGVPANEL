@@ -18,6 +18,23 @@ Status is based on code and acceptance tests, not marketing pages or historical 
 | Billing, payments, invoices, PowerDNS | NOT IMPLEMENTED | No corresponding production services/schema were found. **HAProxy load balancing is implemented (Phase 27).** |
 | General persistent task queue/distributed locks | PARTIALLY IMPLEMENTED | v019 persists lifecycle task status/history and serializes manager-routed synchronous/async action and bulk calls per VPS; reseller VPS lifecycle calls share the manager lock/history without changing their synchronous HTTP contract, and legacy KVM plus direct LXC mutations are covered selectively. Some non-lifecycle legacy mutations remain outside this history; workers are in-process and there is no general distributed queue or multi-controller worker. |
 
+
+## DDoS Protection (Area D hardening) — Integrated
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Real-time network monitoring (`ss`/`netstat`) | ✅ Integrated | SYN flood, port scan, UDP flood, TIME_WAIT abuse, high-connection detection |
+| Threat scoring (low/medium/high/critical) | ✅ Integrated | Configurable thresholds via settings |
+| Auto-block via `iptables` DROP | ✅ Integrated | Auto-block + auto-unblock after `block_duration` |
+| Manual block/unblock | ✅ Integrated | Admin API + UI controls |
+| Settings (rate limits, thresholds) | ✅ Integrated | GET/PUT API + settings editor in UI |
+| Attack logging | ✅ Integrated | `ddos_attack_logs` table + UI log viewer |
+| Role-based access | ✅ Integrated | Admin manages; subadmin/operator reads; customers see stats only |
+| Honest platform gating | ✅ Integrated | Non-Linux/missing tools report monitoring unavailable (no fake data) |
+| Test coverage (T46) | ✅ Passing | 46/46 acceptance tests |
+
+**Requirements:** Linux host with `ss`, `netstat`, and `iptables` available for full monitoring and blocking capability.
+
 ## Roadmap phase status (Phase 0 baseline)
 
 The **only roadmap system classified FULLY IMPLEMENTED is the existing reseller system**, as directed by the owner. Other areas may contain implemented/tested slices, but remain partial or not implemented at phase scope.

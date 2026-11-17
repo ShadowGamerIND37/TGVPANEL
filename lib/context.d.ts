@@ -11,6 +11,7 @@ import { NetworkManager } from './services/network/NetworkManager';
 import { LoadBalancerManager } from './services/network/LoadBalancerManager';
 import { DockerManager } from './services/docker/DockerManager';
 import { BillingManager } from './services/billing/BillingManager';
+import { DdosManager } from './services/ddos/DdosManager';
 import { SqliteSessionStore } from './security/session-store';
 import { BackupSnapshotManager } from './services/backup/BackupSnapshotManager';
 import { MigrationManager } from './services/migration/MigrationManager';
@@ -27,6 +28,7 @@ export interface HkvmRuntimeContext {
     loadBalancerManager: LoadBalancerManager;
     dockerManager: DockerManager;
     billingManager: BillingManager;
+    ddosManager: DdosManager;
     sessionStore: SqliteSessionStore;
     backupManager: BackupSnapshotManager;
     migrationManager: MigrationManager;

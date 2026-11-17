@@ -5034,6 +5034,89 @@ exec "$@"
       }
     });
 
+    await runStep('T46: DDoS protection stats, settings, IP management & honest platform gating', async () => {
+      const ctx = app.getHkvmV3Context();
+      try {
+        // 1. Stats endpoint is authenticated and returns the expected shape.
+        const statsRes = await adminClient.request('GET', '/api/v1/ddos/stats');
+        assert.strictEqual(statsRes.status, 200, `Stats failed: ${statsRes.text}`);
+        assert.ok(statsRes.json.stats, 'Stats object present');
+        assert.ok('total_requests' in statsRes.json.stats, 'total_requests present');
+        assert.ok('critical_threats' in statsRes.json.stats, 'critical_threats present');
+        assert.ok(typeof statsRes.json.linux === 'boolean', 'linux flag is boolean');
+        assert.ok(typeof statsRes.json.monitoring === 'boolean', 'monitoring flag is boolean');
+
+        // 2. Settings GET + PUT (admin only).
+        const getSettings = await adminClient.request('GET', '/api/v1/ddos/settings');
+        assert.strictEqual(getSettings.status, 200, `Settings GET failed: ${getSettings.text}`);
+        assert.ok(getSettings.json.settings, 'Settings object present');
+        assert.strictEqual(typeof getSettings.json.settings.rate_limit_per_minute, 'number');
+
+        const putSettings = await adminClient.request('PUT', '/api/v1/ddos/settings', {
+          rate_limit_per_minute: 75,
+          block_duration: 7200,
+        });
+        assert.strictEqual(putSettings.status, 200, `Settings PUT failed: ${putSettings.text}`);
+        assert.strictEqual(putSettings.json.settings.rate_limit_per_minute, 75, 'Rate limit updated');
+        assert.strictEqual(putSettings.json.settings.block_duration, 7200, 'Block duration updated');
+
+        // 3. Settings PUT is admin-only — operator is rejected.
+        // Create an operator user inline for this check.
+        const bcrypt = require('bcryptjs');
+        const opHash = bcrypt.hashSync('OpPass!99', 10);
+        await ctx.db.run(`INSERT OR IGNORE INTO users (username, password, email, role, is_active) VALUES ('op_user', ?, 'op@example.org', 'operator', 1)`, [opHash]);
+        const opClient = new SessionClient(baseUrl);
+        const opLogin = await opClient.request('POST', '/api/login', { username: 'op_user', password: 'OpPass!99' });
+        assert.strictEqual(opLogin.status, 200, `Operator login failed: ${opLogin.text}`);
+        const opSettings = await opClient.request('PUT', '/api/v1/ddos/settings', {
+          rate_limit_per_minute: 1,
+        });
+        assert.ok([403, 401].includes(opSettings.status), `Operator must not update settings: ${opSettings.status}`);
+
+        // 4. List IPs (may be empty on a fresh DB — that's honest).
+        const ipsRes = await adminClient.request('GET', '/api/v1/ddos/ips?page=1&limit=10');
+        assert.strictEqual(ipsRes.status, 200, `IP list failed: ${ipsRes.text}`);
+        assert.ok(Array.isArray(ipsRes.json.ips), 'ips array present');
+        assert.ok(ipsRes.json.pagination, 'pagination present');
+
+        // 5. Operator can list IPs (read).
+        const opIps = await opClient.request('GET', '/api/v1/ddos/ips');
+        assert.strictEqual(opIps.status, 200, `Operator IP list failed: ${opIps.text}`);
+
+        // 6. Block/unblock with a valid IPv4 — on non-Linux or missing iptables,
+        //    the manager reports an honest error (no fake success).
+        const testIp = '203.0.113.55';
+        const blockRes = await adminClient.request('POST', `/api/v1/ddos/ips/${testIp}/block`, { reason: 't46' });
+        // 200 = blocked on Linux with iptables; 400 = honest platform error. Both are valid.
+        assert.ok([200, 400].includes(blockRes.status), `Block returned unexpected status: ${blockRes.status} — ${blockRes.text}`);
+        if (blockRes.status === 200) {
+          const unblockRes = await adminClient.request('POST', `/api/v1/ddos/ips/${testIp}/unblock`);
+          assert.strictEqual(unblockRes.status, 200, `Unblock failed: ${unblockRes.text}`);
+        }
+
+        // 7. Block with an invalid IP must be rejected.
+        const badIp = await adminClient.request('POST', '/api/v1/ddos/ips/not.an.ip/block');
+        assert.strictEqual(badIp.status, 400, `Invalid IP must be rejected: ${badIp.text}`);
+
+        // 8. Logs endpoint works.
+        const logsRes = await adminClient.request('GET', '/api/v1/ddos/logs?limit=10');
+        assert.strictEqual(logsRes.status, 200, `Logs failed: ${logsRes.text}`);
+        assert.ok(Array.isArray(logsRes.json.logs), 'logs array present');
+
+        // 9. Network analysis endpoint (Linux monitoring or honest empty).
+        const naRes = await adminClient.request('GET', '/api/v1/ddos/network-analysis');
+        assert.strictEqual(naRes.status, 200, `Network analysis failed: ${naRes.text}`);
+        assert.ok('active_connections' in naRes.json, 'active_connections present');
+
+        // 10. Clear IP (clean up any test data).
+        await adminClient.request('DELETE', `/api/v1/ddos/ips/${testIp}`);
+      } finally {
+        // Restore defaults so other tests/runs are unaffected.
+        await ctx.db.run(`UPDATE ddos_settings SET rate_limit_per_minute=60, block_duration=3600`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM users WHERE username = 'op_user'`).catch(() => undefined);
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

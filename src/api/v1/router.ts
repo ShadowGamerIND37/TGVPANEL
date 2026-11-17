@@ -3626,5 +3626,128 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // ================================================================
+  // DDoS Protection (Area D hardening)
+  // Real-time network-connection monitoring with threat scoring and
+  // iptables-based blocking. Admin/subadmin/operator can manage;
+  // monitoring data is available to all authenticated users.
+  // ================================================================
+  router.get(
+    '/ddos/stats',
+    requirePrincipal,
+    async (_req: Request, res: Response) => {
+      const stats = ctx.ddosManager.getStats();
+      const settings = ctx.ddosManager.getSettings();
+      const linux = ctx.ddosManager.isLinux();
+      res.json({ stats, settings, linux, monitoring: linux });
+    }
+  );
+
+  router.get(
+    '/ddos/ips',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const page = pInt(req.query.page as string | string[] | undefined) || 1;
+      const limit = pInt(req.query.limit as string | string[] | undefined) || 50;
+      const filter = pStr(req.query.filter as string | string[] | undefined) || 'all';
+      const result = await ctx.ddosManager.listIps({ page, limit, filter });
+      res.json(result);
+    }
+  );
+
+  router.get(
+    '/ddos/ips/:ip',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const ip = pStr(req.params.ip);
+      const result = await ctx.ddosManager.getIp(ip);
+      if (!result) {
+        res.status(404).json({ error: 'IP not found' });
+        return;
+      }
+      res.json(result);
+    }
+  );
+
+  router.post(
+    '/ddos/ips/:ip/block',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      const ip = pStr(req.params.ip);
+      const reason = pStr(req.body?.reason) || 'manual';
+      const result = await ctx.ddosManager.blockIP(ip, reason);
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(400).json({ error: result.message, details: result.error });
+      }
+    }
+  );
+
+  router.post(
+    '/ddos/ips/:ip/unblock',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      const ip = pStr(req.params.ip);
+      const result = await ctx.ddosManager.unblockIP(ip);
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(400).json({ error: result.message, details: result.error });
+      }
+    }
+  );
+
+  router.delete(
+    '/ddos/ips/:ip',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      const ip = pStr(req.params.ip);
+      const result = await ctx.ddosManager.clearIp(ip);
+      res.json(result);
+    }
+  );
+
+  router.get(
+    '/ddos/logs',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const limit = Math.min(500, pInt(req.query.limit as string | string[] | undefined) || 100);
+      const logs = await ctx.ddosManager.listLogs(limit);
+      res.json({ logs });
+    }
+  );
+
+  router.get(
+    '/ddos/settings',
+    requireRole(['admin', 'subadmin']),
+    async (_req: Request, res: Response) => {
+      const settings = ctx.ddosManager.getSettings();
+      res.json({ settings });
+    }
+  );
+
+  router.put(
+    '/ddos/settings',
+    requireRole(['admin']),
+    async (req: Request, res: Response) => {
+      try {
+        const settings = await ctx.ddosManager.updateSettings(req.body || {});
+        res.json({ success: true, settings });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.get(
+    '/ddos/network-analysis',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const analysis = await ctx.ddosManager.getNetworkAnalysis();
+      res.json(analysis);
+    }
+  );
+
   return router;
 }

@@ -390,6 +390,19 @@ export function createUnifiedWebRouter(
   );
 
   router.get(
+    '/admin/ddos',
+    ...adminStaffGuard,
+    async (req: Request, res: Response) => {
+      res.render('admin/unified-page', {
+        title: 'DDoS Protection - TGVPANEL',
+        currentPage: 'ddos',
+        section: 'ddos',
+        user: res.locals.user || (req as any).session?.user,
+      });
+    }
+  );
+
+  router.get(
     '/admin/sessions',
     requirePrincipal,
     requireRole(['admin', 'subadmin']),
