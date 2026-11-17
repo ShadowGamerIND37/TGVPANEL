@@ -444,6 +444,22 @@ export const SafeValidators = {
     return value;
   },
 
+  billingPlanName(name: unknown): string {
+    const value = String(name ?? '').trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,63}$/.test(value)) {
+      throw new Error('Plan name must start with an alphanumeric character (max 64 chars).');
+    }
+    return value;
+  },
+
+  billingCycle(cycle: unknown): string {
+    const value = String(cycle ?? '').trim();
+    if (!['monthly', 'yearly', 'one-time'].includes(value)) {
+      throw new Error('billingCycle must be one of: monthly, yearly, one-time.');
+    }
+    return value;
+  },
+
   loadBalancerName(name: unknown): string {
     const val = String(name || '').trim();
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{1,59}$/.test(val)) {

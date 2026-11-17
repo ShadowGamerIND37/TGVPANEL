@@ -1,0 +1,73 @@
+import { UnifiedDatabase } from '../../db/database';
+export interface BillingPlanInput {
+    name?: string;
+    priceCents?: number;
+    billingCycle?: string;
+    description?: string;
+    features?: string[] | string;
+    isActive?: boolean;
+}
+export interface SubscriptionInput {
+    userId?: number;
+    planId?: number;
+    autoRenew?: boolean;
+}
+export interface PaymentConfirmationInput {
+    paymentReference?: string;
+    method?: string;
+}
+export interface CreditAdjustmentInput {
+    userId?: number;
+    type?: string;
+    amountCents?: number;
+    reason?: string;
+}
+/**
+ * Internal billing & invoicing manager (Area K).
+ *
+ * Plans, subscriptions, invoices and a credit ledger. Payments are recorded
+ * ONLY after an administrator confirms receipt with a payment reference —
+ * there is no automated payment gateway and nothing is marked paid without
+ * that verified confirmation.
+ */
+export declare class BillingManager {
+    private db;
+    constructor(db: UnifiedDatabase);
+    listPlans(): Promise<any[]>;
+    getPlan(id: number): Promise<any>;
+    private parseFeatures;
+    private validatePlanInput;
+    createPlan(input: BillingPlanInput): Promise<any>;
+    updatePlan(id: number, input: BillingPlanInput): Promise<any>;
+    deletePlan(id: number): Promise<boolean>;
+    listSubscriptions(): Promise<any[]>;
+    getSubscription(id: number): Promise<any>;
+    private computePeriodEnd;
+    createSubscription(input: SubscriptionInput): Promise<any>;
+    cancelSubscription(id: number): Promise<any>;
+    renewSubscription(id: number): Promise<any>;
+    listInvoices(userId?: number): Promise<any[]>;
+    getInvoice(id: number): Promise<any>;
+    private nextInvoiceNumber;
+    private issueInvoiceForSubscription;
+    /**
+     * Records a payment ONLY after administrator-verified confirmation. The
+     * caller must supply the payment reference (evidence the payment was
+     * verified); no automated payment processing exists.
+     */
+    confirmPayment(invoiceId: number, input: PaymentConfirmationInput, actorId: number): Promise<any>;
+    listCredits(userId?: number): Promise<any[]>;
+    getCreditBalance(userId: number): Promise<number>;
+    adjustCredit(input: CreditAdjustmentInput, actorId: number): Promise<{
+        userId: number;
+        type: string;
+        amountCents: number;
+        balanceAfter: number;
+    }>;
+    getUserBillingSummary(userId: number): Promise<{
+        userId: number;
+        subscriptions: any[];
+        invoices: any[];
+        creditBalance: number;
+    }>;
+}

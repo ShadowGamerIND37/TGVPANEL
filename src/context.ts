@@ -14,6 +14,7 @@ import { StorageManager } from './services/storage/StorageManager';
 import { NetworkManager } from './services/network/NetworkManager';
 import { LoadBalancerManager } from './services/network/LoadBalancerManager';
 import { DockerManager } from './services/docker/DockerManager';
+import { BillingManager } from './services/billing/BillingManager';
 import { SqliteSessionStore } from './security/session-store';
 import { BackupSnapshotManager } from './services/backup/BackupSnapshotManager';
 import { MigrationManager } from './services/migration/MigrationManager';
@@ -31,6 +32,7 @@ export interface HkvmRuntimeContext {
   networkManager: NetworkManager;
   loadBalancerManager: LoadBalancerManager;
   dockerManager: DockerManager;
+  billingManager: BillingManager;
   sessionStore: SqliteSessionStore;
   backupManager: BackupSnapshotManager;
   migrationManager: MigrationManager;
@@ -95,6 +97,7 @@ export async function initializeUnifiedHkvmRuntime(
   const monitoringService = new MonitoringService(db, nodeManager, instanceManager);
   const loadBalancerManager = new LoadBalancerManager(db, nodeManager);
   const dockerManager = new DockerManager(db, nodeManager);
+  const billingManager = new BillingManager(db);
   // Shared persistent session store (inventory + revocation; also backs the
   // express-session parser wired in app.js against the same database file).
   const sessionStore = new SqliteSessionStore(dbPath);
@@ -123,6 +126,7 @@ export async function initializeUnifiedHkvmRuntime(
     networkManager,
     loadBalancerManager,
     dockerManager,
+    billingManager,
     sessionStore,
     backupManager,
     migrationManager,

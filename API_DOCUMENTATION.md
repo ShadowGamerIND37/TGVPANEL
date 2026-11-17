@@ -162,6 +162,16 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | POST | `/auth/2fa/enable` | authenticated | Enable TOTP 2FA. |
 | POST | `/auth/2fa/disable` | authenticated | Disable TOTP 2FA. |
 | POST | `/auth/stop-impersonation` | staff | End an admin impersonation session. |
+| GET | `/billing/users` | admin-subadmin-operator | List customer usernames (id, username) for billing forms. Phase 30. |
+| GET/POST | `/billing/plans` | admin-subadmin-operator / admin-subadmin | List billing plans or create one `{name, priceCents, billingCycle: monthly|yearly|one-time, description, features[]}`. Phase 30. |
+| GET/PUT/DELETE | `/billing/plans/:id` | admin-subadmin-operator / admin-subadmin | Plan detail, update (price/cycle/features), or delete (refused while active subscriptions reference it). Phase 30. |
+| GET/POST | `/billing/subscriptions` | admin-subadmin-operator / admin-subadmin | List subscriptions or create one `{userId, planId, autoRenew}`; creation sets the active period and issues the first invoice. Phase 30. |
+| POST | `/billing/subscriptions/:id/cancel` | admin-subadmin | Cancel a subscription (status `cancelled`, records `cancelled_at`). Phase 30. |
+| POST | `/billing/subscriptions/:id/renew` | admin-subadmin | Renew for one cycle: advances `current_period_end` and issues a renewal invoice. Phase 30. |
+| GET | `/billing/invoices?userId=` | admin-subadmin-operator | List invoices (optionally per user) with plan and customer details. Phase 30. |
+| GET | `/billing/invoices/:id` | admin-subadmin-operator | Invoice detail. Phase 30. |
+| POST | `/billing/invoices/:id/pay` | admin-subadmin | **Admin-verified payment confirmation only:** requires `{paymentReference, method: manual|admin-verified|bank-transfer|cheque}`; refuses missing references and double payment; records `paid_at`, the reference/method, and posts a credit-ledger `payment` entry. No automated payment gateway is implemented. Phase 30. |
+| GET/POST | `/billing/credits?userId=` | admin-subadmin-operator / admin-subadmin | Credit-ledger history and balance, or adjust credits `{userId, type: credit|debit, amountCents, reason}` (debits refused when they would overdraw). Phase 30. |
 
 ## Reseller API
 

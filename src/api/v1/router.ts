@@ -2376,6 +2376,182 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // --- Billing & invoicing (Area K, Phase 30) ---
+  router.get(
+    '/billing/users',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const users = await ctx.db.all<any>(`SELECT id, username FROM users ORDER BY username ASC`);
+      res.json({ users });
+    }
+  );
+
+  router.get(
+    '/billing/plans',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const plans = await ctx.billingManager.listPlans();
+      res.json({ plans });
+    }
+  );
+
+  router.get(
+    '/billing/plans/:id',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const plan = await ctx.billingManager.getPlan(pInt(req.params.id));
+      if (!plan) return res.status(404).json({ error: 'Plan does not exist.' });
+      res.json({ plan });
+    }
+  );
+
+  router.post(
+    '/billing/plans',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const plan = await ctx.billingManager.createPlan(req.body || {});
+        res.status(201).json({ plan });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.put(
+    '/billing/plans/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const plan = await ctx.billingManager.updatePlan(pInt(req.params.id), req.body || {});
+        res.json({ plan });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/billing/plans/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        await ctx.billingManager.deletePlan(pInt(req.params.id));
+        res.json({ success: true });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.get(
+    '/billing/subscriptions',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const subscriptions = await ctx.billingManager.listSubscriptions();
+      res.json({ subscriptions });
+    }
+  );
+
+  router.post(
+    '/billing/subscriptions',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const subscription = await ctx.billingManager.createSubscription(req.body || {});
+        res.status(201).json({ subscription });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/billing/subscriptions/:id/cancel',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const subscription = await ctx.billingManager.cancelSubscription(pInt(req.params.id));
+        res.json({ subscription });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.post(
+    '/billing/subscriptions/:id/renew',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const subscription = await ctx.billingManager.renewSubscription(pInt(req.params.id));
+        res.json({ subscription });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.get(
+    '/billing/invoices',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const userId = req.query.userId ? Number(req.query.userId) : undefined;
+      const invoices = await ctx.billingManager.listInvoices(userId);
+      res.json({ invoices });
+    }
+  );
+
+  router.get(
+    '/billing/invoices/:id',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const invoice = await ctx.billingManager.getInvoice(pInt(req.params.id));
+      if (!invoice) return res.status(404).json({ error: 'Invoice does not exist.' });
+      res.json({ invoice });
+    }
+  );
+
+  router.post(
+    '/billing/invoices/:id/pay',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const invoice = await ctx.billingManager.confirmPayment(
+          pInt(req.params.id),
+          req.body || {},
+          req.principal!.userId
+        );
+        res.json({ invoice });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.get(
+    '/billing/credits',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const userId = req.query.userId ? Number(req.query.userId) : undefined;
+      const credits = await ctx.billingManager.listCredits(userId);
+      res.json({ credits });
+    }
+  );
+
+  router.post(
+    '/billing/credits',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const result = await ctx.billingManager.adjustCredit(req.body || {}, req.principal!.userId);
+        res.status(201).json(result);
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
   // --- Session inventory & revocation (Phase 28) ---
   router.get(
     '/sessions',

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Phase 30 Billing & invoicing (2026-10-30)
+
+- Added the missing billing and invoicing subsystem (audit Area K: no billing or invoicing). Migration **v032 `v032_billing`** adds `billing_plans` (name, price_cents, billing_cycle `monthly`/`yearly`/`one-time`, description, JSON features, is_active), `customer_subscriptions` (user_id, plan_id, status `active`/`cancelled`, auto_renew, current period bounds, cancelled/renewed timestamps), `invoices` (number `INV-YYYYMMDD-NNNN` with a per-day collision guard, amounts, status `issued`/`paid`/`cancelled`, paid_at, payment reference/method), and `credit_ledger` (credit/debit entries with balance-after snapshot).
+- Added `src/services/billing/BillingManager.ts`: plan CRUD with validation (duplicate-name rejection, price >= 0, cycle whitelist), delete blocked while subscriptions reference the plan; subscriptions that auto-issue the first invoice on create, advance the period (SQLite `datetime` arithmetic) and issue a renewal invoice on renew, and record cancellation; invoice listing with plan/user joins and per-invoice detail; and a credit ledger with negative-balance guards on debits.
+- **Payments are recorded only after administrator-verified confirmation.** `POST /api/v1/billing/invoices/:id/pay` requires an explicit `paymentReference`, accepts only whitelisted methods (`manual`, `admin-verified`, `bank-transfer`, `cheque`), refuses double payment, and then records `paid_at` plus a credit-ledger `payment` entry. No automated payment gateway, processor, or simulation is implemented or claimed; invoice amounts are set at plan-configuration time.
+- Added panel API routes: `GET/POST /api/v1/billing/plans`, `GET/PUT/DELETE /api/v1/billing/plans/:id`, `GET/POST /api/v1/billing/subscriptions`, `POST /api/v1/billing/subscriptions/:id/{cancel,renew}`, `GET /api/v1/billing/invoices`, `GET /api/v1/billing/invoices/:id`, `POST /api/v1/billing/invoices/:id/pay`, `GET/POST /api/v1/billing/credits`, and `GET /api/v1/billing/users` (admin/subadmin write; admin/subadmin/operator read).
+- Added a Billing & Invoicing section to the admin unified page (plans, subscriptions, invoices with the Confirm Payment flow, credit ledger).
+- Added T45 acceptance coverage: plan validation, subscription create/invoice issuance, renew period advancement, payment-reference enforcement, double-payment rejection, ledger posting/balances, customer 403s, credit/debit with overdraw refusal, cancellation, and the active-subscription delete guard. **45/45 suites pass.**
+
 ## Unreleased — Phase 29 Docker container manager (2026-10-30)
 
 - Added the missing Docker management subsystem (audit Area I: no Docker management). Migration **v031 `v031_docker_containers`** adds the `docker_containers` registry (name, node, image, JSON port mappings, JSON env, restart policy, network, lifecycle status, applied timestamps, last error).
