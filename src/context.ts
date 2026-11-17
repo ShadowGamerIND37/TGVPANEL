@@ -13,6 +13,7 @@ import { InstanceManager } from './services/virtualization/InstanceManager';
 import { StorageManager } from './services/storage/StorageManager';
 import { NetworkManager } from './services/network/NetworkManager';
 import { LoadBalancerManager } from './services/network/LoadBalancerManager';
+import { SqliteSessionStore } from './security/session-store';
 import { BackupSnapshotManager } from './services/backup/BackupSnapshotManager';
 import { MigrationManager } from './services/migration/MigrationManager';
 import { MonitoringService } from './services/monitoring/MonitoringService';
@@ -28,6 +29,7 @@ export interface HkvmRuntimeContext {
   storageManager: StorageManager;
   networkManager: NetworkManager;
   loadBalancerManager: LoadBalancerManager;
+  sessionStore: SqliteSessionStore;
   backupManager: BackupSnapshotManager;
   migrationManager: MigrationManager;
   monitoringService: MonitoringService;
@@ -90,6 +92,9 @@ export async function initializeUnifiedHkvmRuntime(
   );
   const monitoringService = new MonitoringService(db, nodeManager, instanceManager);
   const loadBalancerManager = new LoadBalancerManager(db, nodeManager);
+  // Shared persistent session store (inventory + revocation; also backs the
+  // express-session parser wired in app.js against the same database file).
+  const sessionStore = new SqliteSessionStore(dbPath);
 
   if (
     process.env.TGVPANEL_DISABLE_BACKGROUND_POLLER !== 'true' &&
@@ -114,6 +119,7 @@ export async function initializeUnifiedHkvmRuntime(
     storageManager,
     networkManager,
     loadBalancerManager,
+    sessionStore,
     backupManager,
     migrationManager,
     monitoringService,

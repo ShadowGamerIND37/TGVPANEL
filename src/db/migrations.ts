@@ -1965,6 +1965,27 @@ export const MIGRATIONS: MigrationDefinition[] = [
       );
     },
   },
+  {
+    version: 30,
+    name: 'v030_sessions',
+    up: async (db) => {
+      // Persistent panel sessions so administrators can inventory and revoke
+      // active logins (the default express-session store is in-memory only).
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS sessions (
+          sid TEXT PRIMARY KEY,
+          data TEXT NOT NULL,
+          expires_at INTEGER NOT NULL,
+          created_at INTEGER NOT NULL,
+          last_seen_at INTEGER,
+          user_id INTEGER,
+          ip TEXT,
+          user_agent TEXT
+        )`
+      );
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`);
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

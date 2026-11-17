@@ -92,6 +92,9 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | GET/POST | `/instances/:engine/:id/firewall-rules` | staff / admin-subadmin | Per-VPS firewall policy: list (authorized) or create rules scoped to a KVM/LXC instance; enforced against the instance's IPs on the host. |
 | GET/POST/DELETE | `/network/firewall-profiles[/:id]` | admin-subadmin/operator | Reusable per-VPS firewall rule profiles (migration v027). `POST` creates a profile with an ordered rule set; `DELETE` cascades to profile rules. |
 | POST | `/network/firewall-profiles/:id/apply` | admin/subadmin | Apply a profile to an instance: materializes its rules as instance-scoped `firewall_rules` rows and enforces each against the instance's IPs; returns per-rule `applied` results. |
+| GET | `/sessions` | admin-subadmin | List active panel sessions (sid, user id/name, created, last seen, IP, user agent). Phase 28. |
+| DELETE | `/sessions/:sid` | admin-subadmin | Revoke a single session (destroys the stored session; the client is logged out on its next request). Phase 28. |
+| DELETE | `/sessions?userId=<id>` | admin-subadmin | Revoke every active session of a user (forces re-login for all their clients). Phase 28. |
 | GET/POST | `/load-balancers` | admin-subadmin/operator / admin-subadmin | List load balancers or create one with a backend pool (HAProxy, Phase 27). |
 | GET/PUT/DELETE | `/load-balancers/:id` | admin-subadmin/operator / admin-subadmin | Load balancer detail (with backends), update (backends replaced on update), or delete (stops the process, cascades backends). |
 | POST | `/load-balancers/:id/apply` | admin/subadmin | Validate the rendered HAProxy config and start/reload/stop the process on the target node. |

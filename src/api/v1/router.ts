@@ -2292,6 +2292,56 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // --- Session inventory & revocation (Phase 28) ---
+  router.get(
+    '/sessions',
+    requireRole(['admin', 'subadmin']),
+    async (_req: Request, res: Response) => {
+      try {
+        const store = ctx.sessionStore;
+        if (!store) return res.status(500).json({ error: 'Session store is not available.' });
+        const sessions = await store.listSessions();
+        res.json({ sessions });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/sessions/:sid',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const store = ctx.sessionStore;
+        if (!store) return res.status(500).json({ error: 'Session store is not available.' });
+        const revoked = await store.revokeSession(String(req.params.sid));
+        res.json({ success: true, revoked });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/sessions',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const store = ctx.sessionStore;
+        if (!store) return res.status(500).json({ error: 'Session store is not available.' });
+        const userId = Number(req.query.userId);
+        if (!Number.isInteger(userId) || userId < 1) {
+          return res.status(400).json({ error: 'A positive userId query parameter is required.' });
+        }
+        const revoked = await store.revokeUserSessions(userId);
+        res.json({ success: true, revoked });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    }
+  );
+
   // --- Scheduled Snapshot Policies ---
   router.get('/snapshot-schedules', async (req: Request, res: Response) => {
     try {

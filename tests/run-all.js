@@ -50,6 +50,10 @@ process.env.TGVPANEL_BACKUP_DIR = path.join(tmpRoot, 'local-backups');
 process.env.PORT = String(TEST_PORT);
 process.env.TGVPANEL_DISABLE_BACKGROUND_POLLER = 'true';
 process.env.TGVPANEL_ENABLE_NODE_SHELL = 'true';
+// Test-only: treat the loopback peer as a trusted proxy so the per-step
+// X-Forwarded-For headers used throughout this suite key rate limits
+// per test instead of sharing one 127.0.0.1 bucket across the whole run.
+process.env.TRUSTED_PROXIES = '127.0.0.1';
 
 const {
   getSecretBundle,
@@ -4580,6 +4584,105 @@ exec "$@"
         if (fs.existsSync(path.join(haproxyDir, 't42-web-lb.cfg'))) fs.unlinkSync(path.join(haproxyDir, 't42-web-lb.cfg'));
         if (fs.existsSync(path.join(haproxyDir, 't42-web-lb.pid'))) fs.unlinkSync(path.join(haproxyDir, 't42-web-lb.pid'));
         if (fs.existsSync(path.join(haproxyDir, 't42-remote-lb.cfg'))) fs.unlinkSync(path.join(haproxyDir, 't42-remote-lb.cfg'));
+      }
+    });
+
+    // Phase 28: Session inventory & revocation — panel sessions are now
+    // persisted, enumerable by administrators and revocable (single or
+    // per-user), replacing the in-memory-only default store.
+    await runStep('T43: Session inventory lists active logins; revocation forces logout', async () => {
+      // bob_user (no 2FA) logs in fresh, creating a persistent session.
+      const bobClient = new SessionClient(baseUrl);
+      const loginRes = await bobClient.request('POST', '/api/login', {
+        username: 'bob_user',
+        password: 'BobPass!123',
+      });
+      assert.strictEqual(loginRes.status, 200, `Bob login failed: ${loginRes.text}`);
+      assert.strictEqual(loginRes.json.success, true, 'Bob login must complete without 2FA');
+
+      const bobRow = await ctx.db.get(`SELECT id FROM users WHERE username = 'bob_user'`);
+      const bobId = bobRow.id;
+
+      // The SQLite session save commits asynchronously; poll for the row that
+      // matches the client's actual cookie session id so assertions never race
+      // the write (a stale row from an earlier test would be a false positive).
+      const waitForSession = async () => {
+        const cookieSid = decodeURIComponent(
+          bobClient.cookie.replace(/^connect\.sid=s%3A/, '').split('.')[0]
+        );
+        for (let i = 0; i < 40; i++) {
+          const row = await ctx.db.get(`SELECT sid FROM sessions WHERE sid = ?`, [cookieSid]);
+          if (row) return row;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return null;
+      };
+
+      try {
+        // The session is persisted in the store.
+        const storeRow = await waitForSession();
+        assert.ok(storeRow, 'Bob session must be persisted in the sessions table');
+
+        // Customers cannot inventory or revoke sessions. This authenticated
+        // request also triggers activity metadata (last seen / IP / user agent).
+        const forbidden = await bobClient.request('GET', '/api/v1/sessions');
+        assert.strictEqual(forbidden.status, 403, `Customer session inventory must be forbidden: ${forbidden.text}`);
+
+        // Activity metadata is written asynchronously; poll briefly for it.
+        let storeRowFull = null;
+        for (let i = 0; i < 40; i++) {
+          storeRowFull = await ctx.db.get(
+            `SELECT sid, user_id, ip, user_agent, last_seen_at FROM sessions WHERE user_id = ?`,
+            [bobId]
+          );
+          if (storeRowFull && storeRowFull.last_seen_at) break;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        assert.ok(storeRowFull && storeRowFull.last_seen_at, 'Session activity must be recorded');
+        assert.ok(storeRowFull.ip, 'Session IP must be recorded');
+
+        // Administrator inventory includes both the admin and Bob sessions.
+        const invRes = await adminClient.request('GET', '/api/v1/sessions');
+        assert.strictEqual(invRes.status, 200, `Session inventory failed: ${invRes.text}`);
+        const sessions = invRes.json.sessions;
+        assert.ok(sessions.length >= 2, 'Inventory must list the admin and Bob sessions');
+        const bobSession = sessions.find((s) => s.user_id === bobId);
+        assert.ok(bobSession, 'Bob session must appear in the inventory');
+        assert.strictEqual(bobSession.username, 'bob_user', 'Inventory must join the user name');
+
+        // Revoking a single session forces an immediate logout.
+        const revokeRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/sessions/${encodeURIComponent(bobSession.sid)}`,
+          undefined,
+          { 'X-Forwarded-For': '198.51.100.80' }
+        );
+        assert.strictEqual(revokeRes.status, 200, `Session revocation failed: ${revokeRes.text}`);
+        assert.strictEqual(revokeRes.json.revoked, 1, 'Revocation must report the destroyed session');
+        const afterRevoke = await bobClient.request('GET', '/api/v1/instances');
+        assert.notStrictEqual(afterRevoke.status, 200, 'Revoked session must not authenticate');
+
+        // Log back in and verify per-user revocation clears every session.
+        const login2 = await bobClient.request('POST', '/api/login', {
+          username: 'bob_user',
+          password: 'BobPass!123',
+        });
+        assert.strictEqual(login2.status, 200, `Bob re-login failed: ${login2.text}`);
+        await waitForSession();
+        const revokeAllRes = await adminClient.request(
+          'DELETE',
+          `/api/v1/sessions?userId=${bobId}`,
+          undefined,
+          { 'X-Forwarded-For': '198.51.100.81' }
+        );
+        assert.strictEqual(revokeAllRes.status, 200, `Per-user revocation failed: ${revokeAllRes.text}`);
+        assert.ok(revokeAllRes.json.revoked >= 1, 'Per-user revocation must destroy the session');
+        const afterRevokeAll = await bobClient.request('GET', '/api/v1/instances');
+        assert.notStrictEqual(afterRevokeAll.status, 200, 'All-revoked user must not authenticate');
+        const remaining = await ctx.db.get(`SELECT sid FROM sessions WHERE user_id = ?`, [bobId]);
+        assert.strictEqual(remaining, undefined, 'No sessions must remain for the revoked user');
+      } finally {
+        await ctx.db.run(`DELETE FROM sessions WHERE user_id = ?`, [bobId]).catch(() => undefined);
       }
     });
 

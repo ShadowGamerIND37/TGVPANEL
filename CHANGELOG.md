@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Phase 28 Session inventory & revocation (2026-10-30)
+
+- Replaced the default in-memory `express-session` store with a persistent SQLite store (`src/security/session-store.ts`, `SqliteSessionStore`) wired into `app.js` (`panelSessionStore`). Panel sessions are now persisted, enumerable and revocable. The store matches the panel database's WAL mode with a busy timeout, and the login handler persists the session before responding so a client's next request can never race the async write.
+- Migration **v030 `v030_sessions`** adds the `sessions` table (sid, serialized session data, expiry, created/last-seen timestamps, user id, IP, user agent) with a user index. An activity-recording middleware captures lightweight metadata (user, IP, user agent, last seen) on every request.
+- New admin API: `GET /api/v1/sessions` (active-session inventory joined with usernames), `DELETE /api/v1/sessions/:sid` (revoke one session — forces immediate logout), `DELETE /api/v1/sessions?userId=<id>` (revoke every session of a user). Admin/subadmin only; customers get 403.
+- Admin UI: new **Sessions** section listing active logins (user, session id, created, last seen, IP, user agent) with per-session **Revoke** and per-user **Revoke all** actions.
+- T43: session persistence, activity metadata, admin inventory with username join, customer forbidden (403), single-session revocation forcing logout, per-user revocation clearing all sessions. Full suite: **35/35 acceptance suites passing**.
+- Boundary: sessions created by the previous in-memory store in a running process before the upgrade are not tracked; only sessions persisted by the new store appear in the inventory. Anonymous (uninitialized) sessions are still not stored, matching the existing `saveUninitialized: false` behavior.
+
 ## Unreleased — Phase 27 HAProxy load balancer manager (2026-10-30)
 
 - Added the missing load balancer subsystem (audit Area J: no HAProxy manager). Migration **v029** adds `load_balancers` (frontend spec: listen IP/port, protocol, algorithm, lifecycle state) and `load_balancer_backends` (ordered backend pool with target/port/weight, cascade delete).

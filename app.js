@@ -4,6 +4,7 @@ const WebSocket = require('ws');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
 const session = require('express-session');
+const { SqliteSessionStore } = require('./lib/security/session-store');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -479,8 +480,10 @@ app.get('/js/hkvm-v3.js', (_req, res) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
+const panelSessionStore = new SqliteSessionStore(dbPath);
 const sessionParser = session({
   secret: getSecretBundle().sessionSecret,
+  store: panelSessionStore,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -493,6 +496,25 @@ const sessionParser = session({
   }
 });
 app.use(sessionParser);
+
+// Record lightweight session activity (user, IP, user agent, last seen) for
+// the administrative session inventory and revocation controls.
+app.use((req, res, next) => {
+  try {
+    if (req.sessionID && req.session && panelSessionStore instanceof SqliteSessionStore) {
+      panelSessionStore.recordActivity(
+        req.sessionID,
+        req.session.userId ?? null,
+        req.ip || '',
+        String(req.get('user-agent') || '')
+      );
+    }
+  } catch (err) {
+    // Inventory metadata is best-effort; never break the request path.
+  }
+  next();
+});
+
 app.use(securityHeadersAndCsrfMiddleware);
 
 app.use((req, res, next) => {
@@ -861,7 +883,16 @@ app.post('/api/login', (req, res) => {
         .catch(() => undefined);
     }
     console.log(`[Auth Success] User ${user.id} (${user.username}) logged in with role: ${user.role}`);
-    res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
+    // Persist the session before responding so the client's next request can
+    // never race the async SQLite write (a request arriving in that window
+    // would see no session and be treated as unauthenticated).
+    req.session.save((saveErr) => {
+      if (saveErr) {
+        console.error('[Auth Error] Failed to persist session for user', user.id, saveErr);
+        return res.status(500).json({ error: 'Failed to persist session' });
+      }
+      res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
+    });
   });
 });
 
