@@ -2423,6 +2423,7 @@ app.put('/api/vms/:vm_id/edit', checkAuth, trackLegacyKvmMutation('edit_config')
     dns_primary, dns_secondary, ipv6_address, ipv6_gateway, mac_address, vlan_id,
     machine_type, board_name, product_name, custom_smbios_manufacturer,
     smbios_manufacturer, smbios_product, smbios_version, smbios_serial,
+    bandwidth_quota_gb, unlimited_bandwidth,
     ssh_port, ssh_port_static,
     owner_id
   } = req.body;
@@ -2886,7 +2887,8 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
     enable_acpi, enable_kvm, extra_args,
     network_type, ipv4_address, gateway, netmask, bridge_device,
     dns_servers, ssh_port, ssh_port_static, http_port,
-    ipv6_address, ipv6_gateway, mac_address, vlan_id, owner_id
+    ipv6_address, ipv6_gateway, mac_address, vlan_id, owner_id,
+    bandwidth_quota_gb, unlimited_bandwidth
   } = req.body;
   
   // Alias gateway/netmask to ipv4_gateway/ipv4_netmask (accepting either field name)
@@ -3019,8 +3021,9 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
       extra_args, enable_acpi, enable_kvm,
       network_type, ipv4_address, ipv4_gateway, ipv4_netmask,
       dns_servers, dns_primary, dns_secondary, ssh_port, ssh_port_static, http_port,
-      ipv6_address, ipv6_gateway, mac_address, bridge_device, vlan_id, owner_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ipv6_address, ipv6_gateway, mac_address, bridge_device, vlan_id, owner_id,
+      bandwidth_quota_gb, unlimited_bandwidth
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       vm_name, templateName, os_template || (isCloudInit ? 'cloud-init' : 'iso-installer'), hostname, 
       username, password ? encryptSecret(String(password)) : '', memory, cpuCount, sockets, cores, threads, cpuModelToUse, custom_cpu_name || null,
@@ -3033,7 +3036,9 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
       netType, ipv4_address || null, ipv4_gateway || null, ipv4_netmask || '255.255.255.0',
       dns_servers || '8.8.8.8,8.8.4.4', dns_primary || '8.8.8.8', dns_secondary || '8.8.4.4', null, sshPortVal, effectiveHttpPort,
       ipv6_address || null, ipv6_gateway || null,
-      macAddr, bridge_device || 'vmbr0', vlan_id || null, vmOwner
+      macAddr, bridge_device || 'vmbr0', vlan_id || null, vmOwner,
+      unlimited_bandwidth ? 0 : Number(bandwidth_quota_gb || 0),
+      unlimited_bandwidth ? 1 : 0
     ],
     async function(err) {
       if (err) return res.status(500).json({ error: err.message });

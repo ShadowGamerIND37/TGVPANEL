@@ -55,6 +55,7 @@ export interface CreateLxcInstanceInput {
   sshPublicKeys?: string[];
   autostart?: boolean;
   bandwidthQuotaGb?: number;
+  unlimitedBandwidth?: boolean;
   expirationDays?: number;
   autoSuspendEnabled?: boolean;
   notes?: string;
@@ -140,8 +141,8 @@ export class LXCAdapter implements VirtualizationAdapter {
 
     await this.db.run(
       `INSERT INTO instances
-         (engine, ref_id, name, hostname, owner_id, node_id, status, suspended, os_label, cpu_cores, ram_mb, disk_gb, primary_ip, shared_with, updated_at)
-       VALUES ('lxc', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         (engine, ref_id, name, hostname, owner_id, node_id, status, suspended, os_label, cpu_cores, ram_mb, disk_gb, primary_ip, shared_with, bandwidth_quota_gb, unlimited_bandwidth, updated_at)
+       VALUES ('lxc', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 0), COALESCE(?, 0), datetime('now'))
        ON CONFLICT(engine, ref_id) DO UPDATE SET
          name = excluded.name,
          hostname = excluded.hostname,
@@ -155,6 +156,8 @@ export class LXCAdapter implements VirtualizationAdapter {
          disk_gb = excluded.disk_gb,
          primary_ip = excluded.primary_ip,
          shared_with = excluded.shared_with,
+         bandwidth_quota_gb = excluded.bandwidth_quota_gb,
+         unlimited_bandwidth = excluded.unlimited_bandwidth,
          updated_at = datetime('now')`,
       [
         row.id,
@@ -170,6 +173,8 @@ export class LXCAdapter implements VirtualizationAdapter {
         row.disk_gb || 20,
         row.ip_address || null,
         row.shared_with || '[]',
+        row.bandwidth_quota_gb || 0,
+        row.unlimited_bandwidth ? 1 : 0,
       ]
     );
   }
@@ -471,8 +476,8 @@ export class LXCAdapter implements VirtualizationAdapter {
           cpu_cores, cpu_shares, cpu_limit_pct, cpu_pinning, ram_mb, swap_mb, disk_gb,
           rootfs_storage_type, privileged, nesting, kvm_nesting, autostart, root_password_enc,
           bridge, ip_address, gateway, ipv6_address, mac_address, vlan_id,
-          status, bandwidth_quota_gb, notes, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+          status, bandwidth_quota_gb, unlimited_bandwidth, notes, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
         [
           input.userId,
           node.id,
@@ -502,6 +507,7 @@ export class LXCAdapter implements VirtualizationAdapter {
           spec.vlanId,
           runtimeState,
           Number(input.bandwidthQuotaGb || 0),
+          input.unlimitedBandwidth ? 1 : 0,
           input.notes || null,
           expiresAt,
           expDays,
@@ -925,6 +931,7 @@ export class LXCAdapter implements VirtualizationAdapter {
       ipv6Address?: string | null;
       macAddress?: string | null;
       bandwidthQuotaGb?: number;
+      unlimitedBandwidth?: boolean;
       notes?: string;
     },
     applyToHost = true
@@ -1002,6 +1009,7 @@ export class LXCAdapter implements VirtualizationAdapter {
          gateway = CASE WHEN ? = '__KEEP__' THEN gateway ELSE ? END,
          ipv6_address = CASE WHEN ? = '__KEEP__' THEN ipv6_address ELSE ? END,
          bandwidth_quota_gb = COALESCE(?, bandwidth_quota_gb),
+         unlimited_bandwidth = COALESCE(?, unlimited_bandwidth),
          notes = COALESCE(?, notes),
          updated_at = datetime('now')
        WHERE id = ?`,
@@ -1026,6 +1034,7 @@ export class LXCAdapter implements VirtualizationAdapter {
         patch.ipv6Address === undefined ? '__KEEP__' : 'SET',
         patch.ipv6Address ?? null,
         patch.bandwidthQuotaGb ?? null,
+        patch.unlimitedBandwidth !== undefined ? (patch.unlimitedBandwidth ? 1 : 0) : null,
         patch.notes ?? null,
         refId,
       ]
@@ -1086,14 +1095,14 @@ export class LXCAdapter implements VirtualizationAdapter {
           cpu_cores, cpu_shares, cpu_limit_pct, cpu_pinning, ram_mb, swap_mb, disk_gb,
           rootfs_storage_type, privileged, nesting, kvm_nesting, autostart, root_password_enc,
           bridge, ip_address, gateway, ipv6_address, mac_address, vlan_id,
-          status, bandwidth_quota_gb, notes, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dir', ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, ?, NULL, 'stopped', ?, ?, ?, ?, ?, datetime('now'))`,
+          status, bandwidth_quota_gb, unlimited_bandwidth, notes, expires_at, expiration_days, auto_suspend_enabled, last_renewed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'dir', ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, ?, NULL, 'stopped', ?, ?, ?, ?, ?, ?, datetime('now'))`,
         [
           source.user_id, nodeId, name, name, source.os_template, source.os_family, source.arch,
           resources.cpuCores, resources.cpuShares, resources.cpuLimitPercent, resources.cpuPinning,
           resources.ramMb, resources.swapMb, Number(source.disk_gb || 20), source.privileged ? 1 : 0, source.nesting ? 1 : 0,
           source.kvm_nesting ? 1 : 0, source.root_password_enc || null, macAddress,
-          Number(source.bandwidth_quota_gb || 0), `Offline clone of ${source.container_name}; review guest identity and network before use.`,
+          Number(source.bandwidth_quota_gb || 0), source.unlimited_bandwidth ? 1 : 0, `Offline clone of ${source.container_name}; review guest identity and network before use.`,
           source.expires_at || null, Number(source.expiration_days || 0), source.auto_suspend_enabled !== 0 ? 1 : 0,
         ]
       );

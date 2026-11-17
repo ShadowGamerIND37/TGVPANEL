@@ -1105,8 +1105,21 @@
                     <input id="cCpuPin" placeholder="e.g. 0-1 or 0,2">
                   </div>
                   <div class="v3-field">
-                    <label>Bandwidth Quota (GB, 0 = Unlimited)</label>
-                    <input id="cBwQuota" type="number" min="0" value="0" oninput="updateLxcBlueprint()">
+                    <label>Bandwidth Limit</label>
+                    <div style="display:flex; gap: 10px; margin-bottom: 8px;">
+                      <label style="display:flex; align-items:center; gap: 5px; cursor:pointer; font-size:13px;">
+                        <input type="radio" name="cBwMode" value="unlimited" id="cBwUnlimited" checked onchange="toggleLxcBandwidthMode()">
+                        Unlimited
+                      </label>
+                      <label style="display:flex; align-items:center; gap: 5px; cursor:pointer; font-size:13px;">
+                        <input type="radio" name="cBwMode" value="limited" id="cBwLimited" onchange="toggleLxcBandwidthMode()">
+                        Limited
+                      </label>
+                    </div>
+                    <div id="cBwQuotaSection" style="display:none;">
+                      <input id="cBwQuota" type="number" min="1" value="100" oninput="updateLxcBlueprint()">
+                      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Monthly bandwidth quota in GB.</div>
+                    </div>
                   </div>
                 </div>
               </details>
@@ -3676,6 +3689,16 @@ function updateLxcBlueprint() {
   setTxt('bpExp', exp > 0 ? exp + ' days (auto-suspend)' : 'Never expires');
 }
 
+function toggleLxcBandwidthMode() {
+  const unlimited = document.getElementById('cBwUnlimited')?.checked;
+  const limitedSection = document.getElementById('cBwQuotaSection');
+  if (unlimited) {
+    limitedSection.style.display = 'none';
+  } else {
+    limitedSection.style.display = 'block';
+  }
+}
+
 async function submitCreateLxc(e) {
   e.preventDefault();
   if (__lxcCreating) {
@@ -3759,6 +3782,7 @@ async function submitCreateLxc(e) {
         diskGb: Number(document.getElementById('cDisk').value),
         backingStore: document.getElementById('cBacking')?.value || 'dir',
         bandwidthQuotaGb: Number(document.getElementById('cBwQuota')?.value || 0),
+        unlimitedBandwidth: document.getElementById('cBwUnlimited')?.checked,
         bridge: document.getElementById('cBridge').value,
         ipv4Address: staticIpVal || null,
         ipv4Gateway: gwVal || null,

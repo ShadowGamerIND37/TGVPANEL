@@ -726,8 +726,8 @@ export class KVMAdapter implements VirtualizationAdapter {
     }
     await this.db.run(
       `INSERT INTO instances
-         (engine, ref_id, name, hostname, owner_id, node_id, status, suspended, os_label, cpu_cores, ram_mb, disk_gb, primary_ip, shared_with, updated_at)
-       VALUES ('kvm', ?, ?, ?, ?, COALESCE(?, 1), ?, COALESCE(?, 0), ?, ?, ?, ?, ?, COALESCE(?, '[]'), datetime('now'))
+         (engine, ref_id, name, hostname, owner_id, node_id, status, suspended, os_label, cpu_cores, ram_mb, disk_gb, primary_ip, shared_with, bandwidth_quota_gb, unlimited_bandwidth, updated_at)
+       VALUES ('kvm', ?, ?, ?, ?, COALESCE(?, 1), ?, COALESCE(?, 0), ?, ?, ?, ?, ?, COALESCE(?, '[]'), COALESCE(?, 0), COALESCE(?, 0), datetime('now'))
        ON CONFLICT(engine, ref_id) DO UPDATE SET
          name = excluded.name,
          hostname = excluded.hostname,
@@ -741,6 +741,8 @@ export class KVMAdapter implements VirtualizationAdapter {
          disk_gb = excluded.disk_gb,
          primary_ip = excluded.primary_ip,
          shared_with = excluded.shared_with,
+         bandwidth_quota_gb = excluded.bandwidth_quota_gb,
+         unlimited_bandwidth = excluded.unlimited_bandwidth,
          updated_at = datetime('now')`,
       [
         vm.vm_id,
@@ -756,6 +758,8 @@ export class KVMAdapter implements VirtualizationAdapter {
         this.parseDiskGb(vm.disk_size),
         vm.ipv4_address || null,
         vm.shared_with || '[]',
+        vm.bandwidth_quota_gb || 0,
+        vm.unlimited_bandwidth ? 1 : 0,
       ]
     );
   }
