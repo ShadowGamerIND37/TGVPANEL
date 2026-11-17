@@ -47,6 +47,19 @@ The **only roadmap system classified FULLY IMPLEMENTED is the existing reseller 
 | 19 — Hardening/scalability | PARTIALLY IMPLEMENTED | TypeScript services, SQLite migrations, node HMAC/TLS and circuit breakers exist; general persistent queue/distributed locks and realistic scale tests absent. |
 | 20 — Install/update/recovery | PARTIALLY IMPLEMENTED | Install/update scripts and backed-up additive migrations exist; **required docs now present (`API_DOCUMENTATION.md`, `INSTALLATION.md`, `UPGRADE_GUIDE.md`, `SECURITY.md`, Phase 15)**. Complete fresh/upgrade/failure rollback matrix is not verified. |
 
+## Phase 30 — Billing & Invoicing (Area K) — complete (2026-10-30)
+
+- **Status:** Implemented and verified by T45 (45/45 acceptance suites pass).
+- **Scope:** billing plans (price/cycle/features), customer subscriptions with
+  auto-issued invoices, invoice numbering (`INV-YYYYMMDD-NNNN`), admin-verified
+  payment confirmation, and a credit ledger with balance tracking.
+- **Payments:** recorded **only** after administrator-verified confirmation with
+  a payment reference; whitelisted methods only; no payment gateway, processor,
+  or simulation is implemented or claimed.
+- **Files:** migration v032 in `src/db/migrations.ts`,
+  `src/services/billing/BillingManager.ts`, routes in
+  `src/api/v1/router.ts`, admin UI in `views/admin/unified-page.ejs`.
+
 ## Reseller API key slice (verified)
 
 - Credentials: random `tgvpk_…` key ID and 256-bit secret; key and secret hashes plus AES-256-GCM-encrypted HMAC secret at rest. The pair is returned only at create/rotate.

@@ -52,7 +52,7 @@ applies what is pending.
 ## Migration model
 
 Migrations live in `src/db/migrations.ts` as an ordered array
-(`version`, `name`, `up`). Current schema version is **v031**. Each migration
+(`version`, `name`, `up`). Current schema version is **v032**. Each migration
 uses `CREATE TABLE IF NOT EXISTS` / `ensureColumn(...)` so it is safe against
 existing databases. Summary of the schema evolution:
 
@@ -67,6 +67,11 @@ existing databases. Summary of the schema evolution:
 | v023–v024 | backup DR | Backup encryption-at-rest; backup destination (cross-node) copies. |
 | v025 | snapshot accounting | KVM snapshot `allocated_gb` column (Phase 13). |
 | v026 | webhook status | `webhooks.last_error` column for retry delivery diagnostics (Phase 22). |
+| v027–v028 | load balancer, sessions | HAProxy load-balancer records (Phase 27); persistent session inventory store + revocation (Phase 28). |
+| v029 | load balancer cfg | HAProxy config files are rendered to `TGVPANEL_DATA_DIR/haproxy/` (Phase 27). |
+| v030 | sessions | Persistent session inventory (`sessions` table with user join, revocation counters) — Phase 28. |
+| v031 | docker | Docker container registry tables — Phase 29. |
+| v032 | billing | Billing plans, customer subscriptions, invoices, credit ledger — Phase 30. |
 
 ## Upgrade checklist
 

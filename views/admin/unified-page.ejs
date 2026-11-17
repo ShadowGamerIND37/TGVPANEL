@@ -1939,6 +1939,67 @@
       </div>
       <% } %>
 
+      <!-- SECTION: BILLING -->
+      <% if (section === 'billing') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Billing &amp; Invoicing</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Plans, subscriptions, invoices and credits. Payments are recorded only after administrator-verified confirmation — no automated payment processing.</p>
+        </div>
+        <div class="v3-btn-row">
+          <button class="btn btn-outline" onclick="loadBilling()">Refresh</button>
+        </div>
+      </div>
+      <div class="v3-card">
+        <h3>Plans</h3>
+        <form onsubmit="submitBillingPlan(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Name</label><input id="bpName" placeholder="Starter"></div>
+          <div class="v3-field"><label>Price (cents)</label><input id="bpPrice" type="number" min="0" placeholder="5000"></div>
+          <div class="v3-field"><label>Cycle</label><select id="bpCycle"><option value="monthly">Monthly</option><option value="yearly">Yearly</option><option value="one-time">One-time</option></select></div>
+          <div class="v3-field" style="grid-column:1/-1;"><label>Description</label><input id="bpDesc" placeholder="Entry-level VPS plan"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Plan</button></div>
+        </form>
+        <table class="v3-table" style="margin-top:12px;">
+          <thead><tr><th>ID</th><th>Name</th><th>Price</th><th>Cycle</th><th>Active</th><th>Actions</th></tr></thead>
+          <tbody id="bpBody"></tbody>
+        </table>
+      </div>
+      <div class="v3-card">
+        <h3>Subscriptions</h3>
+        <form onsubmit="submitBillingSubscription(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Customer (username)</label><input id="bsUser" placeholder="bob_user"></div>
+          <div class="v3-field"><label>Plan</label><select id="bsPlan"></select></div>
+          <div class="v3-field"><label>Auto-renew</label><select id="bsRenew"><option value="1">Yes</option><option value="0">No</option></select></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Subscription</button></div>
+        </form>
+        <table class="v3-table" style="margin-top:12px;">
+          <thead><tr><th>ID</th><th>Customer</th><th>Plan</th><th>Period</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="bsBody"></tbody>
+        </table>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <h3>Invoices</h3>
+        <table class="v3-table">
+          <thead><tr><th>Number</th><th>Customer</th><th>Plan</th><th>Amount</th><th>Period</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="biBody"></tbody>
+        </table>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <h3>Credit Ledger</h3>
+        <form onsubmit="submitBillingCredit(event)" class="v3-form-grid" style="margin-bottom:12px;">
+          <div class="v3-field"><label>Customer (username)</label><input id="bcUser" placeholder="bob_user"></div>
+          <div class="v3-field"><label>Type</label><select id="bcType"><option value="credit">Credit</option><option value="debit">Debit</option></select></div>
+          <div class="v3-field"><label>Amount (cents)</label><input id="bcAmount" type="number" min="1" placeholder="1000"></div>
+          <div class="v3-field"><label>Reason</label><input id="bcReason" placeholder="Goodwill adjustment"></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Apply Adjustment</button></div>
+        </form>
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Customer ID</th><th>Type</th><th>Amount</th><th>Balance after</th><th>Reason</th><th>At</th></tr></thead>
+          <tbody id="bcBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
       <!-- SECTION: SNAPSHOTS -->
       <% if (section === 'snapshots') { %>
       <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Unified Instance Snapshots (QCOW2 &amp; LXC)</h2></div>
@@ -5123,6 +5184,168 @@ async function applyDockerContainer(id, mode, btn) {
   btn.disabled = false;
 }
 
+async function loadBilling() {
+  const [plansRes, subsRes, invRes, creditsRes] = await Promise.all([
+    hkvmApi('/api/v1/billing/plans'),
+    hkvmApi('/api/v1/billing/subscriptions'),
+    hkvmApi('/api/v1/billing/invoices'),
+    hkvmApi('/api/v1/billing/credits'),
+  ]);
+  const plans = plansRes.plans || [];
+  document.getElementById('bpBody').innerHTML = plans.length
+    ? plans.map(p => `<tr>
+        <td>#${p.id}</td><td><strong>${hkvmEsc(p.name)}</strong></td>
+        <td>$${(p.price_cents / 100).toFixed(2)}</td>
+        <td>${hkvmEsc(p.billing_cycle)}</td>
+        <td>${p.is_active ? 'active' : 'inactive'}</td>
+        <td class="v3-btn-row">
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="delBillingPlan(${p.id})">Delete</button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="6" style="color:var(--text-muted);">No plans configured.</td></tr>';
+  const sel = document.getElementById('bsPlan');
+  sel.innerHTML = plans.map(p => `<option value="${p.id}">${hkvmEsc(p.name)} — $${(p.price_cents / 100).toFixed(2)} (${hkvmEsc(p.billing_cycle)})</option>`).join('');
+
+  const subs = subsRes.subscriptions || [];
+  document.getElementById('bsBody').innerHTML = subs.length
+    ? subs.map(s => `<tr>
+        <td>#${s.id}</td><td><strong>${hkvmEsc(s.user_name)}</strong></td>
+        <td>${hkvmEsc(s.plan_name)}</td>
+        <td style="font-size:11px;">${hkvmEsc(s.current_period_start)} → ${hkvmEsc(s.current_period_end)}</td>
+        <td>${hkvmEsc(s.status)}</td>
+        <td class="v3-btn-row">
+          ${s.status === 'active' ? `<button class="btn btn-outline" onclick="renewBillingSubscription(${s.id})">Renew</button>
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="cancelBillingSubscription(${s.id})">Cancel</button>` : ''}
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="6" style="color:var(--text-muted);">No subscriptions.</td></tr>';
+
+  const invoices = invRes.invoices || [];
+  document.getElementById('biBody').innerHTML = invoices.length
+    ? invoices.map(i => `<tr>
+        <td><code>${hkvmEsc(i.invoice_number)}</code></td>
+        <td>${hkvmEsc(i.user_name)}</td>
+        <td>${hkvmEsc(i.plan_name)}</td>
+        <td>$${(i.amount_cents / 100).toFixed(2)}</td>
+        <td style="font-size:11px;">${hkvmEsc(i.period_start)} → ${hkvmEsc(i.period_end)}</td>
+        <td>${hkvmEsc(i.status)}${i.payment_reference ? ` <code>${hkvmEsc(String(i.payment_reference).slice(0, 16))}</code>` : ''}</td>
+        <td class="v3-btn-row">
+          ${i.status === 'issued' ? `<button class="btn btn-outline" onclick="payBillingInvoice(${i.id})">Confirm Payment</button>` : ''}
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" style="color:var(--text-muted);">No invoices issued.</td></tr>';
+
+  const credits = creditsRes.credits || [];
+  document.getElementById('bcBody').innerHTML = credits.length
+    ? credits.map(c => `<tr>
+        <td>#${c.id}</td><td>#${c.user_id}</td>
+        <td>${hkvmEsc(c.type)}</td>
+        <td>${c.type === 'debit' ? '-' : ''}$${(c.amount_cents / 100).toFixed(2)}</td>
+        <td>$${(c.balance_after / 100).toFixed(2)}</td>
+        <td style="font-size:11px;">${hkvmEsc(c.reason || '-')}</td>
+        <td style="font-size:11px;">${hkvmEsc(c.created_at)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" style="color:var(--text-muted);">No credit entries.</td></tr>';
+}
+
+async function submitBillingPlan(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi('/api/v1/billing/plans', {
+      method: 'POST',
+      body: {
+        name: document.getElementById('bpName').value,
+        priceCents: Number(document.getElementById('bpPrice').value),
+        billingCycle: document.getElementById('bpCycle').value,
+        description: document.getElementById('bpDesc').value,
+      },
+    });
+    document.getElementById('bpName').value = '';
+    document.getElementById('bpPrice').value = '';
+    document.getElementById('bpDesc').value = '';
+    hkvmToast('Plan created');
+    loadBilling();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function delBillingPlan(id) {
+  try {
+    await hkvmApi('/api/v1/billing/plans/' + id, { method: 'DELETE' });
+    hkvmToast('Plan deleted');
+    loadBilling();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function submitBillingSubscription(e) {
+  e.preventDefault();
+  try {
+    const username = document.getElementById('bsUser').value.trim();
+    const users = await hkvmApi('/api/v1/billing/users');
+    const user = (users.users || []).find((u) => u.username === username);
+    if (!user) { hkvmToast('User not found', 'error'); return; }
+    await hkvmApi('/api/v1/billing/subscriptions', {
+      method: 'POST',
+      body: {
+        userId: user.id,
+        planId: Number(document.getElementById('bsPlan').value),
+        autoRenew: document.getElementById('bsRenew').value === '1',
+      },
+    });
+    document.getElementById('bsUser').value = '';
+    hkvmToast('Subscription created and first invoice issued');
+    loadBilling();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function cancelBillingSubscription(id) {
+  await hkvmApi(`/api/v1/billing/subscriptions/${id}/cancel`, { method: 'POST' });
+  hkvmToast('Subscription cancelled');
+  loadBilling();
+}
+
+async function renewBillingSubscription(id) {
+  await hkvmApi(`/api/v1/billing/subscriptions/${id}/renew`, { method: 'POST' });
+  hkvmToast('Subscription renewed and renewal invoice issued');
+  loadBilling();
+}
+
+async function payBillingInvoice(id) {
+  const reference = prompt('Enter the verified payment reference (evidence the payment was confirmed):');
+  if (!reference) return;
+  try {
+    await hkvmApi(`/api/v1/billing/invoices/${id}/pay`, {
+      method: 'POST',
+      body: { paymentReference: reference, method: 'admin-verified' },
+    });
+    hkvmToast('Payment recorded (admin-verified)');
+    loadBilling();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function submitBillingCredit(e) {
+  e.preventDefault();
+  try {
+    const username = document.getElementById('bcUser').value.trim();
+    const users = await hkvmApi('/api/v1/billing/users');
+    const user = (users.users || []).find((u) => u.username === username);
+    if (!user) { hkvmToast('User not found', 'error'); return; }
+    await hkvmApi('/api/v1/billing/credits', {
+      method: 'POST',
+      body: {
+        userId: user.id,
+        type: document.getElementById('bcType').value,
+        amountCents: Number(document.getElementById('bcAmount').value),
+        reason: document.getElementById('bcReason').value,
+      },
+    });
+    document.getElementById('bcUser').value = '';
+    document.getElementById('bcAmount').value = '';
+    document.getElementById('bcReason').value = '';
+    hkvmToast('Credit adjustment applied');
+    loadBilling();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
 async function loadFirewall() {
   const data = await hkvmApi('/api/v1/network/firewall');
   document.getElementById('fwBody').innerHTML = data.rules.length
@@ -6292,6 +6515,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   if (CURRENT_SECTION === 'load-balancers') loadLoadBalancers();
   if (CURRENT_SECTION === 'docker') loadDockerContainers();
+  if (CURRENT_SECTION === 'billing') loadBilling();
   if (CURRENT_SECTION === 'sessions') loadSessions();
 
   function addFwProfileRule() {

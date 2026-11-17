@@ -4883,6 +4883,157 @@ exec "$@"
       }
     });
 
+    // Phase 30: Billing & invoicing (Area K) — plans, subscriptions,
+    // invoices and a credit ledger. Payments are recorded only after
+    // administrator-verified confirmation with a payment reference.
+    await runStep('T45: Billing plans, subscriptions, invoices, verified payments & credits', async () => {
+      try {
+        // 1. Plan CRUD with validation.
+        const planRes = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T45 Starter',
+          priceCents: 5000,
+          billingCycle: 'monthly',
+          description: 'Phase 30 test plan',
+          features: ['1 vCPU', '2GB RAM'],
+        });
+        assert.strictEqual(planRes.status, 201, `Plan create failed: ${planRes.text}`);
+        const plan = planRes.json.plan;
+        assert.strictEqual(plan.name, 'T45 Starter');
+        assert.strictEqual(plan.price_cents, 5000);
+
+        const badPlan = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'Bad Cycle Plan',
+          priceCents: 100,
+          billingCycle: 'weekly',
+        });
+        assert.strictEqual(badPlan.status, 400, `Invalid billing cycle must be rejected: ${badPlan.text}`);
+        const badPrice = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'Bad Price Plan',
+          priceCents: -5,
+        });
+        assert.strictEqual(badPrice.status, 400, `Negative price must be rejected: ${badPrice.text}`);
+        const dupPlan = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T45 Starter',
+          priceCents: 100,
+        });
+        assert.strictEqual(dupPlan.status, 400, `Duplicate plan name must be rejected: ${dupPlan.text}`);
+
+        const updPlan = await adminClient.request('PUT', `/api/v1/billing/plans/${plan.id}`, {
+          priceCents: 7500,
+        });
+        assert.strictEqual(updPlan.status, 200, `Plan update failed: ${updPlan.text}`);
+        assert.strictEqual(updPlan.json.plan.price_cents, 7500, 'Plan price must be updated');
+
+        // 2. Subscription create issues the first invoice.
+        const bobRow = await ctx.db.get(`SELECT id FROM users WHERE username = 'bob_user'`);
+        const subRes = await adminClient.request('POST', '/api/v1/billing/subscriptions', {
+          userId: bobRow.id,
+          planId: plan.id,
+          autoRenew: true,
+        });
+        assert.strictEqual(subRes.status, 201, `Subscription create failed: ${subRes.text}`);
+        const subscription = subRes.json.subscription;
+        assert.strictEqual(subscription.status, 'active');
+        assert.ok(subscription.current_period_end, 'Subscription must have a period end');
+
+        const invList = await adminClient.request('GET', '/api/v1/billing/invoices?userId=' + bobRow.id);
+        assert.strictEqual(invList.status, 200, `Invoice list failed: ${invList.text}`);
+        const firstInvoice = invList.json.invoices.find((i) => i.subscription_id === subscription.id);
+        assert.ok(firstInvoice, 'First invoice must be issued on subscription create');
+        assert.strictEqual(firstInvoice.amount_cents, 7500, 'Invoice amount must match the plan price');
+        assert.strictEqual(firstInvoice.status, 'issued');
+        assert.ok(/^INV-\d{8}-\d{4}$/.test(firstInvoice.invoice_number), `Invoice number format: ${firstInvoice.invoice_number}`);
+
+        // 3. Renew advances the period and issues a renewal invoice.
+        const renewRes = await adminClient.request('POST', `/api/v1/billing/subscriptions/${subscription.id}/renew`);
+        assert.strictEqual(renewRes.status, 200, `Subscription renew failed: ${renewRes.text}`);
+        assert.notStrictEqual(
+          renewRes.json.subscription.current_period_end,
+          subscription.current_period_end,
+          'Renew must advance the period end'
+        );
+        const invAfterRenew = await adminClient.request('GET', '/api/v1/billing/invoices?userId=' + bobRow.id);
+        assert.strictEqual(invAfterRenew.json.invoices.length, 2, 'Renew must issue a second invoice');
+
+        // 4. Payment requires admin-verified confirmation with a reference.
+        const missingRef = await adminClient.request('POST', `/api/v1/billing/invoices/${firstInvoice.id}/pay`, {});
+        assert.strictEqual(missingRef.status, 400, `Payment without reference must be rejected: ${missingRef.text}`);
+
+        const payRes = await adminClient.request('POST', `/api/v1/billing/invoices/${firstInvoice.id}/pay`, {
+          paymentReference: 'T45-VERIFIED-TXN-001',
+          method: 'admin-verified',
+        });
+        assert.strictEqual(payRes.status, 200, `Payment confirmation failed: ${payRes.text}`);
+        assert.strictEqual(payRes.json.invoice.status, 'paid');
+        assert.strictEqual(payRes.json.invoice.payment_reference, 'T45-VERIFIED-TXN-001');
+        assert.ok(payRes.json.invoice.paid_at, 'Paid invoice must record paid_at');
+
+        const doublePay = await adminClient.request('POST', `/api/v1/billing/invoices/${firstInvoice.id}/pay`, {
+          paymentReference: 'T45-VERIFIED-TXN-002',
+        });
+        assert.strictEqual(doublePay.status, 400, `Double payment must be rejected: ${doublePay.text}`);
+
+        // Payment posts a ledger entry and updates the balance.
+        const creditsRes = await adminClient.request('GET', '/api/v1/billing/credits?userId=' + bobRow.id);
+        assert.strictEqual(creditsRes.status, 200, `Credit list failed: ${creditsRes.text}`);
+        const paymentEntry = creditsRes.json.credits.find((c) => c.type === 'payment');
+        assert.ok(paymentEntry, 'Payment must post a credit-ledger entry');
+        assert.strictEqual(paymentEntry.amount_cents, 7500);
+        assert.strictEqual(paymentEntry.balance_after, 7500, 'Balance after payment must equal the amount');
+
+        // 5. Customers cannot manage billing.
+        const bobClient = new SessionClient(baseUrl);
+        await bobClient.request('POST', '/api/login', { username: 'bob_user', password: 'BobPass!123' });
+        const forbiddenPlans = await bobClient.request('GET', '/api/v1/billing/plans');
+        assert.strictEqual(forbiddenPlans.status, 403, `Customer plan list must be forbidden: ${forbiddenPlans.text}`);
+        const forbiddenPay = await bobClient.request('POST', `/api/v1/billing/invoices/${firstInvoice.id}/pay`, {
+          paymentReference: 'bob-attempt',
+        });
+        assert.strictEqual(forbiddenPay.status, 403, `Customer payment must be forbidden: ${forbiddenPay.text}`);
+
+        // 6. Credit adjustments and the resulting balance.
+        const adjustRes = await adminClient.request('POST', '/api/v1/billing/credits', {
+          userId: bobRow.id,
+          type: 'credit',
+          amountCents: 2500,
+          reason: 'T45 goodwill',
+        });
+        assert.strictEqual(adjustRes.status, 201, `Credit adjustment failed: ${adjustRes.text}`);
+        assert.strictEqual(adjustRes.json.balanceAfter, 10000, 'Balance must increase by the adjustment');
+
+        const debitRes = await adminClient.request('POST', '/api/v1/billing/credits', {
+          userId: bobRow.id,
+          type: 'debit',
+          amountCents: 1000,
+          reason: 'T45 correction',
+        });
+        assert.strictEqual(debitRes.status, 201, `Credit debit failed: ${debitRes.text}`);
+        assert.strictEqual(debitRes.json.balanceAfter, 9000, 'Balance must decrease by the debit');
+
+        const badDebit = await adminClient.request('POST', '/api/v1/billing/credits', {
+          userId: bobRow.id,
+          type: 'debit',
+          amountCents: 999999,
+        });
+        assert.strictEqual(badDebit.status, 400, `Debit exceeding balance must be rejected: ${badDebit.text}`);
+
+        // 7. Cancel ends the subscription.
+        const cancelRes = await adminClient.request('POST', `/api/v1/billing/subscriptions/${subscription.id}/cancel`);
+        assert.strictEqual(cancelRes.status, 200, `Subscription cancel failed: ${cancelRes.text}`);
+        assert.strictEqual(cancelRes.json.subscription.status, 'cancelled');
+        assert.ok(cancelRes.json.subscription.cancelled_at, 'Cancel must record cancelled_at');
+
+        // 8. Plan with active subscriptions cannot be deleted.
+        const delActive = await adminClient.request('DELETE', `/api/v1/billing/plans/${plan.id}`);
+        assert.strictEqual(delActive.status, 400, `Plan with active subscriptions must not be deleted: ${delActive.text}`);
+      } finally {
+        await ctx.db.run(`DELETE FROM credit_ledger WHERE reason LIKE 'T45%' OR reference LIKE 'T45%'`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM invoices WHERE invoice_number LIKE 'INV-%' AND user_id IN (SELECT id FROM users WHERE username = 'bob_user')`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM customer_subscriptions WHERE plan_id IN (SELECT id FROM billing_plans WHERE name LIKE 'T45%')`).catch(() => undefined);
+        await ctx.db.run(`DELETE FROM billing_plans WHERE name LIKE 'T45%'`).catch(() => undefined);
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

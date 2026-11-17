@@ -66,6 +66,8 @@ export declare const SafeValidators: {
     dockerContainerName(name: unknown): string;
     dockerImage(image: unknown): string;
     dockerRestartPolicy(policy: unknown): string;
+    billingPlanName(name: unknown): string;
+    billingCycle(cycle: unknown): string;
     loadBalancerName(name: unknown): string;
     snapshotName(name: unknown): string;
     bridgeOrIface(name: unknown): string;
