@@ -2845,6 +2845,23 @@ app.post('/api/vms', checkAuth, checkAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Please select a template or upload ISO' });
   }
 
+  // Reject duplicate VM names before the INSERT (vms.vm_name is UNIQUE) so
+  // callers get a clear 409 instead of a raw SQLITE_CONSTRAINT error.
+  if (!vm_name || !String(vm_name).trim()) {
+    return res.status(400).json({ error: 'VM name is required.' });
+  }
+  {
+    const existingVm = await new Promise((resolve, reject) => {
+      db.get(`SELECT vm_id FROM vms WHERE vm_name = ?`, [String(vm_name).trim()], (err, result) => {
+        if (err) reject(err);
+        else resolve(result);
+      });
+    });
+    if (existingVm) {
+      return res.status(409).json({ error: `A VM named "${String(vm_name).trim()}" already exists. Choose a different name.` });
+    }
+  }
+
   // Validate memory when explicitly provided (otherwise template default is used below)
   if (custom_memory !== undefined && custom_memory !== null && String(custom_memory).trim() !== '') {
     const memoryNum = parseInt(custom_memory, 10);
