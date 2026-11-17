@@ -92,6 +92,10 @@ Role gates use `requireRole([...])`: `admin`, `subadmin`, `operator`, `reseller`
 | GET/POST | `/instances/:engine/:id/firewall-rules` | staff / admin-subadmin | Per-VPS firewall policy: list (authorized) or create rules scoped to a KVM/LXC instance; enforced against the instance's IPs on the host. |
 | GET/POST/DELETE | `/network/firewall-profiles[/:id]` | admin-subadmin/operator | Reusable per-VPS firewall rule profiles (migration v027). `POST` creates a profile with an ordered rule set; `DELETE` cascades to profile rules. |
 | POST | `/network/firewall-profiles/:id/apply` | admin/subadmin | Apply a profile to an instance: materializes its rules as instance-scoped `firewall_rules` rows and enforces each against the instance's IPs; returns per-rule `applied` results. |
+| GET/POST | `/docker/containers` | admin-subadmin-operator / admin-subadmin | List registered containers or register a new one (name, image, ports, env, restart policy, network, node). Phase 29. |
+| GET/PUT/DELETE | `/docker/containers/:id` | admin-subadmin-operator / admin-subadmin | Container detail, update (spec replaced), or delete (removes the registry row). Phase 29. |
+| POST | `/docker/containers/:id/apply` | admin-subadmin | Apply a lifecycle action: `{mode: create|start|stop|restart|remove}` executed on the target node via the allowlisted command runner; honest capability gating when docker is absent. Phase 29. |
+| GET | `/docker/containers/:id/status` | admin-subadmin-operator | Live container state (docker inspect on local nodes, agent status on remote nodes) plus docker availability. Phase 29. |
 | GET | `/sessions` | admin-subadmin | List active panel sessions (sid, user id/name, created, last seen, IP, user agent). Phase 28. |
 | DELETE | `/sessions/:sid` | admin-subadmin | Revoke a single session (destroys the stored session; the client is logged out on its next request). Phase 28. |
 | DELETE | `/sessions?userId=<id>` | admin-subadmin | Revoke every active session of a user (forces re-login for all their clients). Phase 28. |

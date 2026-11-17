@@ -1986,6 +1986,34 @@ export const MIGRATIONS: MigrationDefinition[] = [
       await db.run(`CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`);
     },
   },
+  {
+    version: 31,
+    name: 'v031_docker_containers',
+    up: async (db) => {
+      // Docker container registry (Area I): panel-managed containers rendered
+      // as `docker run`/lifecycle commands, executed on the target node via
+      // the allowlisted command runner (local or via the node agent).
+      await db.run(
+        `CREATE TABLE IF NOT EXISTS docker_containers (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,
+          node_id INTEGER NOT NULL DEFAULT 1,
+          image TEXT NOT NULL,
+          ports TEXT NOT NULL DEFAULT '[]',
+          env TEXT NOT NULL DEFAULT '{}',
+          restart_policy TEXT NOT NULL DEFAULT 'unless-stopped',
+          network TEXT NOT NULL DEFAULT 'tgvpanel',
+          status TEXT NOT NULL DEFAULT 'created',
+          container_id TEXT,
+          last_applied_at TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )`
+      );
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_docker_containers_node ON docker_containers(node_id)`);
+    },
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{

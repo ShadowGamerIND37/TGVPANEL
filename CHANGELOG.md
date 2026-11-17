@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Phase 29 Docker container manager (2026-10-30)
+
+- Added the missing Docker management subsystem (audit Area I: no Docker management). Migration **v031 `v031_docker_containers`** adds the `docker_containers` registry (name, node, image, JSON port mappings, JSON env, restart policy, network, lifecycle status, applied timestamps, last error).
+- New `src/services/docker/DockerManager.ts`: registry CRUD with strict validation (container name regex, Docker image reference format, restart-policy whitelist, port-mapping ranges, env key format), `docker run` / lifecycle command rendering (`renderRunArgs`, `renderRunCommand`, `renderLifecycleCommand`), and lifecycle apply (create/start/stop/restart/remove) executed through the allowlisted command runner — locally or via the node agent (`POST /api/v1/docker/apply`, `POST /api/v1/docker/status`). Honest capability gating: when the `docker` binary is absent, apply fails with a recorded error and status reports `dockerAvailable: false`.
+- `'docker'` added to both command-runner allowlists; `SafeValidators` gains `dockerContainerName`, `dockerImage`, `dockerRestartPolicy`.
+- API routes: `GET/POST /docker/containers`, `GET/PUT/DELETE /docker/containers/:id`, `POST /docker/containers/:id/apply` (create/start/stop/restart/remove), `GET /docker/containers/:id/status` (admin/subadmin/operator read; admin/subadmin mutations). Admin UI gains a Docker Containers section (create form with port/env parsing, registry table, live status, Create/Start/Stop/Restart/Remove/Delete actions).
+- T44: registry CRUD + validation rejections, rendered-command assertions, honest capability gating (docker absent), status availability, customer 403, signed agent enforcement (valid spec passes agent validation; invalid spec rejected), update/delete. Full suite: **44/44 acceptance suites passing**.
+- Boundary: containers are panel-managed via the host `docker` CLI; the panel does not implement Docker image registry management, compose orchestration, or container resource quotas.
+
 ## Unreleased — Phase 28 Session inventory & revocation (2026-10-30)
 
 - Replaced the default in-memory `express-session` store with a persistent SQLite store (`src/security/session-store.ts`, `SqliteSessionStore`) wired into `app.js` (`panelSessionStore`). Panel sessions are now persisted, enumerable and revocable. The store matches the panel database's WAL mode with a busy timeout, and the login handler persists the session before responding so a client's next request can never race the async write.

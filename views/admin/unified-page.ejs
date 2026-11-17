@@ -1907,6 +1907,38 @@
       </div>
       <% } %>
 
+      <!-- SECTION: DOCKER -->
+      <% if (section === 'docker') { %>
+      <div class="v3-toolbar">
+        <div>
+          <h2 style="margin:0;color:var(--text-primary);">Docker Containers</h2>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Panel-managed containers rendered as <code>docker run</code> / lifecycle commands, executed on the target node via the allowlisted command runner.</p>
+        </div>
+        <div class="v3-btn-row">
+          <button class="btn btn-outline" onclick="loadDockerContainers()">Refresh</button>
+        </div>
+      </div>
+      <div class="v3-card">
+        <h3>Add Container</h3>
+        <form onsubmit="submitDockerContainer(event)" class="v3-form-grid">
+          <div class="v3-field"><label>Name</label><input id="dcName" placeholder="web-app"></div>
+          <div class="v3-field"><label>Node</label><select id="dcNode"><% (nodes||[]).forEach(n => { %><option value="<%= n.id %>"><%= n.name %></option><% }) %></select></div>
+          <div class="v3-field"><label>Image</label><input id="dcImage" placeholder="nginx:latest"></div>
+          <div class="v3-field"><label>Restart policy</label><select id="dcRestart"><option value="unless-stopped">Unless Stopped</option><option value="always">Always</option><option value="no">No</option><option value="on-failure">On Failure</option></select></div>
+          <div class="v3-field"><label>Network</label><input id="dcNetwork" placeholder="tgvpanel"></div>
+          <div class="v3-field"><label>Ports (host:container/proto, comma separated)</label><input id="dcPorts" placeholder="8080:80/tcp, 443:443/tcp"></div>
+          <div class="v3-field" style="grid-column:1/-1;"><label>Environment (KEY=VALUE, one per line)</label><textarea id="dcEnv" rows="3" placeholder="APP_ENV=production&#10;TZ=UTC"></textarea></div>
+          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Container</button></div>
+        </form>
+      </div>
+      <div class="v3-card v3-table-wrap">
+        <table class="v3-table">
+          <thead><tr><th>ID</th><th>Name</th><th>Image</th><th>Node</th><th>Ports</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="dcBody"></tbody>
+        </table>
+      </div>
+      <% } %>
+
       <!-- SECTION: SNAPSHOTS -->
       <% if (section === 'snapshots') { %>
       <div class="v3-toolbar"><h2 style="margin:0;color:var(--text-primary);">Unified Instance Snapshots (QCOW2 &amp; LXC)</h2></div>
@@ -4990,6 +5022,107 @@ async function revokeUserSessions(userId) {
   loadSessions();
 }
 
+async function loadDockerContainers() {
+  const data = await hkvmApi('/api/v1/docker/containers');
+  document.getElementById('dcBody').innerHTML = data.containers.length
+    ? data.containers.map(c => `<tr>
+        <td>#${c.id}</td><td><strong>${hkvmEsc(c.name)}</strong></td>
+        <td><code>${hkvmEsc(c.image)}</code></td>
+        <td>${hkvmEsc(c.node_name || '#' + c.node_id)}</td>
+        <td style="font-size:11px;">${hkvmEsc(c.ports)}</td>
+        <td class="dc-status" data-id="${c.id}" style="font-size:11px;">${hkvmEsc(c.status)}</td>
+        <td class="v3-btn-row">
+          <button class="btn btn-outline" onclick="applyDockerContainer(${c.id}, 'create', this)">Create</button>
+          <button class="btn btn-outline" onclick="applyDockerContainer(${c.id}, 'start', this)">Start</button>
+          <button class="btn btn-outline" onclick="applyDockerContainer(${c.id}, 'stop', this)">Stop</button>
+          <button class="btn btn-outline" onclick="applyDockerContainer(${c.id}, 'restart', this)">Restart</button>
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="applyDockerContainer(${c.id}, 'remove', this)">Remove</button>
+          <button class="btn btn-outline" style="color:#ef4444;" onclick="delDockerContainer(${c.id})">Delete</button>
+        </td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" style="color:var(--text-muted);">No containers registered.</td></tr>';
+  document.querySelectorAll('.dc-status').forEach(async (cell) => {
+    try {
+      const res = await hkvmApi(`/api/v1/docker/containers/${cell.getAttribute('data-id')}/status`);
+      const st = res.status;
+      if (st.dockerAvailable === false) {
+        cell.textContent = 'docker unavailable';
+        cell.style.color = '#ef4444';
+      } else if (st.state) {
+        cell.textContent = st.state;
+        cell.style.color = st.state === 'running' ? 'var(--ok)' : 'var(--text-muted)';
+      } else {
+        cell.textContent = st.status;
+      }
+      if (st.last_error) cell.title = st.last_error;
+    } catch (err) { /* keep the registry status */ }
+  });
+}
+
+function collectDockerPorts() {
+  const raw = document.getElementById('dcPorts').value.trim();
+  if (!raw) return [];
+  return raw.split(',').map((part) => {
+    const [hostPort, containerPortAndProto] = part.trim().split(':');
+    const [containerPort, proto] = (containerPortAndProto || '').split('/');
+    return {
+      hostPort: Number(hostPort),
+      containerPort: Number(containerPort),
+      protocol: proto || 'tcp',
+    };
+  }).filter((p) => Number.isInteger(p.hostPort) && Number.isInteger(p.containerPort));
+}
+
+function collectDockerEnv() {
+  const raw = document.getElementById('dcEnv').value.trim();
+  if (!raw) return {};
+  const env = {};
+  for (const line of raw.split('\n')) {
+    const idx = line.indexOf('=');
+    if (idx > 0) env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+  }
+  return env;
+}
+
+async function submitDockerContainer(e) {
+  e.preventDefault();
+  try {
+    await hkvmApi('/api/v1/docker/containers', {
+      method: 'POST',
+      body: {
+        name: document.getElementById('dcName').value,
+        nodeId: Number(document.getElementById('dcNode').value),
+        image: document.getElementById('dcImage').value,
+        restartPolicy: document.getElementById('dcRestart').value,
+        network: document.getElementById('dcNetwork').value || 'tgvpanel',
+        ports: collectDockerPorts(),
+        env: collectDockerEnv(),
+      },
+    });
+    document.getElementById('dcName').value = '';
+    document.getElementById('dcImage').value = '';
+    document.getElementById('dcPorts').value = '';
+    document.getElementById('dcEnv').value = '';
+    hkvmToast('Container registered');
+    loadDockerContainers();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+}
+
+async function delDockerContainer(id) {
+  await hkvmApi('/api/v1/docker/containers/' + id, { method: 'DELETE' });
+  loadDockerContainers();
+}
+
+async function applyDockerContainer(id, mode, btn) {
+  btn.disabled = true;
+  try {
+    const res = await hkvmApi(`/api/v1/docker/containers/${id}/apply`, { method: 'POST', body: { mode } });
+    hkvmToast(mode + ': ' + (res.applied ? 'applied' : 'failed') + (res.error ? ' — ' + res.error : ''), res.applied ? 'success' : 'error');
+    loadDockerContainers();
+  } catch (err) { hkvmToast(err.message, 'error'); }
+  btn.disabled = false;
+}
+
 async function loadFirewall() {
   const data = await hkvmApi('/api/v1/network/firewall');
   document.getElementById('fwBody').innerHTML = data.rules.length
@@ -6158,6 +6291,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadFirewallProfiles();
   }
   if (CURRENT_SECTION === 'load-balancers') loadLoadBalancers();
+  if (CURRENT_SECTION === 'docker') loadDockerContainers();
   if (CURRENT_SECTION === 'sessions') loadSessions();
 
   function addFwProfileRule() {

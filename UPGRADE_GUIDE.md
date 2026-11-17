@@ -52,7 +52,7 @@ applies what is pending.
 ## Migration model
 
 Migrations live in `src/db/migrations.ts` as an ordered array
-(`version`, `name`, `up`). Current schema version is **v030**. Each migration
+(`version`, `name`, `up`). Current schema version is **v031**. Each migration
 uses `CREATE TABLE IF NOT EXISTS` / `ensureColumn(...)` so it is safe against
 existing databases. Summary of the schema evolution:
 

@@ -2292,6 +2292,90 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     }
   );
 
+  // --- Docker containers (Area I, Phase 29) ---
+  router.get(
+    '/docker/containers',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (_req: Request, res: Response) => {
+      const containers = await ctx.dockerManager.listContainers();
+      res.json({ containers });
+    }
+  );
+
+  router.get(
+    '/docker/containers/:id',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const container = await ctx.dockerManager.getContainer(pInt(req.params.id));
+      if (!container) return res.status(404).json({ error: 'Container does not exist.' });
+      res.json({ container });
+    }
+  );
+
+  router.post(
+    '/docker/containers',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const container = await ctx.dockerManager.createContainer(req.body || {});
+        res.status(201).json({ container });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.put(
+    '/docker/containers/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      try {
+        const container = await ctx.dockerManager.updateContainer(pInt(req.params.id), req.body || {});
+        res.json({ container });
+      } catch (err: any) {
+        res.status(400).json({ error: err.message });
+      }
+    }
+  );
+
+  router.delete(
+    '/docker/containers/:id',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      const id = pInt(req.params.id);
+      const container = await ctx.dockerManager.getContainer(id);
+      if (!container) return res.status(404).json({ error: 'Container does not exist.' });
+      await ctx.dockerManager.deleteContainer(id);
+      res.json({ success: true });
+    }
+  );
+
+  router.post(
+    '/docker/containers/:id/apply',
+    requireRole(['admin', 'subadmin']),
+    async (req: Request, res: Response) => {
+      const container = await ctx.dockerManager.getContainer(pInt(req.params.id));
+      if (!container) return res.status(404).json({ error: 'Container does not exist.' });
+      const mode = req.body?.mode;
+      const validModes = ['create', 'start', 'stop', 'restart', 'remove'];
+      if (!validModes.includes(String(mode))) {
+        return res.status(400).json({ error: `mode must be one of: ${validModes.join(', ')}.` });
+      }
+      const result = await ctx.dockerManager.applyContainer(container, mode as any);
+      res.json(result);
+    }
+  );
+
+  router.get(
+    '/docker/containers/:id/status',
+    requireRole(['admin', 'subadmin', 'operator']),
+    async (req: Request, res: Response) => {
+      const status = await ctx.dockerManager.getContainerStatus(pInt(req.params.id));
+      if (!status) return res.status(404).json({ error: 'Container does not exist.' });
+      res.json({ status });
+    }
+  );
+
   // --- Session inventory & revocation (Phase 28) ---
   router.get(
     '/sessions',
