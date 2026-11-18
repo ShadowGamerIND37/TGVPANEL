@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — Store Purchase Gateway Fallback Fix (2026-11-17)
+
+- **Store "Buy Plan" fix when gateway is enabled but unreachable**: Previously, when a payment gateway was enabled but the gateway API was unreachable (network error, timeout, DNS failure), the purchase returned a 502 error and the customer could not complete the purchase. Now the `PaymentGatewayManager.createOrder()` method adds a 10-second timeout to all gateway API calls (FamGateway, Stripe, PayPal) and **automatically falls back to a manual/offline order** when the gateway is unreachable. The customer always completes the purchase; the admin verifies and marks the order as paid afterwards.
+- **Purchase route fallback**: The `/store/purchase` route also falls back to a manual order if the gateway API returns any error, ensuring the purchase never fails for the customer.
+- **Test T48 updated**: Purchase assertion now verifies the manual fallback succeeds instead of expecting a 502 failure. **52/52 tests pass.**
+
 ## Unreleased — Store Purchase Fix & LXC Studio UI Upgrade (2026-11-17)
 
 - **Store "Buy Plan" fix**: Purchase flow now has a **manual/offline order fallback**. Previously, when no payment gateway API key was configured, `getEnabledGateways()` returned empty and the Buy button was disabled. Now a "Manual / Offline Payment" gateway option is always available, so customers can place orders that admins can confirm after payment verification.
