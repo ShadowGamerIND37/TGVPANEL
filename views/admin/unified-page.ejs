@@ -1958,7 +1958,7 @@
       <div class="v3-toolbar">
         <div>
           <h2 style="margin:0;color:var(--text-primary);">Billing &amp; Invoicing</h2>
-          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Plans, subscriptions, invoices, credits and payment gateways. Supports FamGateway (UPI), Stripe and PayPal.</p>
+          <p style="margin:4px 0 0;font-size:13px;color:var(--text-muted);">Plans, invoices and payment gateways. Supports FamGateway (UPI), Stripe and PayPal.</p>
         </div>
         <div class="v3-btn-row">
           <button class="btn btn-outline" onclick="loadBilling()">Refresh</button>
@@ -1968,7 +1968,7 @@
         <h3>Plans</h3>
         <form onsubmit="submitBillingPlan(event)" class="v3-form-grid">
           <div class="v3-field"><label>Name</label><input id="bpName" placeholder="Starter"></div>
-          <div class="v3-field"><label>Price (cents)</label><input id="bpPrice" type="number" min="0" placeholder="5000"></div>
+          <div class="v3-field"><label>Price (₹)</label><input id="bpPrice" type="number" min="0" step="0.01" placeholder="50.00"></div>
           <div class="v3-field"><label>Cycle</label><select id="bpCycle"><option value="monthly">Monthly</option><option value="yearly">Yearly</option><option value="one-time">One-time</option></select></div>
           <div class="v3-field"><label>Virtualization</label><select id="bpVtype"><option value="lxc">LXC</option><option value="kvm">KVM</option><option value="both">Both</option></select></div>
           <div class="v3-field"><label>CPU Cores</label><input id="bpCpu" type="number" min="1" value="1"></div>
@@ -1994,38 +1994,11 @@
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">Enable and configure payment gateways for the customer Store. Supported: FamGateway (UPI), Stripe, PayPal.</p>
         <div id="gwList" style="display:flex;flex-direction:column;gap:12px;"></div>
       </div>
-      <div class="v3-card">
-        <h3>Subscriptions</h3>
-        <form onsubmit="submitBillingSubscription(event)" class="v3-form-grid">
-          <div class="v3-field"><label>Customer (username)</label><input id="bsUser" placeholder="bob_user"></div>
-          <div class="v3-field"><label>Plan</label><select id="bsPlan"></select></div>
-          <div class="v3-field"><label>Auto-renew</label><select id="bsRenew"><option value="1">Yes</option><option value="0">No</option></select></div>
-          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Create Subscription</button></div>
-        </form>
-        <table class="v3-table" style="margin-top:12px;">
-          <thead><tr><th>ID</th><th>Customer</th><th>Plan</th><th>Period</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody id="bsBody"></tbody>
-        </table>
-      </div>
       <div class="v3-card v3-table-wrap">
         <h3>Invoices</h3>
         <table class="v3-table">
           <thead><tr><th>Number</th><th>Customer</th><th>Plan</th><th>Amount</th><th>Period</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody id="biBody"></tbody>
-        </table>
-      </div>
-      <div class="v3-card v3-table-wrap">
-        <h3>Credit Ledger</h3>
-        <form onsubmit="submitBillingCredit(event)" class="v3-form-grid" style="margin-bottom:12px;">
-          <div class="v3-field"><label>Customer (username)</label><input id="bcUser" placeholder="bob_user"></div>
-          <div class="v3-field"><label>Type</label><select id="bcType"><option value="credit">Credit</option><option value="debit">Debit</option></select></div>
-          <div class="v3-field"><label>Amount (cents)</label><input id="bcAmount" type="number" min="1" placeholder="1000"></div>
-          <div class="v3-field"><label>Reason</label><input id="bcReason" placeholder="Goodwill adjustment"></div>
-          <div class="v3-field" style="display:flex;align-items:flex-end;"><button class="btn btn-primary" type="submit" style="width:100%;">Apply Adjustment</button></div>
-        </form>
-        <table class="v3-table">
-          <thead><tr><th>ID</th><th>Customer ID</th><th>Type</th><th>Amount</th><th>Balance after</th><th>Reason</th><th>At</th></tr></thead>
-          <tbody id="bcBody"></tbody>
         </table>
       </div>
       <% } %>
@@ -5486,17 +5459,15 @@ async function applyDockerContainer(id, mode, btn) {
 }
 
 async function loadBilling() {
-  const [plansRes, subsRes, invRes, creditsRes] = await Promise.all([
+  const [plansRes, invRes] = await Promise.all([
     hkvmApi('/api/v1/billing/plans'),
-    hkvmApi('/api/v1/billing/subscriptions'),
     hkvmApi('/api/v1/billing/invoices'),
-    hkvmApi('/api/v1/billing/credits'),
   ]);
   const plans = plansRes.plans || [];
   document.getElementById('bpBody').innerHTML = plans.length
     ? plans.map(p => `<tr>
         <td>#${p.id}</td><td><strong>${hkvmEsc(p.name)}</strong></td>
-        <td>$${(p.price_cents / 100).toFixed(2)}</td>
+        <td>₹${(p.price_cents / 100).toFixed(2)}</td>
         <td>${hkvmEsc(p.virtualization_type || 'lxc')}</td>
         <td>${p.cpu_cores || 1}</td>
         <td>${(p.ram_mb || 1024) / 1024}GB</td>
@@ -5505,34 +5476,18 @@ async function loadBilling() {
         <td>${hkvmEsc(p.billing_cycle)}</td>
         <td>${p.is_active ? 'active' : 'inactive'}</td>
         <td class="v3-btn-row">
+          <button class="btn btn-outline" onclick="editBillingPlan(${p.id})">Edit</button>
           <button class="btn btn-outline" style="color:#ef4444;" onclick="delBillingPlan(${p.id})">Delete</button>
         </td>
       </tr>`).join('')
     : '<tr><td colspan="10" style="color:var(--text-muted);">No plans configured.</td></tr>';
-  const sel = document.getElementById('bsPlan');
-  sel.innerHTML = plans.map(p => `<option value="${p.id}">${hkvmEsc(p.name)} — $${(p.price_cents / 100).toFixed(2)} (${hkvmEsc(p.billing_cycle)})</option>`).join('');
-
-  const subs = subsRes.subscriptions || [];
-  document.getElementById('bsBody').innerHTML = subs.length
-    ? subs.map(s => `<tr>
-        <td>#${s.id}</td><td><strong>${hkvmEsc(s.user_name)}</strong></td>
-        <td>${hkvmEsc(s.plan_name)}</td>
-        <td style="font-size:11px;">${hkvmEsc(s.current_period_start)} → ${hkvmEsc(s.current_period_end)}</td>
-        <td>${hkvmEsc(s.status)}</td>
-        <td class="v3-btn-row">
-          ${s.status === 'active' ? `<button class="btn btn-outline" onclick="renewBillingSubscription(${s.id})">Renew</button>
-          <button class="btn btn-outline" style="color:#ef4444;" onclick="cancelBillingSubscription(${s.id})">Cancel</button>` : ''}
-        </td>
-      </tr>`).join('')
-    : '<tr><td colspan="6" style="color:var(--text-muted);">No subscriptions.</td></tr>';
-
   const invoices = invRes.invoices || [];
   document.getElementById('biBody').innerHTML = invoices.length
     ? invoices.map(i => `<tr>
         <td><code>${hkvmEsc(i.invoice_number)}</code></td>
         <td>${hkvmEsc(i.user_name)}</td>
         <td>${hkvmEsc(i.plan_name)}</td>
-        <td>$${(i.amount_cents / 100).toFixed(2)}</td>
+        <td>₹${(i.amount_cents / 100).toFixed(2)}</td>
         <td style="font-size:11px;">${hkvmEsc(i.period_start)} → ${hkvmEsc(i.period_end)}</td>
         <td>${hkvmEsc(i.status)}${i.payment_reference ? ` <code>${hkvmEsc(String(i.payment_reference).slice(0, 16))}</code>` : ''}</td>
         <td class="v3-btn-row">
@@ -5557,18 +5512,6 @@ async function loadBilling() {
       nodeSel.dataset.populated = '1';
     } catch (e) { /* nodes may not be available */ }
   }
-
-  const credits = creditsRes.credits || [];
-  document.getElementById('bcBody').innerHTML = credits.length
-    ? credits.map(c => `<tr>
-        <td>#${c.id}</td><td>#${c.user_id}</td>
-        <td>${hkvmEsc(c.type)}</td>
-        <td>${c.type === 'debit' ? '-' : ''}$${(c.amount_cents / 100).toFixed(2)}</td>
-        <td>$${(c.balance_after / 100).toFixed(2)}</td>
-        <td style="font-size:11px;">${hkvmEsc(c.reason || '-')}</td>
-        <td style="font-size:11px;">${hkvmEsc(c.created_at)}</td>
-      </tr>`).join('')
-    : '<tr><td colspan="7" style="color:var(--text-muted);">No credit entries.</td></tr>';
 }
 
 
@@ -5682,29 +5625,34 @@ async function saveGatewayConfig(id) {
 async function submitBillingPlan(e) {
   e.preventDefault();
   try {
-    await hkvmApi('/api/v1/billing/plans', {
-      method: 'POST',
-      body: {
-        name: document.getElementById('bpName').value,
-        priceCents: Number(document.getElementById('bpPrice').value),
-        billingCycle: document.getElementById('bpCycle').value,
-        description: document.getElementById('bpDesc').value,
-        virtualizationType: document.getElementById('bpVtype').value,
-        cpuCores: Number(document.getElementById('bpCpu').value),
-        ramMb: Number(document.getElementById('bpRam').value),
-        storageGb: Number(document.getElementById('bpStorage').value),
-        bandwidthGb: Number(document.getElementById('bpBw').value),
-        vpsCount: Number(document.getElementById('bpVps').value),
-        portsCount: Number(document.getElementById('bpPorts').value),
-        dnsRecords: Number(document.getElementById('bpDns').value),
-        slaPercent: Number(document.getElementById('bpSla').value),
-        defaultNodeId: document.getElementById('bpNode').value ? Number(document.getElementById('bpNode').value) : null,
-      },
-    });
-    document.getElementById('bpName').value = '';
-    document.getElementById('bpPrice').value = '';
-    document.getElementById('bpDesc').value = '';
-    hkvmToast('Plan created');
+    const planId = window._editingPlanId;
+    const priceRupees = Number(document.getElementById('bpPrice').value);
+    if (priceRupees < 0) throw new Error('Price must be positive');
+    const priceCents = Math.round(priceRupees * 100);
+    const body = {
+      name: document.getElementById('bpName').value,
+      priceCents: priceCents,
+      billingCycle: document.getElementById('bpCycle').value,
+      description: document.getElementById('bpDesc').value,
+      virtualizationType: document.getElementById('bpVtype').value,
+      cpuCores: Number(document.getElementById('bpCpu').value),
+      ramMb: Number(document.getElementById('bpRam').value),
+      storageGb: Number(document.getElementById('bpStorage').value),
+      bandwidthGb: Number(document.getElementById('bpBw').value),
+      vpsCount: Number(document.getElementById('bpVps').value),
+      portsCount: Number(document.getElementById('bpPorts').value),
+      dnsRecords: Number(document.getElementById('bpDns').value),
+      slaPercent: Number(document.getElementById('bpSla').value),
+      defaultNodeId: document.getElementById('bpNode').value ? Number(document.getElementById('bpNode').value) : null,
+    };
+    if (planId) {
+      await hkvmApi('/api/v1/billing/plans/' + planId, { method: 'PUT', body });
+      hkvmToast('Plan updated');
+    } else {
+      await hkvmApi('/api/v1/billing/plans', { method: 'POST', body });
+      hkvmToast('Plan created');
+    }
+    resetBillingPlanForm();
     loadBilling();
   } catch (err) { hkvmToast(err.message, 'error'); }
 }
@@ -5717,37 +5665,49 @@ async function delBillingPlan(id) {
   } catch (err) { hkvmToast(err.message, 'error'); }
 }
 
-async function submitBillingSubscription(e) {
-  e.preventDefault();
+function resetBillingPlanForm() {
+  document.getElementById('bpName').value = '';
+  document.getElementById('bpPrice').value = '';
+  document.getElementById('bpDesc').value = '';
+  document.getElementById('bpCpu').value = '1';
+  document.getElementById('bpRam').value = '1024';
+  document.getElementById('bpStorage').value = '10';
+  document.getElementById('bpBw').value = '100';
+  document.getElementById('bpVps').value = '1';
+  document.getElementById('bpPorts').value = '0';
+  document.getElementById('bpDns').value = '0';
+  document.getElementById('bpSla').value = '99.9';
+  window._editingPlanId = null;
+  const btn = document.querySelector('#lxcCreateStudioForm button[type="submit"], form[onsubmit="submitBillingPlan(event)"] button[type="submit"]');
+  if (btn) btn.textContent = 'Create Plan';
+}
+
+async function editBillingPlan(id) {
   try {
-    const username = document.getElementById('bsUser').value.trim();
-    const users = await hkvmApi('/api/v1/billing/users');
-    const user = (users.users || []).find((u) => u.username === username);
-    if (!user) { hkvmToast('User not found', 'error'); return; }
-    await hkvmApi('/api/v1/billing/subscriptions', {
-      method: 'POST',
-      body: {
-        userId: user.id,
-        planId: Number(document.getElementById('bsPlan').value),
-        autoRenew: document.getElementById('bsRenew').value === '1',
-      },
-    });
-    document.getElementById('bsUser').value = '';
-    hkvmToast('Subscription created and first invoice issued');
-    loadBilling();
+    const res = await hkvmApi('/api/v1/billing/plans/' + id);
+    const p = res.plan;
+    window._editingPlanId = id;
+    document.getElementById('bpName').value = p.name || '';
+    document.getElementById('bpPrice').value = (p.price_cents / 100).toFixed(2);
+    document.getElementById('bpCycle').value = p.billing_cycle || 'monthly';
+    document.getElementById('bpVtype').value = p.virtualization_type || 'lxc';
+    document.getElementById('bpCpu').value = p.cpu_cores || 1;
+    document.getElementById('bpRam').value = p.ram_mb || 1024;
+    document.getElementById('bpStorage').value = p.storage_gb || 10;
+    document.getElementById('bpBw').value = p.bandwidth_gb || 100;
+    document.getElementById('bpVps').value = p.vps_count || 1;
+    document.getElementById('bpPorts').value = p.ports_count || 0;
+    document.getElementById('bpDns').value = p.dns_records || 0;
+    document.getElementById('bpSla').value = p.sla_percent || 99.9;
+    document.getElementById('bpDesc').value = p.description || '';
+    if (p.default_node_id) {
+      const nodeSel = document.getElementById('bpNode');
+      if (nodeSel) nodeSel.value = p.default_node_id;
+    }
+    const submitBtn = document.querySelector('form[onsubmit="submitBillingPlan(event)"] button[type="submit"]');
+    if (submitBtn) submitBtn.textContent = 'Update Plan';
+    hkvmToast('Editing plan #' + id);
   } catch (err) { hkvmToast(err.message, 'error'); }
-}
-
-async function cancelBillingSubscription(id) {
-  await hkvmApi(`/api/v1/billing/subscriptions/${id}/cancel`, { method: 'POST' });
-  hkvmToast('Subscription cancelled');
-  loadBilling();
-}
-
-async function renewBillingSubscription(id) {
-  await hkvmApi(`/api/v1/billing/subscriptions/${id}/renew`, { method: 'POST' });
-  hkvmToast('Subscription renewed and renewal invoice issued');
-  loadBilling();
 }
 
 async function payBillingInvoice(id) {
