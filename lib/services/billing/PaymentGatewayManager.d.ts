@@ -85,6 +85,12 @@ export declare class PaymentGatewayManager {
     private getWebhookSecret;
     private loadKeyCache;
     /**
+     * Return true only when the URL is a public https URL (not localhost,
+     * not a private/loopback IP). FamGateway rejects localhost/private
+     * redirect_url values, so those must be omitted from the payload.
+     */
+    private isPublicHttpsUrl;
+    /**
      * Create a payment order via the specified gateway.
      * Returns the checkout URL / QR / redirect data for the customer.
      */

@@ -253,6 +253,25 @@ export class PaymentGatewayManager {
   }
 
   /**
+   * Return true only when the URL is a public https URL (not localhost,
+   * not a private/loopback IP). FamGateway rejects localhost/private
+   * redirect_url values, so those must be omitted from the payload.
+   */
+  private isPublicHttpsUrl(url?: string): boolean {
+    if (!url) return false;
+    try {
+      const u = new URL(url);
+      if (u.protocol !== 'https:') return false;
+      const host = u.hostname.toLowerCase();
+      if (host === 'localhost' || host.endsWith('.localhost')) return false;
+      if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1|0\.0\.0\.0)/i.test(host)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Create a payment order via the specified gateway.
    * Returns the checkout URL / QR / redirect data for the customer.
    */
@@ -302,6 +321,13 @@ export class PaymentGatewayManager {
           amount: payAmount,
           customer_name: options.userName || 'Customer',
         };
+        // Include redirect_url ONLY when it is a public https URL so FamGateway
+        // can send the buyer back to the panel after payment. localhost/private
+        // URLs are rejected by the gateway, so omit them (the buyer still gets
+        // checkout_url / qr_url from the gateway response).
+        if (this.isPublicHttpsUrl(options.redirectUrl)) {
+          famPayload.redirect_url = options.redirectUrl;
+        }
         const res = await fetch(`${FAMGATEWAY_BASE}/api/create-order`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
