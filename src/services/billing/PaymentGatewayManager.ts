@@ -289,10 +289,9 @@ export class PaymentGatewayManager {
         // Round up to ₹1 minimum so the order always succeeds.
         const minAmount = 1;
         const payAmount = amount < minAmount ? minAmount : amount;
-        // Use the exact same minimal payload shape as testGateway() — extra
-        // fields (email, phone, redirect_url) can cause the gateway to reject
-        // the order. redirect_url is optional per the API docs and is only
-        // sent when it's a valid public HTTPS URL.
+        // redirect_url is only sent for valid public HTTPS URLs — localhost/
+        // private-IP redirect URLs are rejected by the gateway. FamGateway
+        // returns checkout_url and upi_intent that the customer can use directly.
         const famPayload: any = {
           amount: payAmount,
           customer_name: options.userName || 'Customer',
