@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Remove Subscriptions/Credit Ledger, Plan Edit, Currency Pricing (2026-11-17)
+
+- **Removed Subscriptions system**: Removed the Subscriptions section (form + table + JS) from the admin Billing page. Subscriptions were not needed and cluttered the UI.
+- **Removed Credit Ledger**: Removed the Credit Ledger section (form + table + JS) from the admin Billing page. The wallet/balance system it depended on was not implemented on the panel.
+- **Plan Edit**: Added an **Edit** button to the plans table. Clicking it loads the plan into the form for editing (name, price, cycle, specs, node, etc.) and changes the submit button to "Update Plan". Plan update uses `PUT /api/v1/billing/plans/:id`.
+- **Currency pricing (₹)**: Changed plan form price input from "Price (cents)" to "Price (₹)" with decimal step. The input accepts rupees (e.g., `50.00`) and converts to cents (`5000`) on submit. Plan table, invoice table, and store page all display prices in ₹.
+- **Test T53**: Verifies plan create/edit/update, currency pricing, store browsing, billing page renders without subscriptions/credits, and purchase works. **53/53 tests pass.**
+
 ## Unreleased — Store Purchase Gateway Fallback Fix (2026-11-17)
 
 - **Store "Buy Plan" fix when gateway is enabled but unreachable**: Previously, when a payment gateway was enabled but the gateway API was unreachable (network error, timeout, DNS failure), the purchase returned a 502 error and the customer could not complete the purchase. Now the `PaymentGatewayManager.createOrder()` method adds a 10-second timeout to all gateway API calls (FamGateway, Stripe, PayPal) and **automatically falls back to a manual/offline order** when the gateway is unreachable. The customer always completes the purchase; the admin verifies and marks the order as paid afterwards.

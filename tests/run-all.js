@@ -5663,6 +5663,80 @@ exec "$@"
       }
     });
 
+    await runStep('T53: Plan edit, currency pricing, no subscriptions/credits in UI', async () => {
+      const ctx = app.getHkvmV3Context();
+      const bcrypt = require('bcryptjs');
+      try {
+        // 1. Create a plan
+        const planRes = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T53 Edit Plan',
+          priceCents: 9999,
+          billingCycle: 'monthly',
+          virtualizationType: 'lxc',
+          cpuCores: 1,
+          ramMb: 1024,
+          storageGb: 20,
+          bandwidthGb: 100,
+        });
+        assert.strictEqual(planRes.status, 201, `Plan create failed: ${planRes.text}`);
+        const plan = planRes.json.plan;
+        assert.strictEqual(plan.price_cents, 9999, 'price stored in cents');
+
+        // 2. Edit the plan (PUT)
+        const editRes = await adminClient.request('PUT', '/api/v1/billing/plans/' + plan.id, {
+          name: 'T53 Edited Plan',
+          priceCents: 19999,
+          billingCycle: 'yearly',
+          cpuCores: 4,
+          ramMb: 4096,
+        });
+        assert.strictEqual(editRes.status, 200, `Plan edit failed: ${editRes.text}`);
+        assert.strictEqual(editRes.json.plan.name, 'T53 Edited Plan', 'name updated');
+        assert.strictEqual(editRes.json.plan.price_cents, 19999, 'price updated');
+        assert.strictEqual(editRes.json.plan.billing_cycle, 'yearly', 'cycle updated');
+        assert.strictEqual(editRes.json.plan.cpu_cores, 4, 'cpu updated');
+
+        // 3. Customer can browse the edited plan
+        const bBobHash = bcrypt.hashSync('BobPass!123', 10);
+        await ctx.db.run(`INSERT OR IGNORE INTO users (username, password, email, role, is_active) VALUES ('bob_user', ?, 'bob@example.org', 'user', 1)`, [bBobHash]);
+        const bobClient = new SessionClient(baseUrl);
+        await bobClient.request('POST', '/api/login', { username: 'bob_user', password: 'BobPass!123' });
+        await bobClient.request('GET', '/dashboard');
+
+        const storePlansRes = await bobClient.request('GET', '/api/v1/store/plans');
+        assert.strictEqual(storePlansRes.status, 200, `Store plans failed: ${storePlansRes.text}`);
+        const editedPlan = storePlansRes.json.plans.find(p => p.id === plan.id);
+        assert.ok(editedPlan, 'edited plan visible to customer');
+        assert.strictEqual(editedPlan.name, 'T53 Edited Plan', 'edited name visible');
+        assert.strictEqual(editedPlan.price_cents, 19999, 'edited price visible');
+
+        // 4. Store page renders without subscriptions/credits sections
+        const storePage = await bobClient.request('GET', '/store');
+        assert.strictEqual(storePage.status, 200, `Store page failed: ${storePage.status}`);
+
+        // 5. Admin billing page renders (subscriptions/credits removed from HTML)
+        const billingPage = await adminClient.request('GET', '/admin/billing');
+        assert.strictEqual(billingPage.status, 200, `Billing page failed: ${billingPage.status}`);
+        assert.ok(!billingPage.text.includes('Credit Ledger'), 'Credit Ledger section removed from billing page');
+        assert.ok(!billingPage.text.includes('submitBillingSubscription'), 'Subscription form removed from billing page');
+        assert.ok(billingPage.text.includes('Price (₹)'), 'Plan form uses ₹ currency label');
+
+        // 6. Purchase works (manual fallback)
+        const gwRes = await bobClient.request('GET', '/api/v1/store/gateways');
+        assert.strictEqual(gwRes.status, 200, `Store gateways failed: ${gwRes.text}`);
+        const purchaseRes = await bobClient.request('POST', '/api/v1/store/purchase', {
+          planId: plan.id, gatewayId: 0,
+        });
+        assert.strictEqual(purchaseRes.status, 200, `Purchase failed: ${purchaseRes.text}`);
+        assert.strictEqual(purchaseRes.json.order.success, true, 'Purchase succeeded');
+
+        // cleanup
+        await adminClient.request('DELETE', '/api/v1/billing/plans/' + plan.id);
+      } catch (err) {
+        throw err;
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');
