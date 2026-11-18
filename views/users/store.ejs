@@ -154,6 +154,8 @@
             } else {
                 gwBar.innerHTML = '<span style="color: var(--text-muted); font-size: 13px;">No payment gateways enabled. Please contact support.</span>';
             }
+            // Always enable purchase when manual gateway is available
+            const hasPurchaseOption = gateways.length > 0;
 
             // Render plans
             const grid = document.getElementById('plansGrid');
@@ -200,8 +202,8 @@
                             ${p.sla_percent ? `<li>${p.sla_percent}% SLA uptime</li>` : ''}
                         </ul>
                         <div class="plan-actions">
-                            <button class="btn-purchase" onclick="openPurchaseModal(${p.id})" ${gateways.length === 0 ? 'disabled' : ''}>
-                                ${gateways.length === 0 ? 'No Payment Available' : 'Buy Plan'}
+                            <button class="btn-purchase" onclick="openPurchaseModal(${p.id})" ${hasPurchaseOption ? '' : 'disabled'}>
+                                ${hasPurchaseOption ? 'Buy Plan' : 'No Payment Available'}
                             </button>
                         </div>
                     </div>
@@ -256,7 +258,7 @@
             try {
                 const data = await window.hkvmApi('/api/v1/store/purchase', {
                     method: 'POST',
-                    body: { planId: selectedPlan.id, gatewayId: selectedGatewayId }
+                    body: { planId: selectedPlan.id, gatewayId: selectedGatewayId || 0 }
                 });
 
                 const order = data.order;
@@ -274,10 +276,13 @@
         function showStatusModal(order) {
             const content = document.getElementById('statusContent');
             const status = order.status || 'pending';
-            const icon = status === 'paid' ? '✅' : '💳';
+            const isManual = order.is_manual === true;
+            const icon = status === 'paid' ? '✅' : (isManual ? '📋' : '💳');
             const msg = status === 'paid'
                 ? 'Payment confirmed! Your plan is now active.'
-                : 'Your payment is being processed. Please complete the payment on the gateway page.';
+                : (isManual
+                    ? 'Manual order created! An admin will verify your payment shortly.'
+                    : 'Your payment is being processed. Please complete the payment on the gateway page.');
 
             let extraHtml = '';
             if (order.checkout_url) {

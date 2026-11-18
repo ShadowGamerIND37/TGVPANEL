@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Store Purchase Fix & LXC Studio UI Upgrade (2026-11-17)
+
+- **Store "Buy Plan" fix**: Purchase flow now has a **manual/offline order fallback**. Previously, when no payment gateway API key was configured, `getEnabledGateways()` returned empty and the Buy button was disabled. Now a "Manual / Offline Payment" gateway option is always available, so customers can place orders that admins can confirm after payment verification.
+- **Manual order backend**: Added `PaymentGatewayManager.createManualOrder()` which creates a `pending` order in `payment_orders` with `gateway='manual'` and `payment_reference` set. The `/store/purchase` route accepts `gatewayId: 0` for manual orders.
+- **Store UI updates**: Purchase modal shows a clear manual-payment notice; status modal shows a 📋 icon and appropriate messaging for manual orders.
+- **LXC Studio UI upgrade**: Added comprehensive modern CSS for the LXC container deployment studio (`lxc-studio-*`, `lxc-step-*`, `lxc-node-*`, `lxc-preset-*`, `lxc-os-*`, `lxc-cat-*`, `lxc-chip-*`, `lxc-seg-*`, `lxc-toggle-*`, `lxc-bp-*`, `lxc-deploy-btn` classes). The studio previously had zero CSS definitions, making the UI render unstyled. Now features a modern dark-themed step-card layout with gradient badges, hover effects, preset sizing cards, node selection cards, and a sticky deployment blueprint summary.
+- **Test T52**: Verifies manual purchase order creation, DB persistence, and gateway fallback. **52/52 tests pass.**
+
 ## Unreleased — Store UI Fix & Plan Node Selection (2026-11-17)
 
 - **Store UI fix**: Rewrote `views/users/store.ejs` to properly include the panel's shared assets (`/css/admin.css`, `/js/tgvpanel-v3.js`) and CSRF token meta tag. Previously the store used a non-existent `localStorage` token for API auth, causing all store API calls (plans, gateways, purchase) to fail. Now uses `window.hkvmApi()` with proper session cookie + CSRF authentication.
