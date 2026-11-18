@@ -267,12 +267,24 @@ export class PaymentGatewayManager {
 
     const amount = amountCents / 100;
     const orderId = `po_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const GATEWAY_TIMEOUT_MS = 10000; // 10 second timeout for gateway API calls
+
+    // Helper: fetch with timeout using AbortController
+    const fetchWithTimeout = async (url: string, init: any) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS);
+      try {
+        return await fetch(url, { ...init, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    };
 
     try {
       if (gw.provider === 'famgateway') {
         const apiKey = await this.getApiKey(gatewayId);
         if (!apiKey) return { success: false, amount_cents: amountCents, currency: gw.currency, error: 'FamGateway API key not configured.' };
-        const res = await fetch(`${FAMGATEWAY_BASE}/api/create-order`, {
+        const res = await fetchWithTimeout(`${FAMGATEWAY_BASE}/api/create-order`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
           body: JSON.stringify({
@@ -303,7 +315,7 @@ export class PaymentGatewayManager {
       if (gw.provider === 'stripe') {
         const apiKey = await this.getApiKey(gatewayId);
         if (!apiKey) return { success: false, amount_cents: amountCents, currency: gw.currency, error: 'Stripe API key not configured.' };
-        const res = await fetch(`${STRIPE_BASE}/v1/checkout/sessions`, {
+        const res = await fetchWithTimeout(`${STRIPE_BASE}/v1/checkout/sessions`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
@@ -335,7 +347,7 @@ export class PaymentGatewayManager {
         const apiSecret = await this.getApiSecret(gatewayId);
         if (!apiKey || !apiSecret) return { success: false, amount_cents: amountCents, currency: gw.currency, error: 'PayPal credentials not configured.' };
         const auth = Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
-        const tokenRes = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
+        const tokenRes = await fetchWithTimeout(`${PAYPAL_BASE}/v1/oauth2/token`, {
           method: 'POST',
           headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
           body: 'grant_type=client_credentials',
@@ -343,7 +355,7 @@ export class PaymentGatewayManager {
         const tokenData = await tokenRes.json() as any;
         const accessToken = tokenData.access_token;
         if (!accessToken) return { success: false, amount_cents: amountCents, currency: gw.currency, error: 'PayPal auth failed.' };
-        const res = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
+        const res = await fetchWithTimeout(`${PAYPAL_BASE}/v2/checkout/orders`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -368,6 +380,28 @@ export class PaymentGatewayManager {
 
       return { success: false, amount_cents: amountCents, currency: gw.currency, error: `Unknown gateway: ${gw.provider}` };
     } catch (err: any) {
+      // Gateway API unreachable (network error, timeout, etc.) — fall back to a
+      // manual/offline order so the customer can still complete the purchase.
+      // The admin can verify the payment and mark the order as paid afterwards.
+      const isNetworkError =
+        err.name === 'AbortError' ||
+        err.name === 'TypeError' ||
+        err.message === 'fetch failed' ||
+        err.cause?.code === 'ECONNREFUSED' ||
+        err.cause?.code === 'ENOTFOUND' ||
+        err.cause?.code === 'ETIMEDOUT';
+
+      if (isNetworkError) {
+        const fallback = await this.createManualOrder(amountCents, {
+          userId: options.userId,
+          planId: options.planId,
+          userName: options.userName,
+          userEmail: options.userEmail,
+        });
+        fallback.message = `Payment gateway was unreachable (${gw.provider}). Your order has been created as a manual payment — an admin will confirm it after verification.`;
+        return fallback;
+      }
+
       return { success: false, amount_cents: amountCents, currency: gw.currency, error: `Gateway error: ${err.message}` };
     }
   }

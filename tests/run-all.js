@@ -5365,13 +5365,16 @@ exec "$@"
         assert.strictEqual(plan.ram_mb, 4096, 'ram stored');
         assert.strictEqual(plan.storage_gb, 40, 'storage stored');
 
-        // 6. Customer attempts purchase — should fail without API key (gateway enabled but not configured)
+        // 6. Customer attempts purchase — gateway API is unreachable so it
+        //    falls back to a manual/offline order (purchase should succeed)
         const purchaseRes = await bobClient.request('POST', '/api/v1/store/purchase', {
           planId: plan.id,
           gatewayId: famGw.id,
         });
-        // Should return 502 because FamGateway has no API key configured
-        assert.ok(purchaseRes.status === 502 || purchaseRes.status === 400, `Purchase should fail without key: ${purchaseRes.status} ${purchaseRes.text}`);
+        assert.strictEqual(purchaseRes.status, 200, `Purchase should succeed with manual fallback: ${purchaseRes.status} ${purchaseRes.text}`);
+        const purchaseOrder = purchaseRes.json.order;
+        assert.strictEqual(purchaseOrder.success, true, 'Order success true');
+        assert.strictEqual(purchaseOrder.is_manual, true, 'Order marked as manual fallback');
 
         // 7. Gateway test will fail (fake key) but should not crash
         const testRes = await adminClient.request('POST', '/api/v1/gateways/' + famGw.id + '/test');
