@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Store Buy Plan: response parsing + auto-redirect to payment (2026-11-18)
+
+- **FamGateway response shape fix (root cause of persistent "buy plan not working")**: `testGateway()` checked only `data.status === 'success'`, while `createOrder()` required `data.status === 'success' && data.data`. FamGateway returns order fields (`order_id`, `qr_url`, `checkout_url`, `upi_intent`) at the **top level** of the response, not nested under `data`. So the gateway test passed but `createOrder` read `data.data` as `undefined`, returned `success:false`, and the purchase route silently fell back to a **manual order** — the customer saw a manual order with no real payment. Both `testGateway()` and `createOrder()` now normalize the response and accept either top-level or `data`-nested order fields.
+- **Auto-redirect buyer to the payment page**: Previously the purchase flow created the order and received `checkout_url`/`qr_url` but only displayed them as a link and QR — the buyer was never sent to the payment page, so no payment happened. Now, after a successful gateway order with a `checkout_url`, the browser **auto-redirects** to the FamGateway checkout page so the buyer pays immediately. Manual orders and orders without a `checkout_url` still show the status modal (QR / instructions).
+- **Return-after-payment round trip**: `createOrder` (famgateway) re-adds `redirect_url` to the payload **only when it is a public https URL** (new `isPublicHttpsUrl` helper rejects localhost/private IPs that the gateway rejects). This lets FamGateway send the buyer back to `/store?status=success` after payment. The store page now shows a success banner when the buyer returns via `?status=success` (the order is marked paid server-side via the gateway webhook).
+- **Test suite**: 53/53 acceptance suites pass.
+
 ## Unreleased — Remove Subscriptions/Credit Ledger, Plan Edit, Currency Pricing (2026-11-17)
 
 - **Removed Subscriptions system**: Removed the Subscriptions section (form + table + JS) from the admin Billing page. Subscriptions were not needed and cluttered the UI.

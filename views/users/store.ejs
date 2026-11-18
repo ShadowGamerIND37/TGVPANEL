@@ -58,6 +58,7 @@
     .order-status { text-align: center; padding: 20px; }
     .order-status .status-icon { font-size: 48px; margin-bottom: 12px; }
     .error-banner { background: #ffebee; color: #c62828; padding: 12px 16px; border-radius: var(--radius-md); margin-bottom: 16px; font-size: 14px; display: none; }
+    .success-banner { background: #e8f5e9; color: #2e7d32; padding: 12px 16px; border-radius: var(--radius-md); margin-bottom: 16px; font-size: 14px; display: none; }
     .error-banner.show { display: block; }
     .loading-spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -78,6 +79,7 @@
                 </div>
 
                 <div id="errorBanner" class="error-banner"></div>
+                <div id="successBanner" class="success-banner"></div>
 
                 <div id="loadingState" style="text-align:center; padding: 40px; color: var(--text-muted);">
                     <span class="loading-spinner" style="border-color: rgba(102,126,234,0.3); border-top-color: #667eea;"></span>
@@ -135,6 +137,12 @@
                 gateways = (gatewaysRes.gateways || []);
 
                 renderStore();
+                // If the buyer was sent back by the gateway after payment
+                // (?status=success), show a success banner. The order itself is
+                // marked paid server-side via the gateway webhook.
+                if (new URLSearchParams(window.location.search).get('status') === 'success') {
+                    showSuccess('Payment successful! Your order has been confirmed.');
+                }
             } catch (err) {
                 showError(err.message || 'Failed to load store');
                 document.getElementById('loadingState').style.display = 'none';
@@ -263,6 +271,14 @@
 
                 const order = data.order;
                 closePurchaseModal();
+                // If the gateway returned a hosted checkout page, auto-redirect the
+                // buyer to it so they can pay immediately (instead of only showing a
+                // link). Manual orders and orders without a checkout_url fall back to
+                // the status modal, which shows the QR code / manual instructions.
+                if (order.checkout_url && !order.is_manual) {
+                    window.location.href = order.checkout_url;
+                    return;
+                }
                 showStatusModal(order);
             } catch (err) {
                 const errEl = document.getElementById('modalError');
@@ -324,6 +340,12 @@
 
         function showError(msg) {
             const el = document.getElementById('errorBanner');
+            el.textContent = msg;
+            el.classList.add('show');
+        }
+
+        function showSuccess(msg) {
+            const el = document.getElementById('successBanner');
             el.textContent = msg;
             el.classList.add('show');
         }

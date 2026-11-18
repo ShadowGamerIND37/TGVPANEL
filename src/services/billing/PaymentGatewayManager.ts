@@ -177,7 +177,12 @@ export class PaymentGatewayManager {
           body: JSON.stringify({ amount: 1, customer_name: 'Test' }),
         });
         const data = await res.json() as any;
-        if (data.status === 'success') {
+        // Normalize the response shape: FamGateway returns order fields at the
+        // top level ({ status:'success', order_id, ... }); some wrappers nest them
+        // under `data`. Confirm a real order object is present so the test agrees
+        // with the purchase flow (a response without an order_id is a failure).
+        const norm: any = (data && data.data && data.data.order_id) ? data.data : data;
+        if (data.status === 'success' && norm && norm.order_id) {
           await this.db.run(`UPDATE payment_gateways SET last_test_at = ?, last_test_status = 'success' WHERE id = ?`, [Date.now(), id]);
           return { success: true, message: 'FamGateway connection verified — order created successfully.' };
         }
@@ -248,6 +253,25 @@ export class PaymentGatewayManager {
   }
 
   /**
+   * Return true only when the URL is a public https URL (not localhost,
+   * not a private/loopback IP). FamGateway rejects localhost/private
+   * redirect_url values, so those must be omitted from the payload.
+   */
+  private isPublicHttpsUrl(url?: string): boolean {
+    if (!url) return false;
+    try {
+      const u = new URL(url);
+      if (u.protocol !== 'https:') return false;
+      const host = u.hostname.toLowerCase();
+      if (host === 'localhost' || host.endsWith('.localhost')) return false;
+      if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|::1|0\.0\.0\.0)/i.test(host)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Create a payment order via the specified gateway.
    * Returns the checkout URL / QR / redirect data for the customer.
    */
@@ -297,14 +321,26 @@ export class PaymentGatewayManager {
           amount: payAmount,
           customer_name: options.userName || 'Customer',
         };
+        // Include redirect_url ONLY when it is a public https URL so FamGateway
+        // can send the buyer back to the panel after payment. localhost/private
+        // URLs are rejected by the gateway, so omit them (the buyer still gets
+        // checkout_url / qr_url from the gateway response).
+        if (this.isPublicHttpsUrl(options.redirectUrl)) {
+          famPayload.redirect_url = options.redirectUrl;
+        }
         const res = await fetch(`${FAMGATEWAY_BASE}/api/create-order`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
           body: JSON.stringify(famPayload),
         });
         const data = await res.json() as any;
-        if (data.status === 'success' && data.data) {
-          const d = data.data;
+        // FamGateway returns order fields at the TOP LEVEL of the response:
+        //   { status:'success', order_id, qr_url, checkout_url, upi_intent, ... }
+        // Some gateway wrappers nest them under `data`. Accept BOTH shapes so a
+        // successful response is never misread as a failure (which would silently
+        // fall back to a manual order — the customer sees "buy plan not working").
+        const d: any = (data && data.data && data.data.order_id) ? data.data : data;
+        if (data.status === 'success' && d && d.order_id) {
           await this.db.run(
             `INSERT INTO payment_orders (invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, redirect_url, checkout_url, qr_url, upi_intent, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, datetime('now'))`,
