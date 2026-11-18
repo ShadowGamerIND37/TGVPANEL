@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — Store Buy Plan ₹5 Order Fix (2026-11-18, PRs #56 + #57)
+
+- **Store "Buy Plan" fails for ₹5 orders — four root causes fixed**: Customers attempting to purchase a ₹5 plan still could not complete the purchase even after the gateway-unreachable fallback. Four distinct causes were identified and fixed in `PaymentGatewayManager.createOrder()`:
+  1. **localhost `redirect_url` rejected** (PR #56): The purchase flow set `redirect_url` to `http://localhost:8080/store?status=success`, which FamGateway rejects (localhost/private redirect URLs are not allowed). Now `redirect_url` is only included when a public HTTPS URL is available; otherwise it is omitted (FamGateway returns `checkout_url`/`upi_intent` directly).
+  2. **Amount below UPI ₹1 minimum** (PR #56): A ₹5 plan is fine, but amounts below ₹1 (e.g. `0.01`) are below the UPI minimum and are rejected. `payAmount` now rounds any amount `< 1` up to `1`.
+  3. **`fetchWithTimeout` vs plain `fetch`** (PR #56): The FamGateway call used a custom timeout wrapper that caused failures; switched to plain `fetch()` for the FamGateway create-order call (timeout wrapper retained for other gateways).
+  4. **Extra payload fields rejected** (PR #57): The purchase sent `customer_email`, `customer_phone`, and `redirect_url` in the `create-order` body, while the working gateway test sends a minimal `{ amount, customer_name }`. FamGateway rejects the extra fields, causing the order to fail even though the gateway test succeeds. The payload is now stripped to **exactly** `{ amount: payAmount, customer_name }`, matching `testGateway()`.
+- **Enhanced FamGateway error diagnostics** (PR #57): The `createOrder` error message now includes the full JSON response body from FamGateway, so the exact rejection reason (invalid amount, missing field, auth failure, sandbox limit) is visible when a purchase fails — making future debugging straightforward.
+- **Test suite**: 53/53 acceptance suites pass.
+
 ## Unreleased — Remove Subscriptions/Credit Ledger, Plan Edit, Currency Pricing (2026-11-17)
 
 - **Removed Subscriptions system**: Removed the Subscriptions section (form + table + JS) from the admin Billing page. Subscriptions were not needed and cluttered the UI.
