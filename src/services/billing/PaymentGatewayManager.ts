@@ -289,18 +289,14 @@ export class PaymentGatewayManager {
         // Round up to ₹1 minimum so the order always succeeds.
         const minAmount = 1;
         const payAmount = amount < minAmount ? minAmount : amount;
-        // redirect_url is only sent for valid public HTTPS URLs — localhost/
-        // private-IP redirect URLs are rejected by the gateway. FamGateway
-        // returns checkout_url and upi_intent that the customer can use directly.
+        // Use the EXACT same minimal payload as testGateway() — extra fields
+        // (email, phone, redirect_url) cause the gateway to reject the order.
+        // FamGateway returns checkout_url and upi_intent that the customer
+        // can use directly, so redirect_url is not needed.
         const famPayload: any = {
           amount: payAmount,
           customer_name: options.userName || 'Customer',
         };
-        if (options.userEmail) famPayload.customer_email = options.userEmail;
-        if (options.userPhone) famPayload.customer_phone = options.userPhone;
-        if (options.redirectUrl && /^https:\/\/(?!localhost|127\.|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(options.redirectUrl)) {
-          famPayload.redirect_url = options.redirectUrl;
-        }
         const res = await fetch(`${FAMGATEWAY_BASE}/api/create-order`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
@@ -320,8 +316,13 @@ export class PaymentGatewayManager {
             redirect_url: d.upi_intent, amount_cents: amountCents, currency: gw.currency,
           };
         }
-        // Return the gateway's actual error message for better debugging
-        return { success: false, amount_cents: amountCents, currency: gw.currency, error: data.error || `FamGateway returned status: ${data.status || 'unknown'}.` };
+        // Return the gateway's actual error message for better debugging.
+        // Include the full response body so the rejection reason is visible
+        // (e.g. invalid amount, missing field, auth failure, sandbox limits).
+        const fgErr = data.error
+          ? `FamGateway error: ${data.error}`
+          : `FamGateway returned status: ${data.status || 'unknown'}.`;
+        return { success: false, amount_cents: amountCents, currency: gw.currency, error: `${fgErr} Response: ${JSON.stringify(data)}` };
       }
 
       if (gw.provider === 'stripe') {
