@@ -32,6 +32,9 @@ export interface CreateOrderResult {
   amount_cents: number;
   currency: string;
   error?: string;
+  status?: string;
+  is_manual?: boolean;
+  message?: string;
 }
 
 export interface VerifyResult {
@@ -367,6 +370,39 @@ export class PaymentGatewayManager {
     } catch (err: any) {
       return { success: false, amount_cents: amountCents, currency: gw.currency, error: `Gateway error: ${err.message}` };
     }
+  }
+
+  /**
+   * Create a manual/offline order when no payment gateway API key is
+   * configured. The order is stored as 'pending' in the database and
+   * can be marked as paid by an admin after manual confirmation.
+   */
+  public async createManualOrder(amountCents: number, options: {
+    userId: number;
+    planId?: number;
+    userName?: string;
+    userEmail?: string;
+  }): Promise<CreateOrderResult> {
+    const orderId = `po_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const gwProvider = 'manual';
+    const currency = 'INR';
+
+    await this.db.run(
+      `INSERT INTO payment_orders (user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, payment_reference, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, datetime('now'))`,
+      [options.userId, options.planId, gwProvider, orderId, amountCents, currency, orderId]
+    );
+
+    return {
+      success: true,
+      order_id: orderId,
+      gateway_order_id: orderId,
+      amount_cents: amountCents,
+      currency,
+      status: 'pending',
+      is_manual: true,
+      message: 'Manual order created. An admin will confirm your payment after verification.',
+    };
   }
 
   /**

@@ -5603,6 +5603,63 @@ exec "$@"
       }
     });
 
+    await runStep('T52: Store manual/offline purchase order fallback', async () => {
+      const ctx = app.getHkvmV3Context();
+      const bcrypt = require('bcryptjs');
+      try {
+        // Create a plan
+        const planRes = await adminClient.request('POST', '/api/v1/billing/plans', {
+          name: 'T52 Manual Plan',
+          priceCents: 9900,
+          billingCycle: 'monthly',
+          virtualizationType: 'lxc',
+          cpuCores: 1,
+          ramMb: 1024,
+          storageGb: 15,
+        });
+        assert.strictEqual(planRes.status, 201, `Plan create failed: ${planRes.text}`);
+        const plan = planRes.json.plan;
+
+        // Customer login
+        const bBobHash = bcrypt.hashSync('BobPass!123', 10);
+        await ctx.db.run(`INSERT OR IGNORE INTO users (username, password, email, role, is_active) VALUES ('bob_user', ?, 'bob@example.org', 'user', 1)`, [bBobHash]);
+        const bobClient = new SessionClient(baseUrl);
+        await bobClient.request('POST', '/api/login', { username: 'bob_user', password: 'BobPass!123' });
+        await bobClient.request('GET', '/dashboard');
+
+        // Gate 1: store gateways should return at least the manual option
+        const gwRes = await bobClient.request('GET', '/api/v1/store/gateways');
+        assert.strictEqual(gwRes.status, 200, `Store gateways failed: ${gwRes.text}`);
+        const gws = gwRes.json.gateways;
+        assert.ok(gws.length > 0, 'At least one gateway (manual) available');
+        assert.ok(gws.some(g => g.provider === 'manual' || g.id > 0), 'Manual gateway option present');
+
+        // Gate 2: purchase with gatewayId=0 (manual) should succeed
+        const purchaseRes = await bobClient.request('POST', '/api/v1/store/purchase', {
+          planId: plan.id,
+          gatewayId: 0,
+        });
+        assert.strictEqual(purchaseRes.status, 200, `Manual purchase failed: ${purchaseRes.text}`);
+        const order = purchaseRes.json.order;
+        assert.strictEqual(order.success, true, 'Order success true');
+        assert.strictEqual(order.is_manual, true, 'Order marked as manual');
+        assert.strictEqual(order.status, 'pending', 'Order status pending');
+        assert.ok(order.order_id, 'Order has order_id');
+
+        // Gate 3: order is persisted in DB
+        const dbOrder = await ctx.db.get(`SELECT * FROM payment_orders WHERE gateway_order_id = ?`, [order.order_id]);
+        assert.ok(dbOrder, 'Order persisted in DB');
+        assert.strictEqual(dbOrder.gateway, 'manual', 'Gateway is manual');
+        assert.strictEqual(dbOrder.status, 'pending', 'DB status pending');
+        assert.strictEqual(dbOrder.plan_id, plan.id, 'DB plan_id matches');
+
+        // Cleanup
+        await adminClient.request('DELETE', '/api/v1/billing/plans/' + plan.id);
+      } catch (err) {
+        throw err;
+      }
+    });
+
     await runStep('T15: LXC KVM Nesting (/dev/kvm passthrough), /proc RSS fallback & redesigned LXC Detail UI', async () => {
       const ctx = app.getHkvmV3Context();
       const { privilegedFs } = require('../lib/node-agent/command-runner');

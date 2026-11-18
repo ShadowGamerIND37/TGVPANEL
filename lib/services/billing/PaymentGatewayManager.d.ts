@@ -28,6 +28,9 @@ export interface CreateOrderResult {
     amount_cents: number;
     currency: string;
     error?: string;
+    status?: string;
+    is_manual?: boolean;
+    message?: string;
 }
 export interface VerifyResult {
     success: boolean;
@@ -94,6 +97,17 @@ export declare class PaymentGatewayManager {
         subscriptionId?: number;
         userId: number;
         planId?: number;
+    }): Promise<CreateOrderResult>;
+    /**
+     * Create a manual/offline order when no payment gateway API key is
+     * configured. The order is stored as 'pending' in the database and
+     * can be marked as paid by an admin after manual confirmation.
+     */
+    createManualOrder(amountCents: number, options: {
+        userId: number;
+        planId?: number;
+        userName?: string;
+        userEmail?: string;
     }): Promise<CreateOrderResult>;
     /**
      * Verify a payment order's status via the gateway (server-to-server).

@@ -2587,7 +2587,13 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     requirePrincipal,
     async (_req: Request, res: Response) => {
       const gateways = await ctx.paymentGatewayManager.getEnabledGateways();
-      res.json({ gateways: gateways.map((g) => ({ id: g.id, name: g.name, provider: g.provider, currency: g.currency })) });
+      const result = gateways.map((g) => ({ id: g.id, name: g.name, provider: g.provider, currency: g.currency }));
+      // Always provide a manual/offline option so customers can place orders
+      // even when no payment gateway API keys have been configured yet.
+      if (result.length === 0) {
+        result.push({ id: 0, name: 'Manual / Offline Payment', provider: 'manual', currency: 'INR' });
+      }
+      res.json({ gateways: result });
     }
   );
 
@@ -2600,12 +2606,25 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         const userId = req.principal!.userId;
         const planId = Number((req.body || {}).planId);
         const gatewayId = Number((req.body || {}).gatewayId);
+        // gatewayId may be 0 or NaN for manual orders — accept that
+        const isManual = !gatewayId || gatewayId <= 0;
         if (!planId) return res.status(400).json({ error: 'planId is required.' });
-        if (!gatewayId) return res.status(400).json({ error: 'gatewayId is required.' });
 
         const plan = await ctx.billingManager.getPlan(planId);
         if (!plan) return res.status(404).json({ error: 'Plan does not exist.' });
         if (!plan.is_active) return res.status(400).json({ error: 'Plan is not available for purchase.' });
+
+        // Manual/offline order: works without any gateway API keys configured
+        if (isManual) {
+          const user = req.principal as any;
+          const result = await ctx.paymentGatewayManager.createManualOrder(plan.price_cents, {
+            userId,
+            planId,
+            userName: user.username || 'Customer',
+            userEmail: user.email || undefined,
+          });
+          return res.json({ order: result });
+        }
 
         // Verify gateway is enabled
         const gateway = await ctx.paymentGatewayManager.getGateway(gatewayId);
