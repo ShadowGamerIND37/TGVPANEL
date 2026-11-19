@@ -466,15 +466,17 @@ export class PaymentGatewayManager {
     planId?: number;
     userName?: string;
     userEmail?: string;
+    invoiceId?: number;
+    subscriptionId?: number;
   }): Promise<CreateOrderResult> {
     const orderId = `po_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const gwProvider = 'manual';
     const currency = 'INR';
 
     await this.db.run(
-      `INSERT INTO payment_orders (user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, payment_reference, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, datetime('now'))`,
-      [options.userId, options.planId, gwProvider, orderId, amountCents, currency, orderId]
+      `INSERT INTO payment_orders (invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, payment_reference, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, datetime('now'))`,
+      [options.invoiceId, options.subscriptionId, options.userId, options.planId, gwProvider, orderId, amountCents, currency, orderId]
     );
 
     return {

@@ -26,6 +26,9 @@ export interface SubscriptionInput {
   userId?: number;
   planId?: number;
   autoRenew?: boolean;
+  /** When false, the subscription is created as 'pending' and only becomes
+   * 'active' after payment is confirmed. Defaults to true (active now). */
+  activate?: boolean;
 }
 
 export interface PaymentConfirmationInput {
@@ -265,15 +268,37 @@ export class BillingManager {
     const nowIso = new Date().toISOString().replace('T', ' ').slice(0, 19);
     const periodEnd = await this.computePeriodEnd(plan.billing_cycle, nowIso);
 
+    const initialStatus = input.activate === false ? 'pending' : 'active';
     const result = await this.db.run(
       `INSERT INTO customer_subscriptions
         (user_id, plan_id, status, auto_renew, started_at, current_period_start, current_period_end)
-       VALUES (?, ?, 'active', ?, datetime('now'), ?, ?)`,
-      [userId, planId, input.autoRenew === false ? 0 : 1, nowIso, periodEnd]
+       VALUES (?, ?, ?, ?, datetime('now'), ?, ?)`,
+      [userId, planId, initialStatus, input.autoRenew === false ? 0 : 1, nowIso, periodEnd]
     );
     const subscriptionId = Number(result.lastID);
     await this.issueInvoiceForSubscription(subscriptionId);
     return this.getSubscription(subscriptionId);
+  }
+
+  /**
+   * Activate a 'pending' subscription after payment is confirmed. Sets the
+   * subscription to 'active', recording the payment confirmation. Used by the
+   * store purchase flow so a plan only becomes active once payment is verified
+   * (webhook or admin confirmation).
+   */
+  public async activateSubscription(id: number, paymentReference?: string): Promise<any> {
+    const existing = await this.getSubscription(id);
+    if (!existing) throw new Error('Subscription does not exist.');
+    if (existing.status === 'active') return existing; // already active — idempotent
+    if (existing.status !== 'pending') throw new Error(`Only pending subscriptions can be activated (current: ${existing.status}).`);
+    await this.db.run(
+      `UPDATE customer_subscriptions
+       SET status = 'active', started_at = datetime('now'), current_period_start = datetime('now'),
+           updated_at = datetime('now')
+       WHERE id = ?`,
+      [id]
+    );
+    return this.getSubscription(id);
   }
 
   public async cancelSubscription(id: number) {

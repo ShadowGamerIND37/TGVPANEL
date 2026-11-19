@@ -2622,6 +2622,23 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         if (!plan) return res.status(404).json({ error: 'Plan does not exist.' });
         if (!plan.is_active) return res.status(400).json({ error: 'Plan is not available for purchase.' });
 
+        // Create a PENDING subscription + issued invoice up front, so the payment
+        // order is linked to a billable record. The subscription stays 'pending'
+        // until payment is confirmed (webhook or admin), after which it becomes
+        // 'active' and the invoice is marked paid. Without this, a successful
+        // payment had no invoice/subscription to confirm — the plan was never
+        // activated ("buy plan not working").
+        const subscription = await ctx.billingManager.createSubscription({
+          userId,
+          planId,
+          activate: false,
+        });
+        const invoiceRow = await ctx.db.get<{ id: number }>(
+          `SELECT id FROM invoices WHERE subscription_id = ? ORDER BY id DESC LIMIT 1`,
+          [subscription.id]
+        );
+        const invoiceId = invoiceRow ? Number(invoiceRow.id) : undefined;
+
         // Manual/offline order: works without any gateway API keys configured
         if (isManual) {
           const user = req.principal as any;
@@ -2630,6 +2647,8 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
             planId,
             userName: user.username || 'Customer',
             userEmail: user.email || undefined,
+            invoiceId,
+            subscriptionId: subscription.id,
           });
           return res.json({ order: result });
         }
@@ -2643,6 +2662,8 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         const result = await ctx.paymentGatewayManager.createOrder(gatewayId, plan.price_cents, {
           userId,
           planId,
+          invoiceId,
+          subscriptionId: subscription.id,
           userName: user.username || 'Customer',
           userEmail: user.email || undefined,
           redirectUrl: `${req.protocol}://${req.get('host')}/store?status=success`,
@@ -2658,6 +2679,8 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
             planId,
             userName: user.username || 'Customer',
             userEmail: user.email || undefined,
+            invoiceId,
+            subscriptionId: subscription.id,
           });
           fallback.message = `Payment gateway error: ${result.error || 'unknown'}. Your order has been created as a manual payment — an admin will confirm it after verification.`;
           return res.json({ order: fallback });
@@ -2696,6 +2719,11 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
                 paymentReference: utr,
                 method: order.gateway,
               }, 0);
+            }
+            // Activate the pending subscription so the plan becomes active now
+            // that payment is verified.
+            if (order.subscription_id) {
+              try { await ctx.billingManager.activateSubscription(Number(order.subscription_id)); } catch (e) { console.log('[order-status] activateSubscription:', (e as any).message); }
             }
             const updated = await ctx.paymentGatewayManager.getOrder(orderId);
             return res.json({ order: updated ? updated[0] : null, verified: true });
@@ -2879,6 +2907,11 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
                         method: gw.provider,
                       }, 0);
                     }
+                    // Activate the pending subscription so the plan becomes active
+                    // now that payment is verified.
+                    if ((matched[0] as any).subscription_id) {
+                      try { await ctx.billingManager.activateSubscription(Number((matched[0] as any).subscription_id)); } catch (e) { console.log('[webhook] activateSubscription (famgateway):', (e as any).message); }
+                    }
                   }
                 }
               } else if (body.object && body.object.payment_status === 'succeeded') {
@@ -2906,6 +2939,9 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
                         method: gw.provider,
                       }, 0);
                     }
+                    if ((matched[0] as any).subscription_id) {
+                      try { await ctx.billingManager.activateSubscription(Number((matched[0] as any).subscription_id)); } catch (e) { console.log('[webhook] activateSubscription (stripe):', (e as any).message); }
+                    }
                   }
                 }
               } else if (body.resource_type === 'checkout-order' && body.status === 'COMPLETED') {
@@ -2932,6 +2968,9 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
                         paymentReference: verify.payment_reference || '',
                         method: gw.provider,
                       }, 0);
+                    }
+                    if ((matched[0] as any).subscription_id) {
+                      try { await ctx.billingManager.activateSubscription(Number((matched[0] as any).subscription_id)); } catch (e) { console.log('[webhook] activateSubscription (paypal):', (e as any).message); }
                     }
                   }
                 }

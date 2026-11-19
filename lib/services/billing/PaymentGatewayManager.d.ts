@@ -114,6 +114,8 @@ export declare class PaymentGatewayManager {
         planId?: number;
         userName?: string;
         userEmail?: string;
+        invoiceId?: number;
+        subscriptionId?: number;
     }): Promise<CreateOrderResult>;
     /**
      * Verify a payment order's status via the gateway (server-to-server).
