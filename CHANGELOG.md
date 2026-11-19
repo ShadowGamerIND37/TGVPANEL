@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — FamGateway webhook 401 root cause: session-auth blocking webhook (2026-11-19)
+
+- **Webhook 401 root cause fixed — endpoint was blocked by session authentication**: The FamGateway webhook test kept returning HTTP 401 with the response `{"error":"Authentication required"}`. That response comes from `requirePrincipal`, a **global middleware** applied to all `/api/v1` routes (`router.use(requirePrincipal)`). FamGateway delivers webhooks as server-to-server POST requests with **no login session**, so `requirePrincipal` rejected them with 401 **before** the request ever reached the webhook handler's HMAC signature check — meaning the signature verification (and all earlier fixes) never ran.
+- **Fix**: Replaced the blanket `router.use(requirePrincipal)` with a wrapper that **exempts `/webhooks/payment`** from session/principal authentication. Webhook receivers are already authenticated by HMAC signature verification (FamGateway signs with the API key), so exempting them from session auth is correct and required for gateway server-to-server delivery. All other `/api/v1` endpoints still require an authenticated principal.
+- **Test suite**: 53/53 acceptance suites pass.
+
 ## Unreleased — FamGateway webhook raw-body capture + GET 405 (2026-11-19)
 
 - **Persistent webhook 401 fixed — raw body captured for any Content-Type**: The global `express.json()`/`express.urlencoded()` parsers only set `req.rawBody` when the Content-Type matches JSON or form-encoded. FamGateway signs the exact raw bytes it sends; if it uses any other Content-Type the parsers skip, `rawBody` is unset, and the HMAC was verified against a wrong re-serialized fallback (`JSON.stringify(req.body)`), so every webhook failed signature verification with 401. Added a `captureWebhookRawBody` middleware on `/webhooks/payment` that reads the stream for **any** Content-Type, sets `req.rawBody` to the exact bytes, parses `req.body`, and marks `_body` so the parsers do not re-read it. The signature is now always verified against the exact bytes FamGateway signed.
