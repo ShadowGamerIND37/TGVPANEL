@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — FamGateway webhook raw-body capture + GET 405 (2026-11-19)
+
+- **Persistent webhook 401 fixed — raw body captured for any Content-Type**: The global `express.json()`/`express.urlencoded()` parsers only set `req.rawBody` when the Content-Type matches JSON or form-encoded. FamGateway signs the exact raw bytes it sends; if it uses any other Content-Type the parsers skip, `rawBody` is unset, and the HMAC was verified against a wrong re-serialized fallback (`JSON.stringify(req.body)`), so every webhook failed signature verification with 401. Added a `captureWebhookRawBody` middleware on `/webhooks/payment` that reads the stream for **any** Content-Type, sets `req.rawBody` to the exact bytes, parses `req.body`, and marks `_body` so the parsers do not re-read it. The signature is now always verified against the exact bytes FamGateway signed.
+- **GET on webhook endpoint returns proper JSON (405)**: Visiting `/api/v1/webhooks/payment` in a browser previously returned the default 404 page. Added a GET handler returning a proper JSON `405 Method Not Allowed` response explaining the endpoint is POST-only.
+- **Test suite**: 53/53 acceptance suites pass.
+
 ## Unreleased — FamGateway integration hardening per full official docs (2026-11-19)
 
 - **Timing-safe webhook signature comparison**: `verifyWebhook` now uses `crypto.timingSafeEqual` (as the official FamGateway Node.js example does) for both FamGateway and PayPal, preventing timing attacks. Previously a plain string `===` comparison was used.
