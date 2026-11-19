@@ -313,33 +313,32 @@ export class PaymentGatewayManager {
         // Round up to ₹1 minimum so the order always succeeds.
         const minAmount = 1;
         const payAmount = amount < minAmount ? minAmount : amount;
-        // Use the EXACT same minimal payload as testGateway() — extra fields
-        // (email, phone, redirect_url) cause the gateway to reject the order.
-        // FamGateway returns checkout_url and upi_intent that the customer
-        // can use directly, so redirect_url is not needed.
+        // Use the EXACT same minimal payload as testGateway() — { amount,
+        // customer_name } only. The hosted checkout_url returned by FamGateway
+        // is what the customer pays on, and the webhook confirms the payment
+        // server-side. redirect_url is intentionally NOT sent: the buyer is
+        // redirected to checkout_url by the frontend, and after payment the
+        // webhook marks the order paid. This matches the confirmed-working
+        // testGateway() call exactly.
         const famPayload: any = {
           amount: payAmount,
           customer_name: options.userName || 'Customer',
         };
-        // Include redirect_url ONLY when it is a public https URL so FamGateway
-        // can send the buyer back to the panel after payment. localhost/private
-        // URLs are rejected by the gateway, so omit them (the buyer still gets
-        // checkout_url / qr_url from the gateway response).
-        if (this.isPublicHttpsUrl(options.redirectUrl)) {
-          famPayload.redirect_url = options.redirectUrl;
-        }
+        console.log('[FamGateway] createOrder request:', JSON.stringify(famPayload));
         const res = await fetch(`${FAMGATEWAY_BASE}/api/create-order`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
           body: JSON.stringify(famPayload),
         });
         const data = await res.json() as any;
+        console.log('[FamGateway] createOrder response:', res.status, JSON.stringify(data).slice(0, 500));
         // Per the official docs, the success response is:
         //   { status: 'success', data: { order_id, qr_url, checkout_url, upi_intent, ... } }
         // (order fields are nested under `data`). Accept both this shape and a
         // top-level shape for robustness, so a successful response is never
         // misread as a failure (which would silently fall back to a manual
-        // order — the customer sees "buy plan not working").
+        // order — the customer sees "buy plan not working" and no payment link
+        // is created on FamGateway).
         const d: any = (data && data.data && data.data.order_id) ? data.data : data;
         if (data.status === 'success' && d && d.order_id) {
           await this.db.run(
