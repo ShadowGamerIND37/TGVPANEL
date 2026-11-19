@@ -122,7 +122,7 @@ export declare class PaymentGatewayManager {
     /**
      * Verify a webhook signature.
      */
-    verifyWebhook(gatewayId: number, rawBody: string, signature: string): Promise<boolean>;
+    verifyWebhook(gatewayId: number, rawBody: string, signature: string, timestamp?: string): Promise<boolean>;
     /**
      * Mark a payment order as paid after verification.
      */

@@ -544,15 +544,27 @@ export class PaymentGatewayManager {
   /**
    * Verify a webhook signature.
    */
-  public async verifyWebhook(gatewayId: number, rawBody: string, signature: string): Promise<boolean> {
+  public async verifyWebhook(gatewayId: number, rawBody: string, signature: string, timestamp?: string): Promise<boolean> {
     const gw = await this.db.get<any>(`SELECT * FROM payment_gateways WHERE id = ?`, [gatewayId]);
     if (!gw) return false;
     const secret = await this.getWebhookSecret(gatewayId) || await this.getApiKey(gatewayId) || await this.getApiSecret(gatewayId);
     if (!secret) return false;
 
     if (gw.provider === 'famgateway') {
-      const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-      return signature === expected;
+      // Normalize the signature: gateways may prefix with "sha256=" and use
+      // hex or base64 encoding. Try the common variants against the raw body,
+      // and (if a timestamp header was sent) the timestamp-prefixed body, so
+      // the webhook is accepted regardless of the exact signing convention.
+      const sig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
+      const candidates = [
+        crypto.createHmac('sha256', secret).update(rawBody).digest('hex'),
+        crypto.createHmac('sha256', secret).update(rawBody).digest('base64'),
+      ];
+      if (timestamp) {
+        candidates.push(crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex'));
+        candidates.push(crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('base64'));
+      }
+      return candidates.includes(sig);
     }
     if (gw.provider === 'stripe') {
       // Stripe uses Stripe-Signature header with timestamp and signature

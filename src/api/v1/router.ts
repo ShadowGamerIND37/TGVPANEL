@@ -2764,8 +2764,14 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
     '/webhooks/payment',
     async (req: Request, res: Response) => {
       try {
-        // Determine which gateway sent the webhook based on headers
-        const sigHeader = (req.headers['x-famgateway-signature'] || req.headers['stripe-signature'] || req.headers['paypal-transmission-sig'] || '') as string;
+        // Extract the webhook signature from whichever header the gateway uses.
+        // FamGateway may send it as x-famgateway-signature, x-signature, or
+        // x-webhook-signature; accept the common names (HTTP headers are
+        // case-insensitive and Node stores them lowercased).
+        const SIG_HEADERS = ['x-famgateway-signature', 'x-signature', 'x-webhook-signature', 'x-hub-signature-256'];
+        const sigHeader = SIG_HEADERS.find((h) => req.headers[h]);
+        const sigValue = sigHeader ? String(req.headers[sigHeader]) : '';
+        const timestamp = (req.headers['x-timestamp'] || req.headers['x-webhook-timestamp'] || '') as string;
         // Use the EXACT raw bytes captured by the body parser's verify hook.
         // FamGateway signs the raw payload it sends; re-serializing req.body
         // with JSON.stringify can change key order / whitespace and break the
@@ -2778,9 +2784,9 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         const enabled = gateways.filter((g) => g.enabled);
 
         for (const gw of enabled) {
-          const sig = req.headers[`x-famgateway-signature`] || req.headers['stripe-signature'] || '';
+          const sig = sigValue || String(req.headers['stripe-signature'] || '');
           if (sig) {
-            const valid = await ctx.paymentGatewayManager.verifyWebhook(gw.id, rawBody, String(sig));
+            const valid = await ctx.paymentGatewayManager.verifyWebhook(gw.id, rawBody, String(sig), timestamp);
             if (valid) {
               const body: any = req.body || {};
               if (body.status === 'success' && body.order_id) {
@@ -2870,7 +2876,17 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
             }
           }
         }
-        return res.status(401).json({ error: 'Invalid or missing webhook signature.' });
+        return res.status(401).json({
+          error: 'Invalid or missing webhook signature.',
+          diagnostics: {
+            signatureHeader: sigHeader || null,
+            signaturePresent: !!sigValue,
+            signatureLength: sigValue ? sigValue.length : 0,
+            rawBodyCaptured: !!(req as any).rawBody,
+            contentType: req.headers['content-type'] || null,
+            enabledGateways: enabled.map((g) => g.provider),
+          },
+        });
       } catch (err: any) {
         res.status(500).json({ error: err.message });
       }
