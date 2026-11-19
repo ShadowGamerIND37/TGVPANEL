@@ -23,6 +23,9 @@ export interface SubscriptionInput {
     userId?: number;
     planId?: number;
     autoRenew?: boolean;
+    /** When false, the subscription is created as 'pending' and only becomes
+     * 'active' after payment is confirmed. Defaults to true (active now). */
+    activate?: boolean;
 }
 export interface PaymentConfirmationInput {
     paymentReference?: string;
@@ -57,6 +60,13 @@ export declare class BillingManager {
     getSubscription(id: number): Promise<any>;
     private computePeriodEnd;
     createSubscription(input: SubscriptionInput): Promise<any>;
+    /**
+     * Activate a 'pending' subscription after payment is confirmed. Sets the
+     * subscription to 'active', recording the payment confirmation. Used by the
+     * store purchase flow so a plan only becomes active once payment is verified
+     * (webhook or admin confirmation).
+     */
+    activateSubscription(id: number, paymentReference?: string): Promise<any>;
     cancelSubscription(id: number): Promise<any>;
     renewSubscription(id: number): Promise<any>;
     listInvoices(userId?: number): Promise<any[]>;
