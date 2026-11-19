@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — FamGateway webhook signature diagnostics in 401 response (2026-11-19)
+
+- **Webhook 401 diagnostics now show the secret source and expected signature**: The FamGateway webhook 401 showed the signature header, length, `rawBody` capture, and content-type were all correct, but the HMAC still didn't match — indicating the API key used to compute the signature differs from the one FamGateway signed with. The 401 response previously didn't include the secret source or the computed expected signature, so the mismatch couldn't be confirmed from the gateway test result.
+- **Fix**: `verifyWebhook` now returns `{ valid, diagnostics: { secretSource, receivedPrefix, expectedPrefix } }` instead of a plain boolean. The webhook handler includes these in the 401 response (plus a hint). After deploying, a 401 will directly show `secretSource` (should be `apiKey` for FamGateway), `receivedSignaturePrefix` (what FamGateway sent), and `expectedSignaturePrefix` (what the panel computed with the API key). If the prefixes differ, the panel API key doesn't match the FamGateway dashboard API key — update the panel gateway API Key to match exactly. 53/53 tests pass.
+
 ## Unreleased — FamGateway webhook 401 root cause: session-auth blocking webhook (2026-11-19)
 
 - **Webhook 401 root cause fixed — endpoint was blocked by session authentication**: The FamGateway webhook test kept returning HTTP 401 with the response `{"error":"Authentication required"}`. That response comes from `requirePrincipal`, a **global middleware** applied to all `/api/v1` routes (`router.use(requirePrincipal)`). FamGateway delivers webhooks as server-to-server POST requests with **no login session**, so `requirePrincipal` rejected them with 401 **before** the request ever reached the webhook handler's HMAC signature check — meaning the signature verification (and all earlier fixes) never ran.
