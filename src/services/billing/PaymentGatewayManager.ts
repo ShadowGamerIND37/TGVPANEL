@@ -552,9 +552,9 @@ export class PaymentGatewayManager {
   /**
    * Verify a webhook signature.
    */
-  public async verifyWebhook(gatewayId: number, rawBody: string, signature: string, timestamp?: string): Promise<boolean> {
+  public async verifyWebhook(gatewayId: number, rawBody: string, signature: string, timestamp?: string): Promise<{ valid: boolean; diagnostics?: { secretSource: string; receivedPrefix: string; expectedPrefix: string } }> {
     const gw = await this.db.get<any>(`SELECT * FROM payment_gateways WHERE id = ?`, [gatewayId]);
-    if (!gw) return false;
+    if (!gw) return { valid: false };
     // FamGateway signs webhooks with the Merchant API Key as the HMAC secret
     // (official docs: "simply pass your FamGateway API Key as the secret. No
     // extra webhook secret configuration is required."). Using a separate
@@ -574,7 +574,7 @@ export class PaymentGatewayManager {
     }
     if (!secret) {
       console.log('[webhook] verifyWebhook gateway', gw.provider, 'no secret configured');
-      return false;
+      return { valid: false, diagnostics: { secretSource: 'none', receivedPrefix: signature.slice(0, 16), expectedPrefix: '' } };
     }
 
     if (gw.provider === 'famgateway') {
@@ -595,7 +595,10 @@ export class PaymentGatewayManager {
         rawBodyLen: rawBody.length,
         matched,
       });
-      return matched;
+      return {
+        valid: matched,
+        diagnostics: { secretSource, receivedPrefix: sig.slice(0, 16), expectedPrefix: expected.slice(0, 16) },
+      };
     }
     if (gw.provider === 'stripe') {
       // Stripe uses Stripe-Signature header with timestamp and signature
@@ -608,7 +611,7 @@ export class PaymentGatewayManager {
         if (k === 'v1') sig = v;
       }
       const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');
-      return sig === expected;
+      return { valid: sig === expected };
     }
     if (gw.provider === 'paypal') {
       // PayPal MT signature verification is complex; use API key as HMAC
@@ -616,9 +619,9 @@ export class PaymentGatewayManager {
       const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
       const sigBuf = Buffer.from(signature, 'hex');
       const expectedBuf = Buffer.from(expected, 'hex');
-      return sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf);
+      return { valid: sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf) };
     }
-    return false;
+    return { valid: false };
   }
 
   /**
