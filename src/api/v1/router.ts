@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import { isIP } from 'net';
 import bcrypt from 'bcryptjs';
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { HkvmRuntimeContext } from '../../context';
 import { getNodeHealthReport } from '../../node-agent/health';
@@ -2760,6 +2760,44 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   );
 
   // --- Webhook receiver for payment gateways ---
+  // Capture the EXACT raw request body for signature verification regardless
+  // of Content-Type. The global express.json()/express.urlencoded() parsers
+  // only set req.rawBody when the Content-Type matches JSON or form-encoded.
+  // FamGateway signs the raw bytes it sends; if it uses any other Content-Type
+  // the parsers skip, rawBody is unset, and the HMAC is verified against a
+  // wrong re-serialized fallback -> every webhook fails with 401. Read the
+  // stream here for any Content-Type, parse req.body, and mark _body so the
+  // parsers do not re-read it.
+  const captureWebhookRawBody = (req: Request, res: Response, next: NextFunction) => {
+    if ((req as any).rawBody || (req as any)._body) return next();
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      (req as any).rawBody = raw;
+      try {
+        (req as any).body = JSON.parse(raw);
+      } catch {
+        (req as any).body = raw;
+      }
+      (req as any)._body = true;
+      next();
+    });
+    req.on('error', next);
+  };
+  router.use('/webhooks/payment', captureWebhookRawBody);
+
+  // GET on the webhook endpoint returns a proper JSON response instead of the
+  // default 404 page, so visiting the URL in a browser shows a clear API
+  // message. The endpoint only accepts POST (FamGateway webhook deliveries).
+  router.get('/webhooks/payment', (_req: Request, res: Response) => {
+    res.status(405).json({
+      error: 'Method Not Allowed.',
+      message: 'This endpoint accepts POST only. It is the FamGateway payment webhook receiver at /api/v1/webhooks/payment.',
+    });
+  });
+
   router.post(
     '/webhooks/payment',
     async (req: Request, res: Response) => {
