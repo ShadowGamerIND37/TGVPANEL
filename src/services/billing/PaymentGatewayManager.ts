@@ -547,24 +547,45 @@ export class PaymentGatewayManager {
   public async verifyWebhook(gatewayId: number, rawBody: string, signature: string, timestamp?: string): Promise<boolean> {
     const gw = await this.db.get<any>(`SELECT * FROM payment_gateways WHERE id = ?`, [gatewayId]);
     if (!gw) return false;
-    const secret = await this.getWebhookSecret(gatewayId) || await this.getApiKey(gatewayId) || await this.getApiSecret(gatewayId);
-    if (!secret) return false;
+    // FamGateway signs webhooks with the Merchant API Key as the HMAC secret
+    // (official docs: "simply pass your FamGateway API Key as the secret. No
+    // extra webhook secret configuration is required."). Using a separate
+    // webhook secret here computes the HMAC with the wrong key, so every
+    // webhook fails signature verification with 401. For other gateways,
+    // fall back through webhook secret -> api key -> api secret.
+    let secret: string | null = null;
+    let secretSource = 'none';
+    if (gw.provider === 'famgateway') {
+      secret = await this.getApiKey(gatewayId);
+      if (secret) secretSource = 'apiKey';
+    } else {
+      secret = await this.getWebhookSecret(gatewayId);
+      if (secret) secretSource = 'webhookSecret';
+      if (!secret) { secret = await this.getApiKey(gatewayId); if (secret) secretSource = 'apiKey'; }
+      if (!secret) { secret = await this.getApiSecret(gatewayId); if (secret) secretSource = 'apiSecret'; }
+    }
+    if (!secret) {
+      console.log('[webhook] verifyWebhook gateway', gw.provider, 'no secret configured');
+      return false;
+    }
 
     if (gw.provider === 'famgateway') {
-      // Normalize the signature: gateways may prefix with "sha256=" and use
-      // hex or base64 encoding. Try the common variants against the raw body,
-      // and (if a timestamp header was sent) the timestamp-prefixed body, so
-      // the webhook is accepted regardless of the exact signing convention.
+      // Signature = HMAC-SHA256(apiKey, rawBody) as hex, sent in the
+      // X-FamGateway-Signature header (per official docs). Compare against
+      // the raw bytes. Keep a tolerant normalization for a possible sha256=
+      // prefix, but the canonical form is a plain hex digest.
       const sig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-      const candidates = [
-        crypto.createHmac('sha256', secret).update(rawBody).digest('hex'),
-        crypto.createHmac('sha256', secret).update(rawBody).digest('base64'),
-      ];
-      if (timestamp) {
-        candidates.push(crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex'));
-        candidates.push(crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('base64'));
-      }
-      return candidates.includes(sig);
+      const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+      const matched = sig === expected;
+      console.log('[webhook] verifyWebhook famgateway', {
+        secretSource,
+        sigLen: sig.length,
+        sigPrefix: sig.slice(0, 16),
+        expectedPrefix: expected.slice(0, 16),
+        rawBodyLen: rawBody.length,
+        matched,
+      });
+      return matched;
     }
     if (gw.provider === 'stripe') {
       // Stripe uses Stripe-Signature header with timestamp and signature

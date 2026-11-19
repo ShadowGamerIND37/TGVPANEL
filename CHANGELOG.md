@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — FamGateway webhook 401 root cause: wrong signing secret (2026-11-19)
+
+- **Webhook 401 root cause fixed**: FamGateway's official docs (Section 6) state that webhooks are signed with the **Merchant Default API Key** as the HMAC-SHA256 secret — *"simply pass your FamGateway API Key as the secret. No extra webhook secret configuration is required."* The panel's `verifyWebhook` tried the configured **Webhook Secret first** (`getWebhookSecret() || getApiKey() || getApiSecret()`). When a Webhook Secret was configured, the panel computed the HMAC with that value, but FamGateway signs with the **API key** — different secrets, so the signature never matched and every webhook returned HTTP 401. (The `X-FamGateway-Signature` header name was already correct.)
+- **Fix**: For FamGateway, `verifyWebhook` now uses the **API key** as the HMAC secret, computing `HMAC-SHA256(apiKey, rawBody)` as hex and comparing it to the `X-FamGateway-Signature` header — exactly per the official spec. Other gateways keep the webhook-secret → api-key → api-secret fallback. Diagnostic logging of the secret source, signature, and expected prefix is retained. 53/53 tests pass.
+
+## Unreleased — FamGateway webhook diagnostics in panel logs (2026-11-19)
+
+- **Webhook 401 diagnosis**: The FamGateway webhook test still returned HTTP 401 after the signature-format fix, and the dashboard does not display the 401 response body, so the rejection reason was not visible. Added detailed server-side logging of the webhook request so the exact cause can be diagnosed from the panel logs:
+  - The handler logs the full incoming request: content-type, all `x-*` headers, which signature header was found, the signature value, any timestamp, whether the raw body was captured, its length and a preview, and the parsed body.
+  - Each gateway's signature-check result is logged.
+  - `verifyWebhook` logs the secret source (webhook secret / api key / api secret), the received signature prefix, the computed candidate signature prefixes, and whether any matched — never the secret itself. It also logs a clear message when no secret is configured at all.
+- **Test suite**: 53/53 acceptance suites pass.
+
 ## Unreleased — FamGateway webhook signature format fix (2026-11-18)
 
 - **Webhook test returned HTTP 401 (invalid/missing signature) fixed**: The webhook receiver only looked for the `x-famgateway-signature` header and compared the signature to a single HMAC-SHA256 hex digest of the raw body. FamGateway may send the signature in a different header (`x-signature`, `x-webhook-signature`, `x-hub-signature-256`) and/or in a formatted form (e.g. `sha256=<hex>` or base64), so the strict check never matched and the webhook test failed with 401.
