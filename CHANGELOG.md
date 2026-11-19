@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — FamGateway webhook signature format fix (2026-11-18)
+
+- **Webhook test returned HTTP 401 (invalid/missing signature) fixed**: The webhook receiver only looked for the `x-famgateway-signature` header and compared the signature to a single HMAC-SHA256 hex digest of the raw body. FamGateway may send the signature in a different header (`x-signature`, `x-webhook-signature`, `x-hub-signature-256`) and/or in a formatted form (e.g. `sha256=<hex>` or base64), so the strict check never matched and the webhook test failed with 401.
+- **Robust signature acceptance**: The handler now extracts the signature from a list of common signature headers, captures an optional timestamp header, and passes it to `verifyWebhook`. `verifyWebhook` (famgateway) normalizes the signature (strips a `sha256=` prefix) and accepts hex or base64, and also tries a timestamp-prefixed body when a timestamp header is sent. All paths still require a valid HMAC, so security is preserved.
+- **Diagnostics on rejection**: The 401 response now includes diagnostics (which signature header was found, whether `rawBody` was captured, content-type, enabled gateways) so the rejection reason is visible directly from the gateway test result. 53/53 tests pass.
+
 ## Unreleased — Payment webhook HMAC raw-body fix (2026-11-18)
 
 - **Webhook signature verification now uses the exact raw bytes**: The webhook receiver previously signed `JSON.stringify(req.body)` for HMAC verification, but FamGateway signs the **exact raw payload** it sends. Re-serializing the parsed body can change key order/whitespace, so the HMAC never matched — the webhook was rejected with `401 Invalid or missing webhook signature`, and **payments were never auto-confirmed** (orders stayed pending). The body parser already captures the exact received bytes in `req.rawBody`; the webhook now uses that for signature verification. 53/53 tests pass.
