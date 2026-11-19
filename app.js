@@ -16,6 +16,23 @@ const { Client } = require('ssh2');
 require('dotenv').config();
 const licenses = require("./licenses");
 
+// ============= GLOBAL ERROR HANDLING =============
+// Prevent SQLITE_BUSY (or any uncaught async DB error) from crashing the
+// whole panel. Log the rejection and keep the process alive so the panel
+// stays up under concurrent DB load.
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled promise rejection:', reason && reason.message ? reason.message : reason);
+  if (reason && reason.code === 'SQLITE_BUSY') {
+    console.error('[DB] SQLITE_BUSY ignored (database was locked); panel continues.');
+  }
+});
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err && err.message ? err.message : err);
+  if (err && err.code === 'SQLITE_BUSY') {
+    console.error('[DB] SQLITE_BUSY ignored (database was locked); panel continues.');
+  }
+});
+
 // ============= PLATFORM DETECTION =============
 const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
@@ -84,6 +101,14 @@ try {
 }
 
 const db = new sqlite3.Database(dbPath);
+
+// Log (but do not crash on) fatal database errors such as SQLITE_BUSY.
+db.on('error', (err) => {
+  console.error('[DB] Database error:', err && err.message ? err.message : err, err && err.code ? `(code: ${err.code})` : '');
+});
+// Set the busy timeout synchronously so concurrent writers wait for locks
+// instead of failing immediately with SQLITE_BUSY.
+db.configure('busyTimeout', 10000);
 
 const VM_DIR = path.join(os.homedir(), 'vms');
 const TEMPLATES_DIR = path.join(VM_DIR, 'templates');
