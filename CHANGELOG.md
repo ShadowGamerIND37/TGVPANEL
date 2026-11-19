@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — FamGateway webhook 401 root cause: wrong signing secret (2026-11-19)
+
+- **Webhook 401 root cause fixed**: FamGateway's official docs (Section 6) state that webhooks are signed with the **Merchant Default API Key** as the HMAC-SHA256 secret — *"simply pass your FamGateway API Key as the secret. No extra webhook secret configuration is required."* The panel's `verifyWebhook` tried the configured **Webhook Secret first** (`getWebhookSecret() || getApiKey() || getApiSecret()`). When a Webhook Secret was configured, the panel computed the HMAC with that value, but FamGateway signs with the **API key** — different secrets, so the signature never matched and every webhook returned HTTP 401. (The `X-FamGateway-Signature` header name was already correct.)
+- **Fix**: For FamGateway, `verifyWebhook` now uses the **API key** as the HMAC secret, computing `HMAC-SHA256(apiKey, rawBody)` as hex and comparing it to the `X-FamGateway-Signature` header — exactly per the official spec. Other gateways keep the webhook-secret → api-key → api-secret fallback. Diagnostic logging of the secret source, signature, and expected prefix is retained. 53/53 tests pass.
+
 ## Unreleased — FamGateway webhook diagnostics in panel logs (2026-11-19)
 
 - **Webhook 401 diagnosis**: The FamGateway webhook test still returned HTTP 401 after the signature-format fix, and the dashboard does not display the 401 response body, so the rejection reason was not visible. Added detailed server-side logging of the webhook request so the exact cause can be diagnosed from the panel logs:
