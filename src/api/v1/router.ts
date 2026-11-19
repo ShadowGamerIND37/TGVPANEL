@@ -2674,6 +2674,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         // still returns failure, fall back to manual here too so the customer
         // can always complete the purchase.
         if (!result.success) {
+          console.error('[store/purchase] gateway createOrder FAILED:', result.error);
           const fallback = await ctx.paymentGatewayManager.createManualOrder(plan.price_cents, {
             userId,
             planId,
