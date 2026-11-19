@@ -2844,12 +2844,14 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         const gateways = await ctx.paymentGatewayManager.listGateways();
         const enabled = gateways.filter((g) => g.enabled);
 
+        let lastDiagnostics: any = null;
         for (const gw of enabled) {
           const sig = sigValue || String(req.headers['stripe-signature'] || '');
           if (sig) {
-            const valid = await ctx.paymentGatewayManager.verifyWebhook(gw.id, rawBody, String(sig), timestamp);
-            console.log('[webhook] signature check', gw.provider, 'valid=', valid, 'sigPrefix=', sig.slice(0, 32));
-            if (valid) {
+            const result = await ctx.paymentGatewayManager.verifyWebhook(gw.id, rawBody, String(sig), timestamp);
+            if (result.diagnostics) lastDiagnostics = { gateway: gw.provider, ...result.diagnostics };
+            console.log('[webhook] signature check', gw.provider, 'valid=', result.valid, 'sigPrefix=', sig.slice(0, 32));
+            if (result.valid) {
               const body: any = req.body || {};
               if (body.status === 'success' && body.order_id) {
                 // FamGateway success
@@ -2947,6 +2949,12 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
             rawBodyCaptured: !!(req as any).rawBody,
             contentType: req.headers['content-type'] || null,
             enabledGateways: enabled.map((g) => g.provider),
+            secretSource: lastDiagnostics?.secretSource ?? null,
+            receivedSignaturePrefix: lastDiagnostics?.receivedPrefix ?? null,
+            expectedSignaturePrefix: lastDiagnostics?.expectedPrefix ?? null,
+            hint: lastDiagnostics?.secretSource === 'apiKey'
+              ? 'Signature does not match HMAC computed with the panel API key. Verify the panel API Key exactly matches the FamGateway dashboard API key (FamGateway signs webhooks with the API key, not a webhook secret).'
+              : 'No matching secret configured. For FamGateway, set the API Key in the panel gateway config.',
           },
         });
       } catch (err: any) {
