@@ -343,9 +343,9 @@ export class PaymentGatewayManager {
         const d: any = (data && data.data && data.data.order_id) ? data.data : data;
         if (data.status === 'success' && d && d.order_id) {
           await this.db.run(
-            `INSERT INTO payment_orders (invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, redirect_url, checkout_url, qr_url, upi_intent, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, datetime('now'))`,
-            [options.invoiceId, options.subscriptionId, options.userId, options.planId, gw.provider, d.order_id, amountCents, gw.currency, d.upi_intent, d.checkout_url, d.qr_url, d.upi_intent]
+            `INSERT INTO payment_orders (order_id, invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, redirect_url, checkout_url, qr_url, upi_intent, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, datetime('now'))`,
+            [orderId, options.invoiceId, options.subscriptionId, options.userId, options.planId, gw.provider, d.order_id, amountCents, gw.currency, d.upi_intent, d.checkout_url, d.qr_url, d.upi_intent]
           );
           return {
             success: true, order_id: orderId, gateway_order_id: d.order_id,
@@ -383,9 +383,9 @@ export class PaymentGatewayManager {
         const data = await res.json() as any;
         if (data.url) {
           await this.db.run(
-            `INSERT INTO payment_orders (invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, checkout_url, redirect_url, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'))`,
-            [options.invoiceId, options.subscriptionId, options.userId, options.planId, gw.provider, data.id, amountCents, gw.currency, data.url, data.url]
+            `INSERT INTO payment_orders (order_id, invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, checkout_url, redirect_url, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'))`,
+            [orderId, options.invoiceId, options.subscriptionId, options.userId, options.planId, gw.provider, data.id, amountCents, gw.currency, data.url, data.url]
           );
           return { success: true, order_id: orderId, gateway_order_id: data.id, checkout_url: data.url, redirect_url: data.url, amount_cents: amountCents, currency: gw.currency };
         }
@@ -419,9 +419,9 @@ export class PaymentGatewayManager {
         const data = await res.json() as any;
         if (data.id) {
           await this.db.run(
-            `INSERT INTO payment_orders (invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, checkout_url, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, datetime('now'))`,
-            [options.invoiceId, options.subscriptionId, options.userId, options.planId, gw.provider, data.id, amountCents, gw.currency, `${PAYPAL_BASE}/checkoutnow?token=${data.id}`]
+            `INSERT INTO payment_orders (order_id, invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, checkout_url, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, datetime('now'))`,
+            [orderId, options.invoiceId, options.subscriptionId, options.userId, options.planId, gw.provider, data.id, amountCents, gw.currency, `${PAYPAL_BASE}/checkoutnow?token=${data.id}`]
           );
           return { success: true, order_id: orderId, gateway_order_id: data.id, checkout_url: `${PAYPAL_BASE}/checkoutnow?token=${data.id}`, amount_cents: amountCents, currency: gw.currency };
         }
@@ -474,9 +474,9 @@ export class PaymentGatewayManager {
     const currency = 'INR';
 
     await this.db.run(
-      `INSERT INTO payment_orders (invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, payment_reference, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, datetime('now'))`,
-      [options.invoiceId, options.subscriptionId, options.userId, options.planId, gwProvider, orderId, amountCents, currency, orderId]
+      `INSERT INTO payment_orders (order_id, invoice_id, subscription_id, user_id, plan_id, gateway, gateway_order_id, amount_cents, currency, status, payment_reference, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, datetime('now'))`,
+      [orderId, options.invoiceId, options.subscriptionId, options.userId, options.planId, gwProvider, orderId, amountCents, currency, orderId]
     );
 
     return {
