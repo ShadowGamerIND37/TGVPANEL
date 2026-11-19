@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — Payment webhook HMAC raw-body fix (2026-11-18)
+
+- **Webhook signature verification now uses the exact raw bytes**: The webhook receiver previously signed `JSON.stringify(req.body)` for HMAC verification, but FamGateway signs the **exact raw payload** it sends. Re-serializing the parsed body can change key order/whitespace, so the HMAC never matched — the webhook was rejected with `401 Invalid or missing webhook signature`, and **payments were never auto-confirmed** (orders stayed pending). The body parser already captures the exact received bytes in `req.rawBody`; the webhook now uses that for signature verification. 53/53 tests pass.
+
 ## Unreleased — Store Buy Plan: response parsing + auto-redirect to payment (2026-11-18)
 
 - **FamGateway response shape fix (root cause of persistent "buy plan not working")**: `testGateway()` checked only `data.status === 'success'`, while `createOrder()` required `data.status === 'success' && data.data`. FamGateway returns order fields (`order_id`, `qr_url`, `checkout_url`, `upi_intent`) at the **top level** of the response, not nested under `data`. So the gateway test passed but `createOrder` read `data.data` as `undefined`, returned `success:false`, and the purchase route silently fell back to a **manual order** — the customer saw a manual order with no real payment. Both `testGateway()` and `createOrder()` now normalize the response and accept either top-level or `data`-nested order fields.
