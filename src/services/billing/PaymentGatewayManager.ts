@@ -334,11 +334,12 @@ export class PaymentGatewayManager {
           body: JSON.stringify(famPayload),
         });
         const data = await res.json() as any;
-        // FamGateway returns order fields at the TOP LEVEL of the response:
-        //   { status:'success', order_id, qr_url, checkout_url, upi_intent, ... }
-        // Some gateway wrappers nest them under `data`. Accept BOTH shapes so a
-        // successful response is never misread as a failure (which would silently
-        // fall back to a manual order — the customer sees "buy plan not working").
+        // Per the official docs, the success response is:
+        //   { status: 'success', data: { order_id, qr_url, checkout_url, upi_intent, ... } }
+        // (order fields are nested under `data`). Accept both this shape and a
+        // top-level shape for robustness, so a successful response is never
+        // misread as a failure (which would silently fall back to a manual
+        // order — the customer sees "buy plan not working").
         const d: any = (data && data.data && data.data.order_id) ? data.data : data;
         if (data.status === 'success' && d && d.order_id) {
           await this.db.run(
@@ -501,10 +502,17 @@ export class PaymentGatewayManager {
         if (!apiKey) return { success: false, status: 'error', error: 'FamGateway API key not configured.' };
         const res = await fetch(`${FAMGATEWAY_BASE}/api/verify-order.php?api_key=${encodeURIComponent(apiKey)}&order_id=${encodeURIComponent(gatewayOrderId)}`);
         const data = await res.json() as any;
+        // Per the docs, verify-order returns { status: 'success' | 'pending' |
+        // 'expired', utr, sender_name, ... } on 200, or an error body
+        // ({ status: 'error'/'unauthorized'/'not_found'/..., message }) on
+        // 4xx/5xx. Map those correctly instead of reporting errors as success.
         if (data.status === 'success') {
           return { success: true, status: 'paid', utr: data.utr, payment_reference: data.utr, sender_name: data.sender_name };
         }
-        return { success: true, status: data.status || 'pending' };
+        if (data.status === 'pending' || data.status === 'expired') {
+          return { success: true, status: data.status };
+        }
+        return { success: false, status: 'error', error: data.message || `FamGateway verify-order error (HTTP ${res.status})` };
       }
       if (gw.provider === 'stripe') {
         const apiKey = await this.getApiKey(gatewayId);
@@ -571,12 +579,14 @@ export class PaymentGatewayManager {
 
     if (gw.provider === 'famgateway') {
       // Signature = HMAC-SHA256(apiKey, rawBody) as hex, sent in the
-      // X-FamGateway-Signature header (per official docs). Compare against
-      // the raw bytes. Keep a tolerant normalization for a possible sha256=
-      // prefix, but the canonical form is a plain hex digest.
+      // X-FamGateway-Signature header (per official docs). Use a timing-safe
+      // comparison (as the official Node.js example does) to prevent timing
+      // attacks. Keep a tolerant normalization for a possible sha256= prefix.
       const sig = signature.startsWith('sha256=') ? signature.slice(7) : signature;
       const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-      const matched = sig === expected;
+      const sigBuf = Buffer.from(sig, 'hex');
+      const expectedBuf = Buffer.from(expected, 'hex');
+      const matched = sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf);
       console.log('[webhook] verifyWebhook famgateway', {
         secretSource,
         sigLen: sig.length,
@@ -602,8 +612,11 @@ export class PaymentGatewayManager {
     }
     if (gw.provider === 'paypal') {
       // PayPal MT signature verification is complex; use API key as HMAC
+      // with a timing-safe comparison.
       const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-      return signature === expected;
+      const sigBuf = Buffer.from(signature, 'hex');
+      const expectedBuf = Buffer.from(expected, 'hex');
+      return sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf);
     }
     return false;
   }
