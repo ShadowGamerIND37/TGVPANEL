@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Fix SQLITE_BUSY panel crash (2026-11-19)
+
+- **Panel no longer crashes on `SQLITE_BUSY: database is locked`**: Under concurrent DB load, an async sqlite3 operation could reject with `SQLITE_BUSY`, and because there was no process-level rejection handler and no DB error handler, Node's default behavior (crash on unhandled rejection) took the whole panel down.
+- **Fix**: Added `process.on('unhandledRejection')` and `process.on('uncaughtException')` handlers that log the error (with a specific note for `SQLITE_BUSY`) and keep the process alive. Added `db.on('error')` on the raw sqlite3 database to log fatal DB errors. Set the busy timeout synchronously via `db.configure('busyTimeout', 10000)` so concurrent writers wait up to 10s for a lock instead of failing immediately. The panel now stays up under concurrent DB load; a transient lock is logged and the affected request returns an error rather than crashing the server. 53/53 tests pass.
+
 ## Unreleased — FamGateway webhook signature diagnostics in 401 response (2026-11-19)
 
 - **Webhook 401 diagnostics now show the secret source and expected signature**: The FamGateway webhook 401 showed the signature header, length, `rawBody` capture, and content-type were all correct, but the HMAC still didn't match — indicating the API key used to compute the signature differs from the one FamGateway signed with. The 401 response previously didn't include the secret source or the computed expected signature, so the mismatch couldn't be confirmed from the gateway test result.
