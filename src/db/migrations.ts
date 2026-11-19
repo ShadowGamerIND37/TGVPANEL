@@ -2521,6 +2521,20 @@ export const MIGRATIONS: MigrationDefinition[] = [
       await ensureColumn(db, 'billing_plans', 'default_node_id', 'INTEGER');
     }
   },
+  {
+    version: 38,
+    name: 'v038_payment_orders_order_id',
+    up: async (db) => {
+      // The payment order flow generates a string order_id ("po_<ts>_<rand>")
+      // and looks it up with WHERE order_id = ?, but the table was created
+      // without an order_id column (it only has an integer id primary key).
+      // Without this column, getOrder() and markOrderPaid() fail with
+      // "no such column: order_id", so a paid order can never be matched or
+      // marked paid — the plan is never activated ("buy plan not working").
+      await ensureColumn(db, 'payment_orders', 'order_id', 'TEXT');
+      await db.run(`CREATE INDEX IF NOT EXISTS idx_payment_orders_order_id ON payment_orders(order_id)`);
+    }
+  },
 ];
 
 export async function runMigrations(db: UnifiedDatabase): Promise<{
