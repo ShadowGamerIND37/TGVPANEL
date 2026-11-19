@@ -379,8 +379,16 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
   // This must run before generic principal enforcement so the signed key can establish a scoped principal.
   router.use('/reseller', resellerAuthIpLimiter, createResellerHmacAuthMiddleware(ctx.db));
 
-  // --- All endpoints below require an authenticated principal (Session or Bearer API Key) ---
-  router.use(requirePrincipal);
+  // --- All endpoints below require an authenticated principal (Session or Bearer API Key),
+  // except payment-gateway webhook receivers, which must be reachable by gateway
+  // servers without a session. They authenticate via HMAC signature verification
+  // instead (see the /webhooks/payment handler), so exempting them here is required
+  // for FamGateway/Stripe/PayPal server-to-server delivery to work.
+  router.use((req: Request, res: Response, next: NextFunction) => {
+    const url = req.originalUrl || req.url || '';
+    if (url.includes('/webhooks/payment')) return next();
+    return requirePrincipal(req, res, next);
+  });
   router.use((req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     if (req.method !== 'GET' && req.method !== 'HEAD') {
