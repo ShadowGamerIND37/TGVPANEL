@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Fix buy-plan not activating after payment (2026-11-19)
+
+- **Store plan purchases now activate the plan after payment is confirmed**: The FamGateway webhook signature fix made payment webhooks return HTTP 200, but the "buy plan" flow still did not activate the plan. Root cause: the `/store/purchase` endpoint created a `payment_orders` row with `invoice_id = NULL` and never created a subscription or invoice. When the payment webhook confirmed the order as paid, the `if (order.invoice_id)` guard skipped `confirmPayment()` entirely, and no subscription was ever created — the plan was never activated even though payment succeeded.
+- **Fix**: `BillingManager.createSubscription` now accepts an `activate` option (default `true`). When `false`, the subscription is created as `pending` instead of `active`, so the plan is not granted before payment. Added `BillingManager.activateSubscription(id)`: flips a `pending` subscription to `active` after payment is confirmed (idempotent). The `/store/purchase` endpoint now creates a pending subscription + issued invoice up front and links `invoice_id` + `subscription_id` to the payment order (gateway order and manual fallback). `createManualOrder` now accepts `invoiceId`/`subscriptionId`. The webhook confirmation paths (FamGateway, Stripe, PayPal) and the order-status polling endpoint now call `activateSubscription()` after `markOrderPaid` + `confirmPayment`, so a verified payment activates the plan end-to-end. The subscription stays pending until payment is verified — no plan is granted without confirmed payment. 53/53 tests pass.
+
 ## Unreleased — Fix SQLITE_BUSY panel crash (2026-11-19)
 
 - **Panel no longer crashes on `SQLITE_BUSY: database is locked`**: Under concurrent DB load, an async sqlite3 operation could reject with `SQLITE_BUSY`, and because there was no process-level rejection handler and no DB error handler, Node's default behavior (crash on unhandled rejection) took the whole panel down.
