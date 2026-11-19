@@ -547,8 +547,16 @@ export class PaymentGatewayManager {
   public async verifyWebhook(gatewayId: number, rawBody: string, signature: string, timestamp?: string): Promise<boolean> {
     const gw = await this.db.get<any>(`SELECT * FROM payment_gateways WHERE id = ?`, [gatewayId]);
     if (!gw) return false;
-    const secret = await this.getWebhookSecret(gatewayId) || await this.getApiKey(gatewayId) || await this.getApiSecret(gatewayId);
-    if (!secret) return false;
+    let secret: string | null = null;
+    let secretSource = 'none';
+    secret = await this.getWebhookSecret(gatewayId);
+    if (secret) secretSource = 'webhookSecret';
+    if (!secret) { secret = await this.getApiKey(gatewayId); if (secret) secretSource = 'apiKey'; }
+    if (!secret) { secret = await this.getApiSecret(gatewayId); if (secret) secretSource = 'apiSecret'; }
+    if (!secret) {
+      console.log('[webhook] verifyWebhook gateway', gw.provider, 'no secret configured (webhook secret / api key / api secret all empty)');
+      return false;
+    }
 
     if (gw.provider === 'famgateway') {
       // Normalize the signature: gateways may prefix with "sha256=" and use
@@ -564,7 +572,17 @@ export class PaymentGatewayManager {
         candidates.push(crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex'));
         candidates.push(crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('base64'));
       }
-      return candidates.includes(sig);
+      const matched = candidates.includes(sig);
+      // Log which secret source and which candidate matched (never the secret).
+      console.log('[webhook] verifyWebhook famgateway', {
+        secretSource,
+        sigLen: sig.length,
+        sigPrefix: sig.slice(0, 16),
+        rawBodyLen: rawBody.length,
+        candidates: candidates.map((c) => c.slice(0, 16)),
+        matched,
+      });
+      return matched;
     }
     if (gw.provider === 'stripe') {
       // Stripe uses Stripe-Signature header with timestamp and signature

@@ -2779,6 +2779,21 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
         // orders unconfirmed. Fall back only if rawBody was not captured.
         const rawBody = (req as any).rawBody || (typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}));
 
+        // Diagnostic logging: log the full webhook request so rejections can be
+        // diagnosed from the panel logs (FamGateway's dashboard may not display
+        // the response body). Never log the secret itself.
+        console.log('[webhook] payment webhook received', JSON.stringify({
+          contentType: req.headers['content-type'] || null,
+          xHeaders: Object.fromEntries(Object.entries(req.headers).filter(([k]) => k.startsWith('x-'))),
+          sigHeader,
+          sigValue,
+          timestamp,
+          rawBodyCaptured: !!(req as any).rawBody,
+          rawBodyLen: rawBody.length,
+          rawBodyPreview: rawBody.slice(0, 800),
+          body: req.body,
+        }));
+
         // Try to find a matching gateway and verify signature
         const gateways = await ctx.paymentGatewayManager.listGateways();
         const enabled = gateways.filter((g) => g.enabled);
@@ -2787,6 +2802,7 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
           const sig = sigValue || String(req.headers['stripe-signature'] || '');
           if (sig) {
             const valid = await ctx.paymentGatewayManager.verifyWebhook(gw.id, rawBody, String(sig), timestamp);
+            console.log('[webhook] signature check', gw.provider, 'valid=', valid, 'sigPrefix=', sig.slice(0, 32));
             if (valid) {
               const body: any = req.body || {};
               if (body.status === 'success' && body.order_id) {
