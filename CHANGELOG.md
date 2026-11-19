@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — FamGateway integration hardening per full official docs (2026-11-19)
+
+- **Timing-safe webhook signature comparison**: `verifyWebhook` now uses `crypto.timingSafeEqual` (as the official FamGateway Node.js example does) for both FamGateway and PayPal, preventing timing attacks. Previously a plain string `===` comparison was used.
+- **`verifyOrder` error handling**: properly maps the docs' error responses (`status: error`/`unauthorized`/`not_found`, etc. with a `message`) to an error result instead of reporting them as success with a non-success status. `success`/`pending`/`expired` are mapped correctly, and errors now surface the gateway message and HTTP status.
+- **Response-shape comment cleanup**: the docs confirm the create-order success response nests order fields under `data` (`{ status, data: { order_id, qr_url, checkout_url, upi_intent } }`); the code already handled both shapes and the comment now matches the docs.
+- **Test suite**: 53/53 acceptance suites pass.
+
 ## Unreleased — FamGateway webhook 401 root cause: wrong signing secret (2026-11-19)
 
 - **Webhook 401 root cause fixed**: FamGateway's official docs (Section 6) state that webhooks are signed with the **Merchant Default API Key** as the HMAC-SHA256 secret — *"simply pass your FamGateway API Key as the secret. No extra webhook secret configuration is required."* The panel's `verifyWebhook` tried the configured **Webhook Secret first** (`getWebhookSecret() || getApiKey() || getApiSecret()`). When a Webhook Secret was configured, the panel computed the HMAC with that value, but FamGateway signs with the **API key** — different secrets, so the signature never matched and every webhook returned HTTP 401. (The `X-FamGateway-Signature` header name was already correct.)
