@@ -2766,7 +2766,12 @@ export function createApiV1Router(ctx: HkvmRuntimeContext): Router {
       try {
         // Determine which gateway sent the webhook based on headers
         const sigHeader = (req.headers['x-famgateway-signature'] || req.headers['stripe-signature'] || req.headers['paypal-transmission-sig'] || '') as string;
-        const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
+        // Use the EXACT raw bytes captured by the body parser's verify hook.
+        // FamGateway signs the raw payload it sends; re-serializing req.body
+        // with JSON.stringify can change key order / whitespace and break the
+        // HMAC signature check, which would silently drop the webhook and leave
+        // orders unconfirmed. Fall back only if rawBody was not captured.
+        const rawBody = (req as any).rawBody || (typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}));
 
         // Try to find a matching gateway and verify signature
         const gateways = await ctx.paymentGatewayManager.listGateways();
